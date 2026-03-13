@@ -4,12 +4,23 @@
 *.dll
 *.so
 *.dylib
+mxlrc-go
 
 # Test binary, built with `go test -c`
 *.test
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+coverage.html
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# Build artifacts
+dist/
+
+# Failed lyrics fetch logs
+*_failed.txt
+
+# Serena MCP
+.serena/

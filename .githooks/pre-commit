@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook: mirrors the CI lint job so issues are caught before push.
+#
+# Checks (in order, fast-fail):
+#   1. typos -- spell check staged files (uses .typos.toml config)
+#   2. gofmt -- staged .go files are correctly formatted
+#   3. go build -- code compiles
+#   4. golangci-lint -- full linter suite from .golangci.yml
+#   5. govulncheck -- known vulnerabilities in dependencies
+#
+# Skip with: git commit --no-verify (use sparingly)
+
+set -euo pipefail
+
+# Colors (disabled if not a terminal)
+if [ -t 1 ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BOLD='' RESET=''
+fi
+
+fail() {
+    echo -e "${RED}${BOLD}FAIL${RESET} $1" >&2
+    exit 1
+}
+
+pass() {
+    echo -e "${GREEN}PASS${RESET} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}SKIP${RESET} $1"
+}
+
+# --------------------------------------------------------------------------
+# 1. typos -- spell check staged files
+# --------------------------------------------------------------------------
+if git diff --cached --name-only --diff-filter=ACM -- | grep -q .; then
+    if ! command -v typos &>/dev/null; then
+        warn "typos (not installed, skipping)"
+    else
+        if ! TYPOS_OUTPUT=$(git diff --cached --name-only -z --diff-filter=ACM -- | xargs -0 typos -- 2>&1); then
+            echo -e "${RED}${BOLD}FAIL${RESET} typos:"
+            echo "$TYPOS_OUTPUT"
+            exit 1
+        fi
+        pass "typos"
+    fi
+else
+    warn "typos (no staged files)"
+fi
+
+# --------------------------------------------------------------------------
+# 2. gofmt -- check staged .go files
+# --------------------------------------------------------------------------
+STAGED_GO=$(git diff --cached --name-only --diff-filter=ACM -- '*.go' || true)
+if [ -n "$STAGED_GO" ]; then
+    UNFORMATTED=$(echo "$STAGED_GO" | xargs gofmt -l -- 2>/dev/null || true)
+    if [ -n "$UNFORMATTED" ]; then
+        echo -e "${RED}${BOLD}FAIL${RESET} gofmt: the following files need formatting:"
+        echo "$UNFORMATTED" | sed 's/^/  /'
+        echo ""
+        echo "Run: gofmt -w . && git add -p"
+        exit 1
+    fi
+    pass "gofmt"
+else
+    warn "gofmt (no staged .go files)"
+fi
+
+# --------------------------------------------------------------------------
+# 3. go build -- make sure everything compiles
+# --------------------------------------------------------------------------
+STAGED_GO_ANY=$(git diff --cached --name-only --diff-filter=ACM -- '*.go' 'go.mod' 'go.sum' || true)
+if [ -n "$STAGED_GO_ANY" ]; then
+    if ! go build ./... 2>/tmp/pre-commit-build.log; then
+        echo -e "${RED}${BOLD}FAIL${RESET} go build:"
+        cat /tmp/pre-commit-build.log | head -30
+        exit 1
+    fi
+    pass "go build"
+else
+    warn "go build (no staged .go / go.mod / go.sum files)"
+fi
+
+# --------------------------------------------------------------------------
+# 4. golangci-lint -- full linter suite (matches CI exactly)
+# --------------------------------------------------------------------------
+if [ -n "$STAGED_GO_ANY" ]; then
+    if ! command -v golangci-lint &>/dev/null; then
+        warn "golangci-lint (not installed, skipping)"
+    else
+        if ! LINT_OUTPUT=$(golangci-lint run ./... 2>&1); then
+            echo -e "${RED}${BOLD}FAIL${RESET} golangci-lint:"
+            echo "$LINT_OUTPUT"
+            exit 1
+        fi
+        pass "golangci-lint"
+    fi
+else
+    warn "golangci-lint (no staged .go / go.mod / go.sum files)"
+fi
+
+# --------------------------------------------------------------------------
+# 5. govulncheck -- check for known vulnerabilities in dependencies
+# --------------------------------------------------------------------------
+if [ -n "$STAGED_GO_ANY" ]; then
+    if ! command -v govulncheck &>/dev/null; then
+        warn "govulncheck (not installed, skipping)"
+    else
+        if ! VULN_OUTPUT=$(govulncheck ./... 2>&1); then
+            echo -e "${RED}${BOLD}FAIL${RESET} govulncheck:"
+            echo "$VULN_OUTPUT"
+            exit 1
+        fi
+        pass "govulncheck"
+    fi
+else
+    warn "govulncheck (no staged .go / go.mod / go.sum files)"
+fi
+
+echo ""
+echo -e "${GREEN}${BOLD}All pre-commit checks passed.${RESET}"

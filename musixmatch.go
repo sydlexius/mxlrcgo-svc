@@ -99,7 +99,11 @@ func (mx Musixmatch) findLyrics(track Track) (Song, error) {
 
 	switch mtg.GetInt("header", "status_code") {
 	case 200:
-		if err := json.Unmarshal(mtg.Get("body", "track").MarshalTo(nil), &song.Track); err != nil {
+		trackNode := mtg.Get("body", "track")
+		if trackNode == nil {
+			return song, errors.New("musixmatch API response missing track data")
+		}
+		if err := json.Unmarshal(trackNode.MarshalTo(nil), &song.Track); err != nil {
 			return song, err
 		}
 	case 401:
@@ -120,7 +124,11 @@ func (mx Musixmatch) findLyrics(track Track) (Song, error) {
 			if tlg.GetInt("body", "lyrics", "restricted") == 1 {
 				return song, errors.New("restricted lyrics")
 			}
-			if err := json.Unmarshal(tlg.Get("body", "lyrics").MarshalTo(nil), &song.Lyrics); err != nil {
+			lyricsNode := tlg.Get("body", "lyrics")
+			if lyricsNode == nil {
+				return song, errors.New("musixmatch API response missing lyrics data")
+			}
+			if err := json.Unmarshal(lyricsNode.MarshalTo(nil), &song.Lyrics); err != nil {
 				return song, err
 			}
 		} else if song.Track.Instrumental == 1 {

@@ -44,7 +44,10 @@ Plans:
   1. No package-level mutable variables exist in any source file
   2. `App` struct owns input queue, failed queue, and orchestrates the processing loop via its `Run` method
   3. Signal handler uses `context.Context` cancellation -- no goroutine directly accesses queue state
-**Plans**: TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 02-01-PLAN.md — Create App struct with Run(ctx), move processing loop + timer + failed handling into internal/app, rewrite main.go as thin entry point with signal.NotifyContext
 
 ### Phase 3: Entry Point & Token
 **Goal**: A thin entry point at `cmd/mxlrcsvc-go/main.go` constructs dependencies and runs the app, with the API token loaded from the correct precedence chain

@@ -345,11 +345,11 @@ Do not use the GraphQL resolve mutation for CodeRabbit threads. Instead, post a 
 PR-level comment to resolve all addressed CR threads at once:
 
 ```bash
-bash ~/.claude/scripts/reply-comment.sh "$pr_number" '@coderabbitai resolve'
+gh pr comment "$pr_number" --body "@coderabbitai resolve"
 ```
 
 This tells CodeRabbit to mark all its threads that have been replied to as resolved.
-Only post this after all replies to CR comments have been posted in Step 7.
+Only post this after all replies to CR comments have been posted in Step 8.
 
 Report how many Copilot threads were resolved and that CR resolve was requested.
 

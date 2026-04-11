@@ -9,14 +9,14 @@
 
 | Technology | Version | Purpose | Why | Confidence |
 |------------|---------|---------|-----|------------|
-| Go | 1.24+ (go.mod) | Language | Bump from 1.22 to 1.24. Go 1.26.2 is current stable but go.mod minimum should target two releases back (1.24) for CI compatibility. No features from 1.25/1.26 are needed for this restructure. | HIGH |
+| Go | 1.25+ (go.mod) | Language | Bumped to 1.25.0 (required by `golang.org/x/text v0.36.0`). Go 1.25+ is the project minimum. | HIGH |
 | `github.com/alexflint/go-arg` | v1.6.1 | CLI argument parsing | Already in use (v1.4.3). Upgrade to v1.6.1 gains native `env` tag support with correct precedence (CLI flag > env var > default). This eliminates the need for a separate env var library for token config. No API breakage from v1.4.3 to v1.6.1. | HIGH |
 
 ### Config (.env file loading)
 
 | Technology | Version | Purpose | Why | Confidence |
 |------------|---------|---------|-----|------------|
-| `github.com/joho/godotenv` | v1.5.1 | Load `.env` files | go-arg handles CLI flags and env vars natively, but `.env` file loading requires a separate library. godotenv is the de facto standard (10.3k stars, 51k importers on pkg.go.dev). Call `godotenv.Load()` early in main before `arg.MustParse()` -- this populates `os.Environ` so go-arg's `env` tags pick up `.env` values automatically. Library is declared feature-complete by maintainer; v1.5.1 is the latest stable release. | HIGH |
+| `github.com/joho/godotenv` | v1.5.1 | Load `.env` files | go-arg handles CLI flags and env vars natively, but `.env` file loading requires a separate library. godotenv is the de facto standard (10.3k stars, 51k importers on pkg.go.dev). In the implementation, `arg.MustParse()` runs first, then `godotenv.Load()` populates `os.Environ` from `.env` (does NOT override existing env vars). Token precedence is then resolved manually via explicit `os.Getenv()` checks. Library is declared feature-complete by maintainer; v1.5.1 is the latest stable release. | HIGH |
 
 ### Existing Dependencies (retain, upgrade)
 
@@ -63,41 +63,41 @@
 
 The project requires: CLI flag > env var (`MUSIXMATCH_TOKEN`) > `.env` file.
 
-**How this works with go-arg v1.6.1 + godotenv v1.5.1:**
+**Implemented approach in `cmd/mxlrcsvc-go/main.go`:**
+
+`arg.MustParse()` runs first (it exits on bad args, so `.env` is only needed for the token).
+After parsing, `godotenv.Load()` populates `os.Environ` from `.env` (does NOT override existing env vars).
+Token precedence is then resolved manually:
 
 ```go
-// cmd/mxlrcsvc-go/main.go
-import (
-    "github.com/joho/godotenv"
-    "github.com/alexflint/go-arg"
-)
+// Parse CLI flags first (exits on usage errors before .env is needed)
+var args Args
+arg.MustParse(&args)
 
-func main() {
-    // Step 1: Load .env into os.Environ (does NOT override existing env vars)
-    _ = godotenv.Load() // Ignore error -- .env file is optional
+// Load .env into os.Environ after parsing (does NOT override existing env vars)
+_ = godotenv.Load()
 
-    // Step 2: go-arg parses CLI flags, then checks env vars (which now include .env values)
-    var args Args
-    arg.MustParse(&args)
-    // args.Token is now set with correct precedence: CLI flag > env var > .env file > default
+// Resolve token with explicit precedence: CLI flag > MUSIXMATCH_TOKEN env var > .env value
+token := args.Token
+if token == "" {
+    token = os.Getenv("MUSIXMATCH_TOKEN")
+}
+if token == "" {
+    slog.Error("no API token provided: use --token flag, MUSIXMATCH_TOKEN env var, or .env file")
+    os.Exit(1)
 }
 ```
 
-```go
-// internal/config/args.go (or wherever Args struct lives)
-type Args struct {
-    // ... other fields ...
-    Token string `arg:"-t,--token,env:MUSIXMATCH_TOKEN" help:"Musixmatch API token"`
-}
-```
+The `Token` field in `Args` does NOT use an `env:` tag — precedence is enforced explicitly.
+`godotenv.Load()` after `arg.MustParse()` works because: the token check happens after both calls,
+and `godotenv.Load()` only populates env vars not already set (so a real `MUSIXMATCH_TOKEN` in
+the shell environment is not overwritten by the `.env` file).
 
-Precedence is automatic:
-1. `--token=xxx` on CLI -- go-arg uses this (highest priority)
-2. `MUSIXMATCH_TOKEN=xxx` in shell environment -- go-arg falls back to this
-3. `MUSIXMATCH_TOKEN=xxx` in `.env` file -- godotenv loaded this into os.Environ, go-arg reads it
-4. No value set -- field stays zero value (empty string), application can handle default/error
-
-**No hardcoded default token.** The current hardcoded token in main.go is a security issue and should be removed. If no token is provided, the application should exit with a clear error message.
+Precedence achieved:
+1. `--token=xxx` on CLI — `args.Token` is set; first check wins
+2. `MUSIXMATCH_TOKEN=xxx` in shell environment — `os.Getenv` returns it; second check wins
+3. `MUSIXMATCH_TOKEN=xxx` in `.env` file — godotenv loaded it; `os.Getenv` returns it on second check
+4. No value set — exits with clear error message
 
 ## Project Layout for Restructure
 

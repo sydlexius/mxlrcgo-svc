@@ -20,17 +20,14 @@ The tool fetches synced lyrics reliably and writes correct `.lrc` files. Everyth
 - Graceful shutdown with failed-item retry file (`_failed.txt`) -- existing
 - Cross-platform builds (linux/darwin/windows, amd64/arm64) -- existing
 - BFS/DFS directory traversal options -- existing
-
-### Active
-
-- [ ] Rename Go module to `sydlexius/mxlrcsvc-go`
-- [ ] Restructure flat main package into `cmd/mxlrcsvc-go/` + `internal/` layout
-- [ ] Eliminate global `inputs` and `failed` variables
-- [ ] Externalize Musixmatch token (CLI flag > env var > .env file)
-- [ ] Define `Fetcher` interface for the Musixmatch client
-- [ ] Export types and methods from internal packages
-- [ ] Update Makefile, CI workflows, and goreleaser for new binary name and paths
-- [ ] Update README for new module path and binary name
+- Rename Go module to `sydlexius/mxlrcsvc-go` -- completed M0
+- Restructure flat main package into `cmd/mxlrcsvc-go/` + `internal/` layout -- completed M0
+- Eliminate global `inputs` and `failed` variables -- completed M0
+- Externalize Musixmatch token (CLI flag > env var > .env file) -- completed M0
+- Define `Fetcher` interface for the Musixmatch client -- completed M0
+- Export types and methods from internal packages -- completed M0
+- Update Makefile, CI workflows, and goreleaser for new binary name and paths -- completed M0
+- Update README for new module path and binary name -- completed M0
 
 ### Out of Scope
 
@@ -41,24 +38,27 @@ The tool fetches synced lyrics reliably and writes correct `.lrc` files. Everyth
 
 ## Context
 
-This is a fork of `fashni/mxlrc-go`, itself a Go port of the Python MxLRC tool. The codebase is small (~5 files, single `main` package) but has known structural issues: global mutable state, hardcoded API token, flat layout that won't scale. M0 addresses all of these before any feature work begins.
+This is a fork of `fashni/mxlrc-go`, itself a Go port of the Python MxLRC tool. M0 completed the full restructuring: the codebase now uses `cmd/` + `internal/` layout, all global state is eliminated, and the API token is loaded from the correct precedence chain (CLI flag > env var > `.env` file).
 
-The existing codebase has minimal test coverage (`utils_test.go` only). Quality gating relies heavily on linters (golangci-lint with 12 linters), pre-commit hooks, and CI.
+The existing codebase has minimal test coverage (`slugify_test.go`). Quality gating relies heavily on linters (golangci-lint with 12 linters), pre-commit hooks, and CI.
 
-Target layout after M0:
+Current layout after M0:
 ```
 cmd/mxlrcsvc-go/main.go
-internal/models/models.go       (from structs.go)
-internal/musixmatch/client.go   (from musixmatch.go)
-internal/lyrics/writer.go       (from lyrics.go + slugify)
-internal/scanner/scanner.go     (from utils.go scanner functions)
+internal/models/models.go
+internal/musixmatch/client.go
+internal/lyrics/writer.go
+internal/lyrics/slugify.go
+internal/scanner/scanner.go
+internal/app/app.go
+internal/app/queue.go
 ```
 
 ## Constraints
 
 - **Binary name**: `mxlrcsvc-go` (matches new module name)
 - **No CGO**: Must remain CGO_ENABLED=0 for cross-compilation
-- **Go 1.22+**: Minimum Go version from existing go.mod
+- **Go 1.25+**: Minimum Go version per go.mod (bumped from 1.22 during M0 for x/text v0.36.0 compatibility)
 - **Behavior preservation**: All existing CLI flags and behaviors must work identically after restructuring
 - **Token precedence**: CLI flag > environment variable (`MUSIXMATCH_TOKEN`) > `.env` file
 
@@ -66,11 +66,11 @@ internal/scanner/scanner.go     (from utils.go scanner functions)
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Module path: `sydlexius/mxlrcsvc-go` | New fork identity, distinct from upstream | -- Pending |
-| App struct for state ownership | Replaces global `inputs`/`failed` vars; enables testability | -- Pending |
-| Token: flag + env + .env | Maximum flexibility; flag for scripting, env for CI, .env for local dev | -- Pending |
-| `Fetcher` interface on Musixmatch client | Enables mocking in tests without hitting the real API | -- Pending |
-| Move existing tests only, no new coverage | Keep M0 scope tight; test coverage is a separate concern | -- Pending |
+| Module path: `sydlexius/mxlrcsvc-go` | New fork identity, distinct from upstream | Implemented in M0 |
+| App struct for state ownership | Replaces global `inputs`/`failed` vars; enables testability | Implemented in M0 |
+| Token: flag + env + .env | Maximum flexibility; flag for scripting, env for CI, .env for local dev | Implemented in M0 |
+| `Fetcher` interface on Musixmatch client | Enables mocking in tests without hitting the real API | Implemented in M0 |
+| Move existing tests only, no new coverage | Keep M0 scope tight; test coverage is a separate concern | Implemented in M0 |
 
 ## Evolution
 
@@ -90,4 +90,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-10 after initialization*
+*Last updated: 2026-04-10 after M0 completion*

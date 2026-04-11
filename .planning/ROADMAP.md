@@ -12,8 +12,8 @@ Transform the flat `package main` codebase into an idiomatic Go project with `cm
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Package Extraction** - Rename module, create all internal packages, export types, introduce interfaces
-- [ ] **Phase 2: State Elimination** - Create App struct, eliminate global variables, wire context-based signal handling
+- [x] **Phase 1: Package Extraction** - Rename module, create all internal packages, export types, introduce interfaces (completed 2026-04-11)
+- [x] **Phase 2: State Elimination** - Create App struct, eliminate global variables, wire context-based signal handling (completed 2026-04-11)
 - [x] **Phase 3: Entry Point & Token** - Create thin cmd/ entry point, externalize API token with precedence chain (completed 2026-04-11)
 - [x] **Phase 4: Build & Verification** - Update Makefile/CI/GoReleaser/README, upgrade dependencies, verify behavior preservation (completed 2026-04-11)
 
@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `Fetcher` interface is defined in `internal/musixmatch` and `Client` implements it
   4. No `log.Fatal` calls exist in any `internal/` package -- all functions return errors
   5. `slices.Contains` replaces `isInArray` and slugify regex is compiled once at package level
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 01-01-PLAN.md — Foundation: module rename + internal/models + internal/app
@@ -44,7 +44,7 @@ Plans:
   1. No package-level mutable variables exist in any source file
   2. `App` struct owns input queue, failed queue, and orchestrates the processing loop via its `Run` method
   3. Signal handler uses `context.Context` cancellation -- no goroutine directly accesses queue state
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md — Create App struct with Run(ctx), move processing loop + timer + failed handling into internal/app, rewrite main.go as thin entry point with signal.NotifyContext
@@ -87,7 +87,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Package Extraction | 0/3 | Planned | - |
-| 2. State Elimination | 0/0 | Not started | - |
+| 1. Package Extraction | 3/3 | Complete | 2026-04-11 |
+| 2. State Elimination | 1/1 | Complete | 2026-04-11 |
 | 3. Entry Point & Token | 1/1 | Complete   | 2026-04-11 |
 | 4. Build & Verification | 3/3 | Complete   | 2026-04-11 |

@@ -60,17 +60,26 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
 	}
 
-	f, err := os.Create(fp) //nolint:gosec // path is constructed from sanitized song metadata
+	// Write to a temp file in the same directory, then rename atomically so a
+	// mid-write failure never leaves a partial .lrc at the final path.
+	tmp, err := os.CreateTemp(outdir, fn+".*.tmp") //nolint:gosec // path is constructed from sanitized song metadata
 	if err != nil {
-		return fmt.Errorf("creating %s: %w", fp, err)
+		return fmt.Errorf("creating temp file in %s: %w", outdir, err)
 	}
+	tmpPath := tmp.Name()
+	tmpClosed := false
 	defer func() {
-		if cerr := f.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("closing %s: %w", fp, cerr)
+		if !tmpClosed {
+			if cerr := tmp.Close(); cerr != nil && retErr == nil {
+				retErr = fmt.Errorf("closing %s: %w", tmpPath, cerr)
+			}
+		}
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
-	buffer := bufio.NewWriter(f)
+	buffer := bufio.NewWriter(tmp)
 	for _, tag := range tags {
 		if _, err := buffer.WriteString(tag + "\n"); err != nil {
 			return fmt.Errorf("writing tag: %w", err)
@@ -78,6 +87,13 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 	}
 	if err := writeContent(buffer); err != nil {
 		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", tmpPath, err)
+	}
+	tmpClosed = true
+	if err := os.Rename(tmpPath, fp); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", tmpPath, fp, err)
 	}
 	slog.Info("lyrics saved", "path", fp)
 	return nil

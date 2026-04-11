@@ -1,13 +1,13 @@
 module github.com/sydlexius/mxlrcsvc-go
 
-go 1.24
+go 1.25.0
 
 require (
-	github.com/alexflint/go-arg v1.4.3
-	github.com/dhowden/tag v0.0.0-20220618230019-adf36e896086
+	github.com/alexflint/go-arg v1.6.1
+	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/joho/godotenv v1.5.1
-	github.com/valyala/fastjson v1.6.3
-	golang.org/x/text v0.3.8
+	github.com/valyala/fastjson v1.6.10
+	golang.org/x/text v0.36.0
 )
 
-require github.com/alexflint/go-scalar v1.1.0 // indirect
+require github.com/alexflint/go-scalar v1.2.0 // indirect

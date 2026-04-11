@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": {
+      "/Users/jesse/Developer/mxlrc-go/.opencode/get-shit-done/*": "allow"
+    },
+    "external_directory": {
+      "/Users/jesse/Developer/mxlrc-go/.opencode/get-shit-done/*": "allow"
+    }
+  }
+}

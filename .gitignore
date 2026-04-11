@@ -5,6 +5,7 @@
 *.so
 *.dylib
 mxlrc-go
+/mxlrcsvc-go
 
 # Test binary, built with `go test -c`
 *.test

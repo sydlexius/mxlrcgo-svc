@@ -71,13 +71,13 @@ Plans:
   1. `make build` produces a binary named `mxlrcsvc-go` built from `cmd/mxlrcsvc-go/`
   2. CI workflows and GoReleaser config reference the new build path and binary name
   3. All three input modes (CLI pairs, text file, directory scan) produce identical output to the pre-restructuring baseline
-  4. `go.mod` shows Go 1.24 minimum and all dependencies are at target versions (go-arg v1.6.1, fastjson v1.6.10, x/text latest, dhowden/tag latest)
+  4. `go.mod` shows Go 1.25.0 minimum and all dependencies are at target versions (go-arg v1.6.1, fastjson v1.6.10, x/text latest, dhowden/tag latest)
   5. README documents the new module path, binary name, and token configuration
 **Plans:** 3/3 plans complete
 
 Plans:
 - [x] 04-01-PLAN.md — Tooling config: update Makefile + GoReleaser + CI for new binary name and build path
-- [x] 04-02-PLAN.md — Dependencies: bump Go to 1.24, upgrade go-arg/fastjson/x/text/dhowden/tag
+- [x] 04-02-PLAN.md — Dependencies: bump Go to 1.25.0, upgrade go-arg/fastjson/x/text/dhowden/tag
 - [x] 04-03-PLAN.md — README update + smoke test checkpoint for all input modes
 
 ## Progress

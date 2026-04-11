@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,16 +29,18 @@ func NewScanner() *Scanner {
 }
 
 // AssertInput validates a "artist,title" string and returns a Track, or nil if invalid.
+// Uses csv.NewReader so that fields containing commas (RFC-4180 quoting) are handled
+// correctly -- this matches the csv.Writer used in app.handleFailed.
 func AssertInput(song string) *models.Track {
-	s := strings.Split(song, ",")
-	if len(s) != 2 {
+	r := csv.NewReader(strings.NewReader(song))
+	fields, err := r.Read()
+	if err != nil || len(fields) != 2 {
 		return nil
 	}
-	tr := &models.Track{
-		ArtistName: strings.TrimSpace(s[0]),
-		TrackName:  strings.TrimSpace(s[1]),
+	return &models.Track{
+		ArtistName: strings.TrimSpace(fields[0]),
+		TrackName:  strings.TrimSpace(fields[1]),
 	}
-	return tr
 }
 
 // GetSongMulti processes multiple "artist,title" pairs into the work queue.

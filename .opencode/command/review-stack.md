@@ -347,7 +347,25 @@ git commit -m "fix: address PR review feedback
 - <one-line summary per fix>"
 ```
 
-### 4f. Reply to all comments in batch
+### 4f. Push
+
+Push before posting any replies -- this ensures the SHA referenced in "Fixed in <sha>"
+replies is reachable on the remote. If push fails, **stop here** and do not post replies.
+
+```bash
+git push origin <branch_name>
+```
+
+After a successful push, record the PR number in the session breadcrumb file:
+
+```bash
+SESSION_PRS_FILE="/tmp/mxlrc-go-session-prs.txt"
+echo "<PR>" >> "$SESSION_PRS_FILE"
+```
+
+### 4g. Reply to all comments in batch
+
+Only post replies after a successful push.
 
 **Fix now:**
 ```bash
@@ -377,19 +395,6 @@ bash ~/.claude/scripts/resolve-threads.sh <PR> <copilot_comment_id> ...
 
 # CodeRabbit threads (one PR-level comment resolves all)
 bash ~/.claude/scripts/reply-comment.sh <PR> '@coderabbitai resolve'
-```
-
-### 4g. Push
-
-```bash
-git push
-```
-
-After a successful push, record the PR number in the session breadcrumb file:
-
-```bash
-SESSION_PRS_FILE="/tmp/mxlrc-go-session-prs.txt"
-echo "<PR>" >> "$SESSION_PRS_FILE"
 ```
 
 ### 4h. Cascade check

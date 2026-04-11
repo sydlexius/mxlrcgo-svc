@@ -284,7 +284,7 @@ leaving for a follow-up.
 
 ---
 
-## Step 7 -- Commit, get SHA, then post replies
+## Step 7 -- Commit and push
 
 Commit all fixes in a single commit:
 
@@ -302,25 +302,26 @@ git rev-parse --short HEAD
 
 Now substitute the real SHA into all "Fixed in <sha>" reply drafts from step 6.
 
-Post all replies in one batch (do not wait between them):
+Push immediately so the SHA is reachable before any replies are posted:
+
+```bash
+git push origin $(git branch --show-current) 2>&1
+```
+
+Report the result. If the push fails, **stop here** -- do not post any replies until
+the push succeeds. Explain why the push failed; do not retry automatically.
+
+---
+
+## Step 8 -- Post replies
+
+Only after a successful push, post all replies in one batch (do not wait between them):
 
 ```bash
 bash ~/.claude/scripts/reply-comment.sh "$pr_number" {COMMENT_ID} '<reply text>'
 ```
 
 Run one call per open comment. Log each one as it completes.
-
----
-
-## Step 8 -- Push
-
-After all replies are posted:
-
-```bash
-git push origin $(git branch --show-current) 2>&1
-```
-
-Report the result. If the push fails, explain why -- do not retry automatically.
 
 ---
 

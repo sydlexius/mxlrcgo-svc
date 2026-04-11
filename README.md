@@ -35,7 +35,7 @@ Options:
                               cooldown time in seconds [default: 15]
   --depth DEPTH, -d DEPTH     (directory mode) maximum recursion depth [default: 100]
   --update, -u                (directory mode) update existing lyrics file
-  --bfs                       (directory mode) use breatdth-first-search traversal
+  --bfs                       (directory mode) use breadth-first-search traversal
   --token TOKEN, -t TOKEN     musixmatch token (or set MUSIXMATCH_TOKEN environment variable or create a .env file)
   --help, -h                  display this help and exit
 ```

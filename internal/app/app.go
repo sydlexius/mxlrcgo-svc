@@ -1,8 +1,8 @@
 package app
 
 import (
-	"bufio"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"log/slog"
 	"os"
@@ -129,20 +129,20 @@ func (a *App) handleFailed() error {
 		return fmt.Errorf("creating failed items file: %w", err)
 	}
 
-	buffer := bufio.NewWriter(f)
+	w := csv.NewWriter(f)
 	for !a.failed.Empty() {
 		cur, err := a.failed.Pop()
 		if err != nil {
 			_ = f.Close()
 			return fmt.Errorf("unexpected empty queue writing failed items: %w", err)
 		}
-		_, err = buffer.WriteString(cur.Track.ArtistName + "," + cur.Track.TrackName + "\n")
-		if err != nil {
+		if err := w.Write([]string{cur.Track.ArtistName, cur.Track.TrackName}); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("writing failed item: %w", err)
 		}
 	}
-	if err := buffer.Flush(); err != nil {
+	w.Flush()
+	if err := w.Error(); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("flushing failed items: %w", err)
 	}

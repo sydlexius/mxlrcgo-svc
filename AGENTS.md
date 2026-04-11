@@ -95,7 +95,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Error variables are always `err` (shadowed freely within nested scopes)
 - Struct fields use PascalCase with JSON tags: `TrackName string \`json:"track_name,omitempty"\``
 - All shared types defined in `internal/models/models.go`
-- SCREAMING_CASE for package-level URL constant: `const apiURL = "https://..."`
+- lowerCamelCase for unexported package-level constants: `const apiURL = "https://..."`
 ## Code Style
 - `gofmt` is the canonical formatter (enforced by pre-commit hook and CI)
 - `goimports` for import grouping (run via `make fmt`)
@@ -219,7 +219,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Location: `Makefile` and `.goreleaser.yml`
 - Triggers: `make build` or GoReleaser on tag push
 - Responsibilities: Compiles `cmd/mxlrcsvc-go` into `mxlrcsvc-go` binary
-## Error Handling
+## Runtime Error Handling
 - `FindLyrics()` returns `(Song, error)` -- caller logs the error and pushes to the `failed` queue
 - `WriteLRC()` returns `error` -- uses named return `retErr` to capture deferred close errors
 - `Next()` / `Pop()` return `(models.Inputs, error)` -- error on empty queue prevents nil-deref panics

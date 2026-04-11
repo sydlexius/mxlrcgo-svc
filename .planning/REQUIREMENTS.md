@@ -44,7 +44,7 @@ Requirements for M0. Each maps to roadmap phases.
 - [x] **BUILD-05**: All three input modes (CLI pairs, text file, directory scan) work identically after restructuring
 - [x] **BUILD-06**: Dependencies upgraded: go-arg to v1.6.1, fastjson to v1.6.10, x/text to latest, dhowden/tag to latest
 - [x] **BUILD-07**: godotenv v1.5.1 added for .env file loading
-- [x] **BUILD-08**: go.mod minimum Go version bumped to 1.24
+- [x] **BUILD-08**: go.mod minimum Go version bumped to 1.25.0
 
 ## v2 Requirements
 

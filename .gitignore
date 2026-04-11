@@ -31,3 +31,7 @@ docs/superpowers/
 
 # Serena MCP
 .serena/
+
+# AI assistant config (local only)
+.claude/
+.opencode/

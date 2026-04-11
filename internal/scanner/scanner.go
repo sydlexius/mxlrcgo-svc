@@ -76,7 +76,10 @@ func (sc *Scanner) GetSongText(textFn string, savePath string, songs *app.Inputs
 }
 
 // GetSongDir scans a directory for audio files and populates the queue with metadata.
-func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, limit int, depth int, bfs bool) error {
+// update causes existing .lrc files to be re-queued (overwrite synced lyrics).
+// upgrade causes existing .txt files (previously saved as unsynced) to be re-queued
+// so that the tool can check whether synced lyrics are now available and promote them to .lrc.
+func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, upgrade bool, limit int, depth int, bfs bool) error {
 	slog.Info("scanning directory", "path", dir)
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -94,22 +97,45 @@ func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, l
 	for _, file := range files {
 		if file.IsDir() {
 			if depth < limit {
-				if err := sc.GetSongDir(filepath.Join(dir, file.Name()), songs, update, limit, depth+1, bfs); err != nil {
+				if err := sc.GetSongDir(filepath.Join(dir, file.Name()), songs, update, upgrade, limit, depth+1, bfs); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if filepath.Ext(file.Name()) == ".lrc" {
-			continue
-		}
-		lrcFile := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name())) + ".lrc"
-		if _, err := os.Stat(filepath.Join(dir, lrcFile)); err == nil && !update {
-			slog.Debug("skipping file, lyrics exist", "file", file.Name())
+
+		ext := strings.ToLower(filepath.Ext(file.Name()))
+
+		// Skip lyrics files themselves -- they are not audio sources.
+		if ext == ".lrc" || ext == ".txt" {
 			continue
 		}
 
-		if !slices.Contains(supportedFileTypes, strings.ToLower(filepath.Ext(file.Name()))) {
+		stem := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+		lrcFile := stem + ".lrc"
+		txtFile := stem + ".txt"
+
+		lrcExists := false
+		if _, err := os.Stat(filepath.Join(dir, lrcFile)); err == nil {
+			lrcExists = true
+		}
+		txtExists := false
+		if _, err := os.Stat(filepath.Join(dir, txtFile)); err == nil {
+			txtExists = true
+		}
+
+		switch {
+		case lrcExists && !update:
+			// Synced lyrics already present and not asked to update -- skip.
+			slog.Debug("skipping file, lyrics exist", "file", file.Name())
+			continue
+		case txtExists && !upgrade && !update && !lrcExists:
+			// Unsynced .txt present and not asked to upgrade or update -- skip.
+			slog.Debug("skipping file, unsynced lyrics exist", "file", file.Name())
+			continue
+		}
+
+		if !slices.Contains(supportedFileTypes, ext) {
 			slog.Debug("skipping file, unsupported format", "file", file.Name())
 			continue
 		}
@@ -131,7 +157,7 @@ func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, l
 		song := models.Inputs{
 			Track:    models.Track{ArtistName: m.Artist(), TrackName: m.Title()},
 			Outdir:   dir,
-			Filename: strings.TrimSuffix(file.Name(), filepath.Ext(file.Name())) + ".lrc",
+			Filename: stem + ".lrc",
 		}
 		songs.Push(song)
 	}
@@ -139,7 +165,7 @@ func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, l
 }
 
 // ParseInput determines the input mode and populates the work queue accordingly.
-func (sc *Scanner) ParseInput(songs []string, outdir string, update bool, depth int, bfs bool, queue *app.InputsQueue) (string, error) {
+func (sc *Scanner) ParseInput(songs []string, outdir string, update bool, upgrade bool, depth int, bfs bool, queue *app.InputsQueue) (string, error) {
 	if len(songs) == 1 {
 		fi, err := os.Stat(songs[0])
 		if err == nil {
@@ -149,7 +175,7 @@ func (sc *Scanner) ParseInput(songs []string, outdir string, update bool, depth 
 				}
 				return "text", nil
 			}
-			if err := sc.GetSongDir(songs[0], queue, update, depth, 0, bfs); err != nil {
+			if err := sc.GetSongDir(songs[0], queue, update, upgrade, depth, 0, bfs); err != nil {
 				return "", err
 			}
 			return "dir", nil

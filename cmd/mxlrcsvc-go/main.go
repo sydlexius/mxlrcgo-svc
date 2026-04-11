@@ -22,7 +22,8 @@ type Args struct {
 	Outdir   string   `arg:"-o,--outdir" help:"output directory" default:"lyrics"`
 	Cooldown int      `arg:"-c,--cooldown" help:"cooldown time in seconds" default:"15"`
 	Depth    int      `arg:"-d,--depth" help:"(directory mode) maximum recursion depth" default:"100"`
-	Update   bool     `arg:"-u,--update" help:"(directory mode) update existing lyrics file"`
+	Update   bool     `arg:"-u,--update" help:"(directory mode) re-fetch and overwrite existing .lrc files"`
+	Upgrade  bool     `arg:"--upgrade" help:"(directory mode) re-fetch songs with .txt (unsynced) to promote to .lrc if synced lyrics are now available; implied by --update"`
 	BFS      bool     `arg:"--bfs" help:"(directory mode) use breadth-first-search traversal"`
 	Token    string   `arg:"-t,--token" help:"musixmatch token (or set MUSIXMATCH_TOKEN env var / .env file)" default:""`
 }
@@ -40,7 +41,7 @@ func main() {
 
 	inputs := app.NewInputsQueue()
 	sc := scanner.NewScanner()
-	mode, err := sc.ParseInput(args.Song, args.Outdir, args.Update, args.Depth, args.BFS, inputs)
+	mode, err := sc.ParseInput(args.Song, args.Outdir, args.Update, args.Upgrade, args.Depth, args.BFS, inputs)
 	if err != nil {
 		slog.Error("failed to parse input", "error", err)
 		os.Exit(1)

@@ -6,3 +6,8 @@ extend-exclude = [
     "go.sum",
     ".opencode/",
 ]
+
+[default.extend-words]
+# ID3v2 frame names are not English words
+TIT2 = "TIT2"
+TPE1 = "TPE1"

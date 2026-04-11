@@ -24,40 +24,60 @@ func NewLRCWriter() *LRCWriter {
 	return &LRCWriter{}
 }
 
-// WriteLRC writes the song lyrics to an LRC file in the given output directory.
+// WriteLRC writes the song lyrics to an LRC or TXT file in the given output directory.
+// Synced lyrics and instrumentals are written as .lrc; unsynced lyrics are written as .txt.
 func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (retErr error) {
-	var fn string
-	if fn = filename; filename == "" {
-		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ".lrc"
-	}
-	fp := filepath.Join(outdir, fn)
-
-	tags := []string{
-		"[by:fashni]",
-		fmt.Sprintf("[ar:%s]", song.Track.ArtistName),
-		fmt.Sprintf("[ti:%s]", song.Track.TrackName),
-	}
-	if song.Track.AlbumName != "" {
-		tags = append(tags, fmt.Sprintf("[al:%s]", song.Track.AlbumName))
-	}
-	if song.Track.TrackLength != 0 {
-		tags = append(tags, fmt.Sprintf("[length:%02d:%02d]", song.Track.TrackLength/60, song.Track.TrackLength%60))
-	}
-
 	// Eligibility gate -- determine content type before touching disk.
 	var writeContent func(*bufio.Writer) error
+	var writeTags bool
 	switch {
 	case len(song.Subtitles.Lines) > 0:
 		slog.Info("saving synced lyrics")
 		writeContent = func(buf *bufio.Writer) error { return writeSyncedLRC(song, buf) }
+		writeTags = true
 	case song.Lyrics.LyricsBody != "":
 		slog.Info("saving unsynced lyrics")
 		writeContent = func(buf *bufio.Writer) error { return writeUnsyncedLRC(song, buf) }
+		writeTags = false
 	case song.Track.Instrumental == 1:
 		slog.Info("saving instrumental")
 		writeContent = writeInstrumentalLRC
+		writeTags = true
 	default:
 		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
+	}
+
+	var fn string
+	switch {
+	case filename != "":
+		// In dir mode the scanner sets an explicit .lrc filename. For unsynced
+		// content, swap the extension to .txt so the file type matches content.
+		if !writeTags {
+			fn = strings.TrimSuffix(filename, filepath.Ext(filename)) + ".txt"
+			slog.Info("save unsynced lyrics", "path", filepath.Join(outdir, fn))
+		} else {
+			fn = filename
+		}
+	case writeTags:
+		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ".lrc"
+	default:
+		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ".txt"
+	}
+	fp := filepath.Join(outdir, fn)
+
+	var tags []string
+	if writeTags {
+		tags = []string{
+			"[by:fashni]",
+			fmt.Sprintf("[ar:%s]", song.Track.ArtistName),
+			fmt.Sprintf("[ti:%s]", song.Track.TrackName),
+		}
+		if song.Track.AlbumName != "" {
+			tags = append(tags, fmt.Sprintf("[al:%s]", song.Track.AlbumName))
+		}
+		if song.Track.TrackLength != 0 {
+			tags = append(tags, fmt.Sprintf("[length:%02d:%02d]", song.Track.TrackLength/60, song.Track.TrackLength%60))
+		}
 	}
 
 	// Write to a temp file in the same directory, then rename atomically so a
@@ -106,6 +126,20 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 	if err := os.Rename(tmpPath, fp); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", tmpPath, fp, err)
 	}
+	// Remove the opposite sidecar so format transitions never leave both files on disk.
+	// Writing .lrc removes a stale .txt (upgrade), writing .txt removes a stale .lrc (downgrade).
+	switch filepath.Ext(fp) {
+	case ".lrc":
+		stale := strings.TrimSuffix(fp, ".lrc") + ".txt"
+		if err := os.Remove(stale); err != nil && !os.IsNotExist(err) {
+			slog.Warn("could not remove stale sidecar", "path", stale, "error", err)
+		}
+	case ".txt":
+		stale := strings.TrimSuffix(fp, ".txt") + ".lrc"
+		if err := os.Remove(stale); err != nil && !os.IsNotExist(err) {
+			slog.Warn("could not remove stale sidecar", "path", stale, "error", err)
+		}
+	}
 	slog.Info("lyrics saved", "path", fp)
 	return nil
 }
@@ -130,17 +164,9 @@ func writeSyncedLRC(song models.Song, buff *bufio.Writer) error {
 }
 
 func writeUnsyncedLRC(song models.Song, buff *bufio.Writer) error {
-	lines := strings.Split(song.Lyrics.LyricsBody, "\n")
-	var text string
-	for _, line := range lines {
-		if text = line; line == "" {
-			text = "\u266a"
-		}
-		if _, err := buff.WriteString("[00:00.00]" + text + "\n"); err != nil {
-			return fmt.Errorf("writing unsynced line: %w", err)
-		}
+	if _, err := buff.WriteString(song.Lyrics.LyricsBody); err != nil {
+		return fmt.Errorf("writing unsynced lyrics: %w", err)
 	}
-
 	if err := buff.Flush(); err != nil {
 		return fmt.Errorf("flushing unsynced lyrics: %w", err)
 	}

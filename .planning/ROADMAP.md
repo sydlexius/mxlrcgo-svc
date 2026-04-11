@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 1: Package Extraction** - Rename module, create all internal packages, export types, introduce interfaces
 - [ ] **Phase 2: State Elimination** - Create App struct, eliminate global variables, wire context-based signal handling
 - [x] **Phase 3: Entry Point & Token** - Create thin cmd/ entry point, externalize API token with precedence chain (completed 2026-04-11)
-- [ ] **Phase 4: Build & Verification** - Update Makefile/CI/GoReleaser/README, upgrade dependencies, verify behavior preservation
+- [x] **Phase 4: Build & Verification** - Update Makefile/CI/GoReleaser/README, upgrade dependencies, verify behavior preservation (completed 2026-04-11)
 
 ## Phase Details
 
@@ -73,12 +73,12 @@ Plans:
   3. All three input modes (CLI pairs, text file, directory scan) produce identical output to the pre-restructuring baseline
   4. `go.mod` shows Go 1.24 minimum and all dependencies are at target versions (go-arg v1.6.1, fastjson v1.6.10, x/text latest, dhowden/tag latest)
   5. README documents the new module path, binary name, and token configuration
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 04-01-PLAN.md — Tooling config: update Makefile + GoReleaser + CI for new binary name and build path
-- [ ] 04-02-PLAN.md — Dependencies: bump Go to 1.24, upgrade go-arg/fastjson/x/text/dhowden/tag
-- [ ] 04-03-PLAN.md — README update + smoke test checkpoint for all input modes
+- [x] 04-01-PLAN.md — Tooling config: update Makefile + GoReleaser + CI for new binary name and build path
+- [x] 04-02-PLAN.md — Dependencies: bump Go to 1.24, upgrade go-arg/fastjson/x/text/dhowden/tag
+- [x] 04-03-PLAN.md — README update + smoke test checkpoint for all input modes
 
 ## Progress
 
@@ -90,4 +90,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Package Extraction | 0/3 | Planned | - |
 | 2. State Elimination | 0/0 | Not started | - |
 | 3. Entry Point & Token | 1/1 | Complete   | 2026-04-11 |
-| 4. Build & Verification | 0/0 | Not started | - |
+| 4. Build & Verification | 3/3 | Complete   | 2026-04-11 |

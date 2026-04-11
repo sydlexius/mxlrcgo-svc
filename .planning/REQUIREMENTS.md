@@ -37,14 +37,14 @@ Requirements for M0. Each maps to roadmap phases.
 
 ### Build & Verification
 
-- [ ] **BUILD-01**: Makefile updated for `cmd/mxlrcsvc-go/` build path and `mxlrcsvc-go` binary name
-- [ ] **BUILD-02**: GoReleaser config updated for new binary name and main path
-- [ ] **BUILD-03**: CI workflows updated for new build paths
-- [ ] **BUILD-04**: README updated for new module path and binary name
-- [ ] **BUILD-05**: All three input modes (CLI pairs, text file, directory scan) work identically after restructuring
-- [ ] **BUILD-06**: Dependencies upgraded: go-arg to v1.6.1, fastjson to v1.6.10, x/text to latest, dhowden/tag to latest
+- [x] **BUILD-01**: Makefile updated for `cmd/mxlrcsvc-go/` build path and `mxlrcsvc-go` binary name
+- [x] **BUILD-02**: GoReleaser config updated for new binary name and main path
+- [x] **BUILD-03**: CI workflows updated for new build paths
+- [x] **BUILD-04**: README updated for new module path and binary name
+- [x] **BUILD-05**: All three input modes (CLI pairs, text file, directory scan) work identically after restructuring
+- [x] **BUILD-06**: Dependencies upgraded: go-arg to v1.6.1, fastjson to v1.6.10, x/text to latest, dhowden/tag to latest
 - [x] **BUILD-07**: godotenv v1.5.1 added for .env file loading
-- [ ] **BUILD-08**: go.mod minimum Go version bumped to 1.24
+- [x] **BUILD-08**: go.mod minimum Go version bumped to 1.24
 
 ## v2 Requirements
 
@@ -114,14 +114,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | API-03 | Phase 3 | Complete |
 | API-04 | Phase 1 | Complete |
 | API-05 | Phase 1 | Complete |
-| BUILD-01 | Phase 4 | Pending |
-| BUILD-02 | Phase 4 | Pending |
-| BUILD-03 | Phase 4 | Pending |
-| BUILD-04 | Phase 4 | Pending |
-| BUILD-05 | Phase 4 | Pending |
-| BUILD-06 | Phase 4 | Pending |
+| BUILD-01 | Phase 4 | Complete |
+| BUILD-02 | Phase 4 | Complete |
+| BUILD-03 | Phase 4 | Complete |
+| BUILD-04 | Phase 4 | Complete |
+| BUILD-05 | Phase 4 | Complete |
+| BUILD-06 | Phase 4 | Complete |
 | BUILD-07 | Phase 3 | Complete |
-| BUILD-08 | Phase 4 | Pending |
+| BUILD-08 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 24 total

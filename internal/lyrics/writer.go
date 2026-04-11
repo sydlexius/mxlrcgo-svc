@@ -44,7 +44,7 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		tags = append(tags, fmt.Sprintf("[length:%02d:%02d]", song.Track.TrackLength/60, song.Track.TrackLength%60))
 	}
 
-	// Eligibility gate — determine content type before touching disk.
+	// Eligibility gate -- determine content type before touching disk.
 	var writeContent func(*bufio.Writer) error
 	switch {
 	case len(song.Subtitles.Lines) > 0:

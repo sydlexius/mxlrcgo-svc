@@ -26,13 +26,6 @@ func NewLRCWriter() *LRCWriter {
 
 // WriteLRC writes the song lyrics to an LRC file in the given output directory.
 func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (retErr error) {
-	hasSynced := len(song.Subtitles.Lines) > 0
-	hasUnsynced := song.Lyrics.LyricsBody != ""
-	isInstrumental := song.Track.Instrumental == 1
-	if !hasSynced && !hasUnsynced && !isInstrumental {
-		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
-	}
-
 	var fn string
 	if fn = filename; filename == "" {
 		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ".lrc"
@@ -51,45 +44,69 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		tags = append(tags, fmt.Sprintf("[length:%02d:%02d]", song.Track.TrackLength/60, song.Track.TrackLength%60))
 	}
 
-	f, err := os.Create(fp) //nolint:gosec // path is constructed from sanitized song metadata
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", fp, err)
+	// Eligibility gate -- determine content type before touching disk.
+	var writeContent func(*bufio.Writer) error
+	switch {
+	case len(song.Subtitles.Lines) > 0:
+		slog.Info("saving synced lyrics")
+		writeContent = func(buf *bufio.Writer) error { return writeSyncedLRC(song, buf) }
+	case song.Lyrics.LyricsBody != "":
+		slog.Info("saving unsynced lyrics")
+		writeContent = func(buf *bufio.Writer) error { return writeUnsyncedLRC(song, buf) }
+	case song.Track.Instrumental == 1:
+		slog.Info("saving instrumental")
+		writeContent = writeInstrumentalLRC
+	default:
+		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
 	}
+
+	// Write to a temp file in the same directory, then rename atomically so a
+	// mid-write failure never leaves a partial .lrc at the final path.
+	tmp, err := os.CreateTemp(outdir, fn+".*.tmp") //nolint:gosec // path is constructed from sanitized song metadata
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", outdir, err)
+	}
+	tmpPath := tmp.Name()
+	tmpClosed := false
 	defer func() {
-		if cerr := f.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("closing %s: %w", fp, cerr)
+		if !tmpClosed {
+			if cerr := tmp.Close(); cerr != nil && retErr == nil {
+				retErr = fmt.Errorf("closing %s: %w", tmpPath, cerr)
+			}
+		}
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
-	buffer := bufio.NewWriter(f)
+	buffer := bufio.NewWriter(tmp)
 	for _, tag := range tags {
 		if _, err := buffer.WriteString(tag + "\n"); err != nil {
 			return fmt.Errorf("writing tag: %w", err)
 		}
 	}
-
-	if hasSynced {
-		slog.Info("saving synced lyrics")
-		if err := writeSyncedLRC(song, buffer); err != nil {
-			return err
-		}
-		slog.Info("lyrics saved", "path", fp, "type", "synced")
-		return nil
-	}
-	if hasUnsynced {
-		slog.Info("saving unsynced lyrics")
-		if err := writeUnsyncedLRC(song, buffer); err != nil {
-			return err
-		}
-		slog.Info("lyrics saved", "path", fp, "type", "unsynced")
-		return nil
-	}
-	// isInstrumental is true here (checked at top)
-	slog.Info("saving instrumental")
-	if err := writeInstrumentalLRC(buffer); err != nil {
+	if err := writeContent(buffer); err != nil {
 		return err
 	}
-	slog.Info("lyrics saved", "path", fp, "type", "instrumental")
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", tmpPath, err)
+	}
+	tmpClosed = true
+	// Restore typical output file permissions (0666, subject to umask).
+	// os.CreateTemp creates files with mode 0600; chmod before rename so the
+	// final .lrc has the same permissions as a file created with os.Create.
+	if err := os.Chmod(tmpPath, 0o666); err != nil { //nolint:gosec // mode is a fixed constant, not user input
+		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	}
+	// On Windows, os.Rename fails when the destination already exists.
+	// Remove it first so overwrite semantics are preserved cross-platform.
+	if err := os.Remove(fp); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing existing %s: %w", fp, err)
+	}
+	if err := os.Rename(tmpPath, fp); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", tmpPath, fp, err)
+	}
+	slog.Info("lyrics saved", "path", fp)
 	return nil
 }
 

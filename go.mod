@@ -1,6 +1,6 @@
 module github.com/sydlexius/mxlrcsvc-go
 
-go 1.22
+go 1.24
 
 require (
 	github.com/alexflint/go-arg v1.4.3

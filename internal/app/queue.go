@@ -16,7 +16,7 @@ func NewInputsQueue() *InputsQueue {
 	return &InputsQueue{}
 }
 
-// Next returns the front item without removing it.
+// Next returns the front item without removing it, or an error if the queue is empty.
 func (q *InputsQueue) Next() (models.Inputs, error) {
 	if q.Empty() {
 		return models.Inputs{}, fmt.Errorf("queue is empty")
@@ -24,7 +24,7 @@ func (q *InputsQueue) Next() (models.Inputs, error) {
 	return q.Queue[0], nil
 }
 
-// Pop removes and returns the front item.
+// Pop removes and returns the front item, or an error if the queue is empty.
 func (q *InputsQueue) Pop() (models.Inputs, error) {
 	if q.Empty() {
 		return models.Inputs{}, fmt.Errorf("queue is empty")

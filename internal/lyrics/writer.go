@@ -26,13 +26,6 @@ func NewLRCWriter() *LRCWriter {
 
 // WriteLRC writes the song lyrics to an LRC file in the given output directory.
 func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (retErr error) {
-	hasSynced := len(song.Subtitles.Lines) > 0
-	hasUnsynced := song.Lyrics.LyricsBody != ""
-	isInstrumental := song.Track.Instrumental == 1
-	if !hasSynced && !hasUnsynced && !isInstrumental {
-		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
-	}
-
 	var fn string
 	if fn = filename; filename == "" {
 		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ".lrc"
@@ -51,6 +44,22 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		tags = append(tags, fmt.Sprintf("[length:%02d:%02d]", song.Track.TrackLength/60, song.Track.TrackLength%60))
 	}
 
+	// Eligibility gate — determine content type before touching disk.
+	var writeContent func(*bufio.Writer) error
+	switch {
+	case len(song.Subtitles.Lines) > 0:
+		slog.Info("saving synced lyrics")
+		writeContent = func(buf *bufio.Writer) error { return writeSyncedLRC(song, buf) }
+	case song.Lyrics.LyricsBody != "":
+		slog.Info("saving unsynced lyrics")
+		writeContent = func(buf *bufio.Writer) error { return writeUnsyncedLRC(song, buf) }
+	case song.Track.Instrumental == 1:
+		slog.Info("saving instrumental")
+		writeContent = writeInstrumentalLRC
+	default:
+		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
+	}
+
 	f, err := os.Create(fp) //nolint:gosec // path is constructed from sanitized song metadata
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", fp, err)
@@ -67,29 +76,10 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 			return fmt.Errorf("writing tag: %w", err)
 		}
 	}
-
-	if hasSynced {
-		slog.Info("saving synced lyrics")
-		if err := writeSyncedLRC(song, buffer); err != nil {
-			return err
-		}
-		slog.Info("lyrics saved", "path", fp, "type", "synced")
-		return nil
-	}
-	if hasUnsynced {
-		slog.Info("saving unsynced lyrics")
-		if err := writeUnsyncedLRC(song, buffer); err != nil {
-			return err
-		}
-		slog.Info("lyrics saved", "path", fp, "type", "unsynced")
-		return nil
-	}
-	// isInstrumental is true here (checked at top)
-	slog.Info("saving instrumental")
-	if err := writeInstrumentalLRC(buffer); err != nil {
+	if err := writeContent(buffer); err != nil {
 		return err
 	}
-	slog.Info("lyrics saved", "path", fp, "type", "instrumental")
+	slog.Info("lyrics saved", "path", fp)
 	return nil
 }
 

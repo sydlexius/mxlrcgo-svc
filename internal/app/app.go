@@ -67,12 +67,12 @@ func (a *App) Run(ctx context.Context) error {
 			}
 		} else {
 			slog.Error("lyrics fetch failed", "error", err)
-			popped, popErr := a.inputs.Pop()
+			item, popErr := a.inputs.Pop()
 			if popErr != nil {
 				slog.Error("unexpected empty queue on pop", "error", popErr)
 				break
 			}
-			a.failed.Push(popped)
+			a.failed.Push(item)
 		}
 		a.timer(ctx)
 	}

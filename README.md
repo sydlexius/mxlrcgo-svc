@@ -1,5 +1,5 @@
 # MxLRC
-[![build](https://github.com/fashni/mxlrc-go/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/fashni/mxlrc-go/actions/workflows/build.yml)
+[![build](https://github.com/sydlexius/mxlrcsvc-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sydlexius/mxlrcsvc-go/actions/workflows/ci.yml)
 
 Command line tool to fetch synced lyrics from [Musixmatch](https://www.musixmatch.com/) and save it as *.lrc file.
 
@@ -15,16 +15,16 @@ Command line tool to fetch synced lyrics from [Musixmatch](https://www.musixmatc
 **TBA**
 
 ### Build from source
-Required Go 1.17+
+Required Go 1.24+
 ```
-go install github.com/fashni/mxlrc-go@latest
+go install github.com/sydlexius/mxlrcsvc-go/cmd/mxlrcsvc-go@latest
 ```
 
 ---
 
 ## Usage
 ```
-Usage: mxlrc-go [--outdir OUTDIR] [--cooldown COOLDOWN] [--token TOKEN] SONG [SONG ...]
+Usage: mxlrcsvc-go [--outdir OUTDIR] [--cooldown COOLDOWN] [--token TOKEN] SONG [SONG ...]
 
 Positional arguments:
   SONG                        song information in [ artist,title ] format (required)
@@ -36,26 +36,26 @@ Options:
   --depth DEPTH, -d DEPTH     (directory mode) maximum recursion depth [default: 100]
   --update, -u                (directory mode) update existing lyrics file
   --bfs                       (directory mode) use breatdth-first-search traversal
-  --token TOKEN, -t TOKEN     musixmatch token
+  --token TOKEN, -t TOKEN     musixmatch token (or set MUSIXMATCH_TOKEN environment variable or create a .env file)
   --help, -h                  display this help and exit
 ```
 
 ## Example:
 ### One song
 ```
-mxlrc-go adele,hello
+mxlrcsvc-go adele,hello
 ```
 ### Multiple song and custom output directory
 ```
-mxlrc-go adele,hello "the killers,mr. brightside" -o some_directory
+mxlrcsvc-go adele,hello "the killers,mr. brightside" -o some_directory
 ```
 ### With a text file and custom cooldown time
 ```
-mxlrc-go example_input.txt -c 20
+mxlrcsvc-go example_input.txt -c 20
 ```
 ### Directory Mode (recursive)
 ```
-mxlrc-go "Dream Theater"
+mxlrcsvc-go "Dream Theater"
 ```
 > **_This option overrides the `-o/--outdir` argument which means the lyrics will be saved in the same directory as the given input._**
 
@@ -65,6 +65,26 @@ mxlrc-go "Dream Theater"
 
 ## How to get the Musixmatch Token
 Follow steps 1 to 5 from the guide [here](https://spicetify.app/docs/faq#sometimes-popup-lyrics-andor-lyrics-plus-seem-to-not-work) to get a new Musixmatch token.
+
+## Token Configuration
+
+A Musixmatch API token is required. Supply it using any of the following methods (listed in order of precedence):
+
+1. **`--token` CLI flag** — highest priority
+   ```
+   mxlrcsvc-go --token YOUR_TOKEN adele,hello
+   ```
+
+2. **`MUSIXMATCH_TOKEN` environment variable**
+   ```
+   export MUSIXMATCH_TOKEN=YOUR_TOKEN
+   mxlrcsvc-go adele,hello
+   ```
+
+3. **`.env` file** — place in the working directory where you run the command
+   ```
+   MUSIXMATCH_TOKEN=YOUR_TOKEN
+   ```
 
 ## Credits
 * [Spicetify Lyrics Plus](https://github.com/spicetify/spicetify-cli/tree/master/CustomApps/lyrics-plus)

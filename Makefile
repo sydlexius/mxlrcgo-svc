@@ -1,11 +1,11 @@
 .PHONY: build run test test-cover lint fmt hooks clean help
 
 # Binary name
-BINARY=mxlrc-go
+BINARY=mxlrcsvc-go
 
 ## build: Build the binary
 build:
-	go build -o $(BINARY) .
+	go build -o $(BINARY) ./cmd/mxlrcsvc-go
 
 ## run: Build and run
 run: build

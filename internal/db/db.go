@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -59,7 +60,13 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	}
 
 	// Run embedded migrations via goose NewProvider (thread-safe, non-global API).
-	provider, err := goose.NewProvider(goose.DialectSQLite3, sqlDB, migrations)
+	// fs.Sub roots the FS at the migrations/ subdirectory so goose can find *.sql at root.
+	migFS, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: sub migrations fs: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, sqlDB, migFS)
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: migration provider: %w", err)

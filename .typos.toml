@@ -7,9 +7,12 @@ extend-exclude = [
     ".opencode/",
 ]
 
+[default]
+# Ignore git commit hashes (7-40 hex chars) to avoid false positives on hash substrings.
+extend-ignore-re = ["\\b[0-9a-f]{7,40}\\b"]
+
 [default.extend-words]
-# ID3v2 frame names are not English words
+# ID3v2 frame names are not English words; typos extracts the alpha portion (e.g. TPE from TPE1)
 TIT2 = "TIT2"
 TPE1 = "TPE1"
-# git commit hash substrings
-ba = "ba"
+TPE = "TPE"

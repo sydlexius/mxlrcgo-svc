@@ -44,9 +44,11 @@ func TestLoad_MissingConfigFileIsNotFatal(t *testing.T) {
 	}
 }
 
-// TestLoad_BlankFieldsInTOMLDoNotClobberDefaults verifies that a TOML file
-// with blank string fields re-applies the built-in defaults rather than
-// leaving paths empty.
+// TestLoad_BlankFieldsInTOMLDoNotClobberDefaults verifies that blank string
+// fields in the TOML file trigger re-default logic: output.dir is restored to
+// "lyrics". MXLRC_DB_PATH is set here, so the DB path assertion validates env
+// override precedence (env > re-default), not the XDG path calculation itself
+// (see TestLoad_BlankDBPathInTOMLReDefaultsViaXDG for the XDG case).
 func TestLoad_BlankFieldsInTOMLDoNotClobberDefaults(t *testing.T) {
 	isolateEnv(t)
 
@@ -71,6 +73,38 @@ func TestLoad_BlankFieldsInTOMLDoNotClobberDefaults(t *testing.T) {
 	// DB path comes from MXLRC_DB_PATH env override (which wins over re-default).
 	if cfg.DB.Path != dbPath {
 		t.Errorf("DB.Path = %q; want %q", cfg.DB.Path, dbPath)
+	}
+}
+
+// TestLoad_BlankDBPathInTOMLReDefaultsViaXDG verifies that when db.path is blank
+// in the TOML file, the re-default logic computes a path from XDG_DATA_HOME
+// (not left empty). MXLRC_DB_PATH is intentionally not set in this test so the
+// env-override path does not mask the re-default behavior.
+func TestLoad_BlankDBPathInTOMLReDefaultsViaXDG(t *testing.T) {
+	isolateEnv(t)
+
+	xdgData := t.TempDir()
+	// Point XDG_DATA_HOME at our temp dir so the computed default is predictable.
+	t.Setenv("XDG_DATA_HOME", xdgData)
+	// Clear MXLRC_DB_PATH so the env override does not mask the re-default logic.
+	t.Setenv("MXLRC_DB_PATH", "")
+
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.toml")
+	content := "[db]\npath = \"\"\n"
+	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	// The re-default should compute: XDG_DATA_HOME/mxlrcsvc-go/mxlrcsvc.db
+	want := filepath.Join(xdgData, "mxlrcsvc-go", "mxlrcsvc.db")
+	if cfg.DB.Path != want {
+		t.Errorf("DB.Path = %q; want re-defaulted XDG path %q", cfg.DB.Path, want)
 	}
 }
 

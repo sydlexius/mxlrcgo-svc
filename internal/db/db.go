@@ -36,7 +36,8 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	// Limit to one connection so per-connection PRAGMAs are reliable.
 	sqlDB.SetMaxOpenConns(1)
 
-	// CR-01: WAL mode returns the actual mode set; validate it.
+	// PRAGMA journal_mode returns the mode actually applied, not just acknowledged,
+	// so read it back and warn if WAL was not enabled (e.g. on a read-only FS).
 	var journalMode string
 	if err := sqlDB.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journalMode); err != nil {
 		_ = sqlDB.Close()
@@ -46,7 +47,8 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		slog.Warn("db: WAL mode not enabled; running in fallback mode", "actual_mode", journalMode)
 	}
 
-	// Apply remaining pragmas (these do not return meaningful rows).
+	// Apply remaining pragmas. These do not require read-back verification;
+	// any application failure surfaces as a non-nil error from ExecContext.
 	pragmas := []string{
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",

@@ -32,28 +32,33 @@ func TestNormalizeKey(t *testing.T) {
 	}
 }
 
+func eqF(f float64) *float64 { return &f }
+
 func TestMatchConfidence(t *testing.T) {
 	tests := []struct {
 		name   string
 		a, b   string
-		wantGt float64 // got must be > wantGt (use 0 for exact checks)
-		wantLt float64 // got must be < wantLt (use 0 to skip)
-		wantEq float64 // got must == wantEq (use -1 to skip)
+		wantGt float64  // got must be > wantGt (use 0 to skip)
+		wantLt float64  // got must be < wantLt (use 0 to skip)
+		wantEq *float64 // exact expected value; nil to skip
 	}{
-		{name: "identical", a: "hello", b: "hello", wantEq: 1.0},
-		{name: "both empty", a: "", b: "", wantEq: 1.0},
-		{name: "one empty", a: "hello", b: "", wantEq: 0.0},
-		{name: "near match transposition", a: "hello", b: "helol", wantGt: 0.9, wantLt: 1.0, wantEq: -1},
-		{name: "completely different", a: "abc", b: "xyz", wantLt: 0.5, wantEq: -1},
-		{name: "case insensitive", a: "Hello", b: "hello", wantEq: 1.0},
-		{name: "accent insensitive", a: "Héllo", b: "hello", wantEq: 1.0},
+		{name: "identical", a: "hello", b: "hello", wantEq: eqF(1.0)},
+		{name: "both empty", a: "", b: "", wantEq: eqF(1.0)},
+		{name: "one empty", a: "hello", b: "", wantEq: eqF(0.0)},
+		{name: "near match transposition", a: "hello", b: "helol", wantGt: 0.9, wantLt: 1.0},
+		{name: "completely different", a: "abc", b: "xyz", wantLt: 0.5},
+		{name: "case insensitive", a: "Hello", b: "hello", wantEq: eqF(1.0)},
+		{name: "accent insensitive", a: "Héllo", b: "hello", wantEq: eqF(1.0)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.wantEq != nil && (tc.wantGt != 0 || tc.wantLt != 0) {
+				t.Fatalf("invalid test case %q: wantEq cannot be combined with wantGt/wantLt", tc.name)
+			}
 			got := normalize.MatchConfidence(tc.a, tc.b)
-			if tc.wantEq >= 0 {
-				if got != tc.wantEq {
-					t.Errorf("MatchConfidence(%q, %q) = %f, want exactly %f", tc.a, tc.b, got, tc.wantEq)
+			if tc.wantEq != nil {
+				if got != *tc.wantEq {
+					t.Errorf("MatchConfidence(%q, %q) = %f, want exactly %f", tc.a, tc.b, got, *tc.wantEq)
 				}
 				return
 			}

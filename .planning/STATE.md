@@ -4,8 +4,8 @@ milestone: v1.6.1
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 04-03-PLAN.md — Phase 4 build-verification complete
-last_updated: "2026-04-11T00:28:13.821Z"
-last_activity: 2026-04-11
+last_updated: "2026-04-12T01:12:50Z"
+last_activity: 2026-04-12
 progress:
   total_phases: 4
   completed_phases: 4
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 Phase: 4 of 4 (Build Verification)
 Plan: 3 of 3 in current phase
 Status: All phases complete — ready for merge
-Last activity: 2026-04-11 - Completed quick task 260411-l30: issues #11 and #12 (Milestone 1)
+Last activity: 2026-04-12 - Completed quick task 260411-p8r: replace wantEq sentinel with *float64 (issue #36)
 
 Progress: [██████████] 100%
 
@@ -94,9 +94,10 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260411-l30 | issues #11 and #12 (Milestone 1) | 2026-04-11 | 2448d8f | [260411-l30-issues-11-and-12-milestone-1](./quick/260411-l30-issues-11-and-12-milestone-1/) |
+| 260411-p8r | Replace wantEq sentinel with *float64 pointer (issue #36) | 2026-04-12 | 8515549 | [260411-p8r-work-on-issue-36](./quick/260411-p8r-work-on-issue-36/) |
 
 ## Session Continuity
 
-Last session: 2026-04-11T00:28:13.818Z
-Stopped at: Completed 04-03-PLAN.md — Phase 4 build-verification complete
+Last session: 2026-04-12T01:12:50Z
+Stopped at: Completed quick task 260411-p8r — wantEq *float64 pointer refactor
 Resume file: None

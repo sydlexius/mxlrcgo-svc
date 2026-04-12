@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 Phase: 4 of 4 (Build Verification)
 Plan: 3 of 3 in current phase
 Status: All phases complete — ready for merge
-Last activity: 2026-04-11
+Last activity: 2026-04-11 - Completed quick task 260411-l30: issues #11 and #12 (Milestone 1)
 
 Progress: [██████████] 100%
 
@@ -88,6 +88,12 @@ None yet.
 
 - [Research]: Phase 2 (App + global state) signal handler refactoring with context.Context may need deeper research during planning
 - [Research]: Repository name (`mxlrc-go`) diverges from module name (`mxlrcsvc-go`) -- needs decision before Phase 1
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260411-l30 | issues #11 and #12 (Milestone 1) | 2026-04-11 | 2448d8f | [260411-l30-issues-11-and-12-milestone-1](./quick/260411-l30-issues-11-and-12-milestone-1/) |
 
 ## Session Continuity
 

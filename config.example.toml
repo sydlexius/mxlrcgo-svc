@@ -1,0 +1,21 @@
+# mxlrcsvc-go configuration file
+# Copy to ~/.config/mxlrcsvc-go/config.toml and edit as needed.
+# Environment variable overrides (in precedence order): MUSIXMATCH_TOKEN,
+# MXLRC_API_TOKEN, MXLRC_API_COOLDOWN (or MXLRC_COOLDOWN), MXLRC_OUTPUT_DIR, MXLRC_DB_PATH
+
+[api]
+# Musixmatch API token (required).
+# Overrides (highest to lowest): --token flag, MUSIXMATCH_TOKEN env, MXLRC_API_TOKEN env.
+# token = "your-token-here"
+
+# Cooldown between API requests in seconds.
+cooldown = 15
+
+[output]
+# Default output directory for .lrc files.
+dir = "lyrics"
+
+[db]
+# Path to SQLite database file.
+# Default: ~/.local/share/mxlrcsvc-go/mxlrcsvc.db
+# path = "/custom/path/mxlrcsvc.db"

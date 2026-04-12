@@ -39,12 +39,13 @@ func (r *CacheRepo) LookupExact(ctx context.Context, artist, title, album string
 	return lyrics, nil
 }
 
-// LookupFallback returns the first cached lyrics matching (artist, title) regardless
-// of album, after normalization. Returns sql.ErrNoRows if not found.
+// LookupFallback returns the most recently updated cached lyrics matching
+// (artist, title) regardless of album, after normalization.
+// Returns sql.ErrNoRows if not found.
 func (r *CacheRepo) LookupFallback(ctx context.Context, artist, title string) (string, error) {
 	var lyrics string
 	err := r.db.QueryRowContext(ctx,
-		`SELECT lyrics FROM lyrics_cache WHERE artist=? AND title=? LIMIT 1`,
+		`SELECT lyrics FROM lyrics_cache WHERE artist=? AND title=? ORDER BY updated_at DESC, id DESC LIMIT 1`,
 		normalize.NormalizeKey(artist),
 		normalize.NormalizeKey(title),
 	).Scan(&lyrics)
@@ -58,14 +59,13 @@ func (r *CacheRepo) LookupFallback(ctx context.Context, artist, title string) (s
 }
 
 // Store inserts or updates (upsert) the lyrics for the (artist, title, album) triple.
-// Keys are normalized before storage.
+// Keys are normalized before storage. updated_at is maintained by the database trigger.
 func (r *CacheRepo) Store(ctx context.Context, artist, title, album, lyrics string) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO lyrics_cache (artist, title, album, lyrics)
          VALUES (?, ?, ?, ?)
          ON CONFLICT(artist, title, album) DO UPDATE SET
-             lyrics     = excluded.lyrics,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')`,
+             lyrics = excluded.lyrics`,
 		normalize.NormalizeKey(artist),
 		normalize.NormalizeKey(title),
 		normalize.NormalizeKey(album),

@@ -42,7 +42,7 @@ func TestMatchConfidence(t *testing.T) {
 		{name: "identical", a: "hello", b: "hello", wantEq: 1.0},
 		{name: "both empty", a: "", b: "", wantEq: 1.0},
 		{name: "one empty", a: "hello", b: "", wantEq: 0.0},
-		{name: "near match transposition", a: "hello", b: "hello", wantGt: 0.9, wantLt: 0, wantEq: -1},
+		{name: "near match transposition", a: "hello", b: "helol", wantGt: 0.9, wantLt: 1.0, wantEq: -1},
 		{name: "completely different", a: "abc", b: "xyz", wantLt: 0.5, wantEq: -1},
 		{name: "case insensitive", a: "Hello", b: "hello", wantEq: 1.0},
 		{name: "accent insensitive", a: "Héllo", b: "hello", wantEq: 1.0},

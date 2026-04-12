@@ -42,8 +42,19 @@ CREATE TABLE lyrics_cache_old (
     UNIQUE(artist, title)
 );
 
-INSERT INTO lyrics_cache_old (id, artist, title, lyrics, created_at, updated_at)
-    SELECT id, artist, title, lyrics, created_at, updated_at FROM lyrics_cache;
+INSERT INTO lyrics_cache_old (artist, title, lyrics, created_at, updated_at)
+WITH ranked AS (
+    SELECT artist, title, lyrics, updated_at,
+           ROW_NUMBER() OVER (
+               PARTITION BY artist, title
+               ORDER BY updated_at DESC, id DESC
+           ) AS rn,
+           MIN(created_at) OVER (PARTITION BY artist, title) AS earliest_created_at
+    FROM lyrics_cache
+)
+SELECT artist, title, lyrics, earliest_created_at, updated_at
+FROM ranked
+WHERE rn = 1;
 
 DROP TABLE lyrics_cache;
 ALTER TABLE lyrics_cache_old RENAME TO lyrics_cache;

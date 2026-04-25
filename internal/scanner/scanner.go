@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/dhowden/tag"
-	"github.com/sydlexius/mxlrcsvc-go/internal/app"
 	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
 )
 
 // supportedFileTypes lists audio file extensions that can have metadata read.
@@ -22,6 +22,14 @@ var supportedFileTypes = []string{".mp3", ".m4a", ".m4b", ".m4p", ".alac", ".fla
 
 // Scanner handles parsing input sources and populating the work queue.
 type Scanner struct{}
+
+// ScanOptions controls library directory traversal and queue eligibility.
+type ScanOptions struct {
+	Update   bool
+	Upgrade  bool
+	MaxDepth int
+	BFS      bool
+}
 
 // NewScanner creates a new Scanner.
 func NewScanner() *Scanner {
@@ -44,7 +52,7 @@ func AssertInput(song string) *models.Track {
 }
 
 // GetSongMulti processes multiple "artist,title" pairs into the work queue.
-func (sc *Scanner) GetSongMulti(songList []string, savePath string, songs *app.InputsQueue) {
+func (sc *Scanner) GetSongMulti(songList []string, savePath string, songs *queue.InputsQueue) {
 	for _, song := range songList {
 		track := AssertInput(song)
 		if track == nil {
@@ -56,7 +64,7 @@ func (sc *Scanner) GetSongMulti(songList []string, savePath string, songs *app.I
 }
 
 // GetSongText reads a text file with "artist,title" lines and populates the queue.
-func (sc *Scanner) GetSongText(textFn string, savePath string, songs *app.InputsQueue) error {
+func (sc *Scanner) GetSongText(textFn string, savePath string, songs *queue.InputsQueue) error {
 	f, err := os.Open(textFn) //nolint:gosec // path comes from user CLI argument
 	if err != nil {
 		return fmt.Errorf("opening text file %s: %w", textFn, err)
@@ -75,11 +83,19 @@ func (sc *Scanner) GetSongText(textFn string, savePath string, songs *app.Inputs
 	return nil
 }
 
-// GetSongDir scans a directory for audio files and populates the queue with metadata.
-// update causes existing .lrc files to be re-queued (overwrite synced lyrics).
-// upgrade causes existing .txt files (previously saved as unsynced) to be re-queued
-// so that the tool can check whether synced lyrics are now available and promote them to .lrc.
-func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, upgrade bool, limit int, depth int, bfs bool) error {
+// ScanLibrary scans a root directory for audio files and returns structured results.
+func (sc *Scanner) ScanLibrary(root string, opts ScanOptions) ([]models.ScanResult, error) {
+	if opts.MaxDepth < 0 {
+		opts.MaxDepth = 0
+	}
+	var results []models.ScanResult
+	if err := sc.scanDir(root, opts, 0, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (sc *Scanner) scanDir(dir string, opts ScanOptions, depth int, results *[]models.ScanResult) error {
 	slog.Info("scanning directory", "path", dir)
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -91,13 +107,13 @@ func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, u
 		if id1 == id2 {
 			return files[i].Name() < files[j].Name()
 		}
-		return bfs != id1
+		return opts.BFS != id1
 	})
 
 	for _, file := range files {
 		if file.IsDir() {
-			if depth < limit {
-				if err := sc.GetSongDir(filepath.Join(dir, file.Name()), songs, update, upgrade, limit, depth+1, bfs); err != nil {
+			if depth < opts.MaxDepth {
+				if err := sc.scanDir(filepath.Join(dir, file.Name()), opts, depth+1, results); err != nil {
 					return err
 				}
 			}
@@ -125,11 +141,11 @@ func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, u
 		}
 
 		switch {
-		case lrcExists && !update:
+		case lrcExists && !opts.Update:
 			// Synced lyrics already present and not asked to update -- skip.
 			slog.Debug("skipping file, lyrics exist", "file", file.Name())
 			continue
-		case txtExists && !upgrade && !update && !lrcExists:
+		case txtExists && !opts.Upgrade && !opts.Update && !lrcExists:
 			// Unsynced .txt present and not asked to upgrade or update -- skip.
 			slog.Debug("skipping file, unsynced lyrics exist", "file", file.Name())
 			continue
@@ -154,28 +170,53 @@ func (sc *Scanner) GetSongDir(dir string, songs *app.InputsQueue, update bool, u
 		}
 
 		slog.Debug("adding file", "file", file.Name())
-		song := models.Inputs{
+		*results = append(*results, models.ScanResult{
+			FilePath: filepath.Join(dir, file.Name()),
 			Track:    models.Track{ArtistName: m.Artist(), TrackName: m.Title()},
 			Outdir:   dir,
 			Filename: stem + ".lrc",
-		}
-		songs.Push(song)
+			Status:   "pending",
+		})
+	}
+	return nil
+}
+
+// GetSongDir scans a directory for audio files and populates the queue with metadata.
+// update causes existing .lrc files to be re-queued (overwrite synced lyrics).
+// upgrade causes existing .txt files (previously saved as unsynced) to be re-queued
+// so that the tool can check whether synced lyrics are now available and promote them to .lrc.
+func (sc *Scanner) GetSongDir(dir string, songs *queue.InputsQueue, update bool, upgrade bool, limit int, depth int, bfs bool) error {
+	results, err := sc.ScanLibrary(dir, ScanOptions{
+		Update:   update,
+		Upgrade:  upgrade,
+		MaxDepth: limit - depth,
+		BFS:      bfs,
+	})
+	if err != nil {
+		return err
+	}
+	for _, res := range results {
+		songs.Push(models.Inputs{
+			Track:    res.Track,
+			Outdir:   res.Outdir,
+			Filename: res.Filename,
+		})
 	}
 	return nil
 }
 
 // ParseInput determines the input mode and populates the work queue accordingly.
-func (sc *Scanner) ParseInput(songs []string, outdir string, update bool, upgrade bool, depth int, bfs bool, queue *app.InputsQueue) (string, error) {
+func (sc *Scanner) ParseInput(songs []string, outdir string, update bool, upgrade bool, depth int, bfs bool, inputs *queue.InputsQueue) (string, error) {
 	if len(songs) == 1 {
 		fi, err := os.Stat(songs[0])
 		if err == nil {
 			if !fi.IsDir() {
-				if err := sc.GetSongText(songs[0], outdir, queue); err != nil {
+				if err := sc.GetSongText(songs[0], outdir, inputs); err != nil {
 					return "", err
 				}
 				return "text", nil
 			}
-			if err := sc.GetSongDir(songs[0], queue, update, upgrade, depth, 0, bfs); err != nil {
+			if err := sc.GetSongDir(songs[0], inputs, update, upgrade, depth, 0, bfs); err != nil {
 				return "", err
 			}
 			return "dir", nil
@@ -183,6 +224,6 @@ func (sc *Scanner) ParseInput(songs []string, outdir string, update bool, upgrad
 			return "", fmt.Errorf("checking input path %s: %w", songs[0], err)
 		}
 	}
-	sc.GetSongMulti(songs, outdir, queue)
+	sc.GetSongMulti(songs, outdir, inputs)
 	return "cli", nil
 }

@@ -10,12 +10,13 @@ import (
 
 	"github.com/sydlexius/mxlrcsvc-go/internal/lyrics"
 	"github.com/sydlexius/mxlrcsvc-go/internal/musixmatch"
+	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
 )
 
 // App owns all processing state and orchestrates the lyrics fetch loop.
 type App struct {
-	inputs   *InputsQueue
-	failed   *InputsQueue
+	inputs   *queue.InputsQueue
+	failed   *queue.InputsQueue
 	fetcher  musixmatch.Fetcher
 	writer   lyrics.Writer
 	mode     string
@@ -26,10 +27,10 @@ type App struct {
 // NewApp creates an App with the given dependencies.
 // The inputs queue should be pre-populated by the scanner.
 // A new failed queue is created internally.
-func NewApp(fetcher musixmatch.Fetcher, writer lyrics.Writer, inputs *InputsQueue, cooldown int, mode string) *App {
+func NewApp(fetcher musixmatch.Fetcher, writer lyrics.Writer, inputs *queue.InputsQueue, cooldown int, mode string) *App {
 	return &App{
 		inputs:   inputs,
-		failed:   NewInputsQueue(),
+		failed:   queue.NewInputsQueue(),
 		fetcher:  fetcher,
 		writer:   writer,
 		mode:     mode,

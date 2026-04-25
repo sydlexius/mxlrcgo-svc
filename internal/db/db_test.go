@@ -151,3 +151,30 @@ func TestOpen_IdempotentMigrations(t *testing.T) {
 		t.Fatalf("close second db: %v", err)
 	}
 }
+
+// TestOpen_ScanResultsUniqueIndex verifies that the scan result upsert key
+// migration has been applied.
+func TestOpen_ScanResultsUniqueIndex(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "scan-index.db")
+
+	sqlDB, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
+
+	var count int
+	row := sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_scan_results_library_file'")
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("query scan result index: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("scan result unique index count = %d; want 1", count)
+	}
+}

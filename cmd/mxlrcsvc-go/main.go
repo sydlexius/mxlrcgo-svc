@@ -15,6 +15,7 @@ import (
 	"github.com/sydlexius/mxlrcsvc-go/internal/db"
 	"github.com/sydlexius/mxlrcsvc-go/internal/lyrics"
 	"github.com/sydlexius/mxlrcsvc-go/internal/musixmatch"
+	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
 	"github.com/sydlexius/mxlrcsvc-go/internal/scanner"
 )
 
@@ -84,7 +85,7 @@ func run() int {
 		outdir = *args.Outdir
 	}
 
-	inputs := app.NewInputsQueue()
+	inputs := queue.NewInputsQueue()
 	sc := scanner.NewScanner()
 	mode, err := sc.ParseInput(args.Song, outdir, args.Update, args.Upgrade, args.Depth, args.BFS, inputs)
 	if err != nil {

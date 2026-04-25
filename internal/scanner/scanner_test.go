@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/app"
+	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
 )
 
 // minimalID3v2 is a minimal ID3v2.3 tag with TIT2 ("Test Title") and TPE1
@@ -101,18 +101,66 @@ func TestGetSongDir_SkipLogic(t *testing.T) {
 				touchFile(t, dir, "track.txt")
 			}
 
-			queue := app.NewInputsQueue()
+			q := queue.NewInputsQueue()
 			sc := NewScanner()
 			// depth=0, limit=100, bfs=false
-			if err := sc.GetSongDir(dir, queue, tc.update, tc.upgrade, 100, 0, false); err != nil {
+			if err := sc.GetSongDir(dir, q, tc.update, tc.upgrade, 100, 0, false); err != nil {
 				t.Fatalf("GetSongDir returned error: %v", err)
 			}
 
-			gotQueue := queue.Len() > 0
+			gotQueue := q.Len() > 0
 			if gotQueue != tc.wantQueue {
 				t.Errorf("update=%v upgrade=%v lrc=%v txt=%v: got enqueued=%v, want enqueued=%v",
 					tc.update, tc.upgrade, tc.lrcExists, tc.txtExists, gotQueue, tc.wantQueue)
 			}
 		})
+	}
+}
+
+func TestScanLibrary_ReturnsStructuredResults(t *testing.T) {
+	dir := t.TempDir()
+	writeAudioFile(t, dir, "track.mp3")
+
+	sc := NewScanner()
+	results, err := sc.ScanLibrary(dir, ScanOptions{MaxDepth: 100})
+	if err != nil {
+		t.Fatalf("ScanLibrary: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("ScanLibrary returned %d results; want 1", len(results))
+	}
+	got := results[0]
+	if got.FilePath != filepath.Join(dir, "track.mp3") {
+		t.Errorf("FilePath = %q; want %q", got.FilePath, filepath.Join(dir, "track.mp3"))
+	}
+	if got.Outdir != dir {
+		t.Errorf("Outdir = %q; want %q", got.Outdir, dir)
+	}
+	if got.Filename != "track.lrc" {
+		t.Errorf("Filename = %q; want %q", got.Filename, "track.lrc")
+	}
+	if got.Track.ArtistName != "Test Artist" || got.Track.TrackName != "Test Title" {
+		t.Errorf("Track = %+v; want Test Artist/Test Title", got.Track)
+	}
+	if got.Status != "pending" {
+		t.Errorf("Status = %q; want pending", got.Status)
+	}
+}
+
+func TestScanLibrary_RespectsMaxDepth(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	writeAudioFile(t, nested, "track.mp3")
+
+	sc := NewScanner()
+	results, err := sc.ScanLibrary(root, ScanOptions{MaxDepth: 0})
+	if err != nil {
+		t.Fatalf("ScanLibrary: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("ScanLibrary returned %d results; want 0", len(results))
 	}
 }

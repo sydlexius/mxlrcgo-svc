@@ -48,3 +48,25 @@ type Inputs struct {
 	Outdir   string
 	Filename string
 }
+
+// Library represents a configured music library root.
+type Library struct {
+	ID        int64
+	Path      string
+	Name      string
+	CreatedAt string
+	UpdatedAt string
+}
+
+// ScanResult represents an audio file discovered during a library scan.
+type ScanResult struct {
+	ID        int64
+	LibraryID int64
+	FilePath  string
+	Track     Track
+	Outdir    string
+	Filename  string
+	Status    string
+	CreatedAt string
+	UpdatedAt string
+}

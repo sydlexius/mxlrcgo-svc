@@ -1,4 +1,4 @@
-.PHONY: build run test test-cover lint fmt hooks clean help
+.PHONY: build run test test-cover smoke lint fmt hooks clean help
 
 # Binary name
 BINARY=mxlrcsvc-go
@@ -19,6 +19,10 @@ test:
 test-cover:
 	go test -count=1 -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
+
+## smoke: Run CLI smoke tests
+smoke:
+	./scripts/smoke.sh
 
 ## lint: Run golangci-lint
 lint:

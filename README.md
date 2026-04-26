@@ -61,6 +61,14 @@ mxlrcsvc-go "Dream Theater"
 
 > **_The `-d/--depth` argument limit the depth of subdirectory to scan. Use `-d 0` or `--depth 0` to only scan the specified directory._**
 
+## Development
+
+Run the lightweight CLI smoke test:
+
+```
+make smoke
+```
+
 ---
 
 ## How to get the Musixmatch Token

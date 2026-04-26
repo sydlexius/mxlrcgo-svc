@@ -65,7 +65,7 @@ mxlrcsvc-go "Dream Theater"
 
 Run the lightweight CLI smoke test:
 
-```
+```sh
 make smoke
 ```
 

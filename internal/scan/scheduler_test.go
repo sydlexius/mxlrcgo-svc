@@ -24,16 +24,18 @@ func (f fakeLibraries) List(context.Context) ([]models.Library, error) {
 }
 
 type fakeResults struct {
-	calls     int
+	calls []upsertCall
+	err   error
+}
+
+type upsertCall struct {
 	libraryID int64
 	results   []models.ScanResult
-	err       error
 }
 
 func (f *fakeResults) Upsert(_ context.Context, libraryID int64, results []models.ScanResult) error {
-	f.calls++
-	f.libraryID = libraryID
-	f.results = results
+	cp := append([]models.ScanResult(nil), results...)
+	f.calls = append(f.calls, upsertCall{libraryID: libraryID, results: cp})
 	if f.err != nil {
 		return f.err
 	}
@@ -78,14 +80,14 @@ func TestScheduler_RunOncePersistsAndCallsCallback(t *testing.T) {
 	if err := s.RunOnce(ctx); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if store.calls != 1 {
-		t.Fatalf("Upsert calls = %d; want 1", store.calls)
+	if len(store.calls) != 1 {
+		t.Fatalf("Upsert calls = %d; want 1", len(store.calls))
 	}
-	if store.libraryID != 7 {
-		t.Errorf("Upsert libraryID = %d; want 7", store.libraryID)
+	if store.calls[0].libraryID != 7 {
+		t.Errorf("Upsert libraryID = %d; want 7", store.calls[0].libraryID)
 	}
-	if len(store.results) != 1 || store.results[0].Status != scan.StatusPending {
-		t.Errorf("Upsert results = %+v; want one pending result", store.results)
+	if len(store.calls[0].results) != 1 || store.calls[0].results[0].Status != scan.StatusPending {
+		t.Errorf("Upsert results = %+v; want one pending result", store.calls[0].results)
 	}
 	if !called {
 		t.Fatal("OnScanComplete was not called")
@@ -106,8 +108,8 @@ func TestScheduler_RunWithNoIntervalRunsOnce(t *testing.T) {
 	if err := s.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if store.calls != 1 {
-		t.Fatalf("Upsert calls = %d; want 1", store.calls)
+	if len(store.calls) != 1 {
+		t.Fatalf("Upsert calls = %d; want 1", len(store.calls))
 	}
 }
 
@@ -126,8 +128,8 @@ func TestScheduler_RunOnceReturnsContextErrorOnCancellation(t *testing.T) {
 	if err := s.RunOnce(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunOnce error = %v; want context.Canceled", err)
 	}
-	if store.calls != 0 {
-		t.Fatalf("Upsert calls = %d; want 0", store.calls)
+	if len(store.calls) != 0 {
+		t.Fatalf("Upsert calls = %d; want 0", len(store.calls))
 	}
 }
 
@@ -147,8 +149,37 @@ func TestScheduler_RunReturnsContextErrorOnCancellation(t *testing.T) {
 	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v; want context.Canceled", err)
 	}
-	if store.calls != 0 {
-		t.Fatalf("Upsert calls = %d; want 0", store.calls)
+	if len(store.calls) != 0 {
+		t.Fatalf("Upsert calls = %d; want 0", len(store.calls))
+	}
+}
+
+func TestScheduler_RunOnceReturnsContextErrorBetweenLibraries(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &fakeResults{}
+	s := scan.Scheduler{
+		Libraries: fakeLibraries{libs: []models.Library{
+			{ID: 7, Path: "/music/a", Name: "A"},
+			{ID: 8, Path: "/music/b", Name: "B"},
+		}},
+		Results: store,
+		Scanner: fakeScanner{results: []models.ScanResult{{
+			FilePath: "/music/a.mp3",
+		}}},
+		OnScanComplete: func(context.Context, models.Library, []models.ScanResult) error {
+			cancel()
+			return nil
+		},
+	}
+
+	if err := s.RunOnce(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOnce error = %v; want context.Canceled", err)
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("Upsert calls = %d; want 1", len(store.calls))
+	}
+	if store.calls[0].libraryID != 7 {
+		t.Fatalf("Upsert libraryID = %d; want 7", store.calls[0].libraryID)
 	}
 }
 

@@ -58,6 +58,9 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("scan: list libraries: %w", err)
 	}
 	for _, v := range libs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		results, err := s.Scanner.ScanLibrary(ctx, v.Path, s.Options)
 		if err != nil {
 			return fmt.Errorf("scan: scan library %d: %w", v.ID, err)

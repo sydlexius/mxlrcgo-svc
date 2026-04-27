@@ -149,7 +149,9 @@ func TestDBQueue_EnqueueDuplicateDoesNotRequeueProcessingItem(t *testing.T) {
 	q.now = func() time.Time { return now }
 
 	if _, err := q.Enqueue(ctx, models.Inputs{
-		Track: models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Outdir:   "claimed-out",
+		Filename: "claimed.lrc",
 	}, 1); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -159,7 +161,9 @@ func TestDBQueue_EnqueueDuplicateDoesNotRequeueProcessingItem(t *testing.T) {
 	}
 
 	dup, err := q.Enqueue(ctx, models.Inputs{
-		Track: models.Track{ArtistName: " artist ", TrackName: "title"},
+		Track:    models.Track{ArtistName: " artist ", TrackName: "title"},
+		Outdir:   "duplicate-out",
+		Filename: "duplicate.lrc",
 	}, 10)
 	if err != nil {
 		t.Fatalf("Enqueue duplicate: %v", err)
@@ -170,8 +174,36 @@ func TestDBQueue_EnqueueDuplicateDoesNotRequeueProcessingItem(t *testing.T) {
 	if dup.Status != StatusProcessing {
 		t.Fatalf("duplicate status = %q; want %q", dup.Status, StatusProcessing)
 	}
+	if dup.Inputs.Outdir != "claimed-out" || dup.Inputs.Filename != "claimed.lrc" {
+		t.Fatalf("duplicate payload = %q/%q; want claimed-out/claimed.lrc", dup.Inputs.Outdir, dup.Inputs.Filename)
+	}
 	if _, err := q.Dequeue(ctx); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Dequeue after processing duplicate error = %v; want sql.ErrNoRows", err)
+	}
+}
+
+func TestDBQueue_CompleteRequiresProcessingStatus(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Complete pending error = %v; want sql.ErrNoRows", err)
+	}
+
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); err != nil {
+		t.Fatalf("Complete processing: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Complete done error = %v; want sql.ErrNoRows", err)
 	}
 }
 
@@ -181,9 +213,12 @@ func TestDBQueue_DequeueSkipsBackoffUntilReady(t *testing.T) {
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
 	q.now = func() time.Time { return now }
 
-	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
-	if err != nil {
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1); err != nil {
 		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
 	}
 	if _, err := q.Fail(ctx, item.ID, errors.New("temporary failure")); err != nil {
 		t.Fatalf("Fail: %v", err)
@@ -210,9 +245,12 @@ func TestDBQueue_FailUsesGeometricBackoff(t *testing.T) {
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
 	q.now = func() time.Time { return now }
 
-	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
-	if err != nil {
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1); err != nil {
 		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue first: %v", err)
 	}
 	failed, err := q.Fail(ctx, item.ID, errors.New("first"))
 	if err != nil {
@@ -223,6 +261,9 @@ func TestDBQueue_FailUsesGeometricBackoff(t *testing.T) {
 	}
 
 	q.now = func() time.Time { return now.Add(time.Second) }
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue second: %v", err)
+	}
 	failed, err = q.Fail(ctx, item.ID, errors.New("second"))
 	if err != nil {
 		t.Fatalf("Fail second: %v", err)
@@ -230,6 +271,31 @@ func TestDBQueue_FailUsesGeometricBackoff(t *testing.T) {
 	wantNext := now.Add(3 * time.Second)
 	if failed.Attempts != 2 || !failed.NextAttemptAt.Equal(wantNext) {
 		t.Fatalf("second failure attempts/next = %d/%s; want 2/%s", failed.Attempts, failed.NextAttemptAt, wantNext)
+	}
+}
+
+func TestDBQueue_FailRequiresProcessingStatus(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Fail(ctx, item.ID, errors.New("not claimed")); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Fail pending error = %v; want sql.ErrNoRows", err)
+	}
+}
+
+func TestDBQueue_BackoffCapsLargeAttemptCounts(t *testing.T) {
+	q := NewDBQueue(nil)
+	q.baseBackoff = time.Minute
+	q.maxBackoff = time.Hour
+
+	if got := q.backoff(10_000); got != time.Hour {
+		t.Fatalf("backoff(10000) = %s; want %s", got, time.Hour)
 	}
 }
 
@@ -242,6 +308,9 @@ func TestDBQueue_CompleteMarksDone(t *testing.T) {
 	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
 	}
 	if err := q.Complete(ctx, item.ID); err != nil {
 		t.Fatalf("Complete: %v", err)

@@ -230,15 +230,15 @@ func TestOpen_WorkQueueBackoffMigration(t *testing.T) {
 	})
 
 	columns := []string{"artist_key", "title_key", "filename", "attempts", "next_attempt_at", "last_error", "completed_at"}
-	for _, col := range columns {
+	for _, v := range columns {
 		var count int
 		row := sqlDB.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM pragma_table_info('work_queue') WHERE name = ?", col)
+			"SELECT COUNT(*) FROM pragma_table_info('work_queue') WHERE name = ?", v)
 		if err := row.Scan(&count); err != nil {
-			t.Fatalf("query work_queue column %q: %v", col, err)
+			t.Fatalf("query work_queue column %q: %v", v, err)
 		}
 		if count != 1 {
-			t.Fatalf("work_queue column %q count = %d; want 1", col, count)
+			t.Fatalf("work_queue column %q count = %d; want 1", v, count)
 		}
 	}
 

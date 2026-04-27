@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/sydlexius/mxlrcsvc-go/internal/models"
@@ -115,10 +114,22 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
          )
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(artist_key, title_key) DO UPDATE SET
-             artist = excluded.artist,
-             title = excluded.title,
-             outdir = excluded.outdir,
-             filename = excluded.filename,
+             artist = CASE
+                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.artist
+                 ELSE excluded.artist
+             END,
+             title = CASE
+                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.title
+                 ELSE excluded.title
+             END,
+             outdir = CASE
+                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.outdir
+                 ELSE excluded.outdir
+             END,
+             filename = CASE
+                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.filename
+                 ELSE excluded.filename
+             END,
              priority = max(work_queue.priority, excluded.priority),
              status = CASE
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.status
@@ -191,7 +202,8 @@ func (q *DBQueue) Complete(ctx context.Context, id int64) error {
          SET status = 'done',
              completed_at = ?,
              last_error = ''
-         WHERE id = ?`,
+         WHERE id = ?
+           AND status = 'processing'`,
 		now,
 		id,
 	)
@@ -210,7 +222,10 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
 	defer func() { _ = tx.Rollback() }()
 
 	var attempts int
-	if err := tx.QueryRowContext(ctx, `SELECT attempts FROM work_queue WHERE id = ?`, id).Scan(&attempts); err != nil {
+	if err := tx.QueryRowContext(ctx,
+		`SELECT attempts FROM work_queue WHERE id = ? AND status = 'processing'`,
+		id,
+	).Scan(&attempts); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return WorkItem{}, sql.ErrNoRows
 		}
@@ -230,6 +245,7 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
              next_attempt_at = ?,
              last_error = ?
          WHERE id = ?
+           AND status = 'processing'
          RETURNING id, artist, title, outdir, filename, status, priority, attempts,
                    next_attempt_at, last_error, created_at, updated_at, completed_at`,
 		nextAttempts,
@@ -251,8 +267,16 @@ func (q *DBQueue) backoff(attempts int) time.Duration {
 	if attempts < 1 {
 		attempts = 1
 	}
-	mult := math.Pow(2, float64(attempts-1))
-	delay := time.Duration(float64(q.baseBackoff) * mult)
+	if q.baseBackoff <= 0 || q.maxBackoff <= 0 {
+		return 0
+	}
+	delay := q.baseBackoff
+	for i := 1; i < attempts; i++ {
+		if delay >= q.maxBackoff || delay > q.maxBackoff/2 {
+			return q.maxBackoff
+		}
+		delay *= 2
+	}
 	if delay > q.maxBackoff {
 		return q.maxBackoff
 	}

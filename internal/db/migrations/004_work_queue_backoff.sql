@@ -20,10 +20,20 @@ SET artist_key = lower(trim(artist)),
 WHERE artist_key = '' OR title_key = '' OR next_attempt_at = '';
 
 DELETE FROM work_queue
-WHERE id NOT IN (
-    SELECT MIN(id)
-    FROM work_queue
-    GROUP BY artist_key, title_key
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            ROW_NUMBER() OVER (
+                PARTITION BY artist_key, title_key
+                ORDER BY
+                    CASE WHEN status IN ('pending', 'processing') THEN 0 ELSE 1 END,
+                    id ASC
+            ) AS rn
+        FROM work_queue
+    )
+    WHERE rn > 1
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_work_queue_artist_title_key

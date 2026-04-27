@@ -91,10 +91,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	ctxNoCancel := context.WithoutCancel(ctx)
 	if err := w.queue.Complete(ctxNoCancel, item.ID); err != nil {
 		cause := fmt.Errorf("worker: complete item %d: %w", item.ID, err)
-		if _, failErr := w.queue.Fail(ctxNoCancel, item.ID, cause); failErr != nil {
-			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(err, failErr))
+		if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
+			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(cause, err))
 		}
-		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, err)
+		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
 	}
 	return nil
 }

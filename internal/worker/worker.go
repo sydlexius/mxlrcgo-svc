@@ -51,10 +51,10 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 func (w *Worker) Run(ctx context.Context) error {
 	for {
 		if err := w.RunOnce(ctx); err != nil {
-			if errors.Is(err, sql.ErrNoRows) || errors.Is(err, context.Canceled) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
-			if errors.Is(err, context.DeadlineExceeded) {
+			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 				return nil
 			}
 			return err
@@ -87,7 +87,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		}
 	}
 
-	if err := w.queue.Complete(ctx, item.ID); err != nil {
+	if err := w.queue.Complete(context.WithoutCancel(ctx), item.ID); err != nil {
 		return fmt.Errorf("worker: complete item %d: %w", item.ID, err)
 	}
 	return nil

@@ -282,6 +282,39 @@ func TestRunOnceCompleteFailureMarksQueueFailed(t *testing.T) {
 	}
 }
 
+func TestRunReturnsNilWhenQueueEmpty(t *testing.T) {
+	w := New(&fakeQueue{}, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+
+	if err := w.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v; want nil", err)
+	}
+}
+
+func TestRunReturnsCompleteErrNoRows(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{
+		items: []queue.WorkItem{{
+			ID: 8,
+			Inputs: models.Inputs{
+				Track:    track,
+				Outdir:   "out",
+				Filename: "artist-title.lrc",
+			},
+		}},
+		completeErr: sql.ErrNoRows,
+	}
+	fetcher := &fakeFetcher{song: models.Song{
+		Track:  track,
+		Lyrics: models.Lyrics{LyricsBody: "fresh lyrics"},
+	}}
+	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+
+	err := w.Run(context.Background())
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Run error = %v; want sql.ErrNoRows", err)
+	}
+}
+
 func TestRunDrainsReadyItemsUntilQueueEmpty(t *testing.T) {
 	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
 	q := &fakeQueue{items: []queue.WorkItem{

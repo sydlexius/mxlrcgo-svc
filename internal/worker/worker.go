@@ -37,6 +37,8 @@ type Worker struct {
 	writer  lyrics.Writer
 }
 
+var errQueueEmpty = errors.New("worker queue empty")
+
 // New creates a queue consumer worker.
 func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Worker {
 	return &Worker{
@@ -51,7 +53,7 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 func (w *Worker) Run(ctx context.Context) error {
 	for {
 		if err := w.RunOnce(ctx); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, errQueueEmpty) {
 				return nil
 			}
 			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
@@ -69,6 +71,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	}
 	item, err := w.queue.Dequeue(ctx)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errQueueEmpty
+		}
 		return fmt.Errorf("worker: dequeue: %w", err)
 	}
 

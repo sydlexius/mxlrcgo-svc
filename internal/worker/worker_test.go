@@ -228,6 +228,12 @@ func TestRunDrainsReadyItemsUntilQueueEmpty(t *testing.T) {
 	if len(writer.writes) != 2 {
 		t.Fatalf("writes = %d; want 2", len(writer.writes))
 	}
+	if writer.writes[0].Outdir != "out-a" || writer.writes[0].Filename != "a.lrc" {
+		t.Fatalf("writes[0] = %+v; want out-a/a.lrc", writer.writes[0])
+	}
+	if writer.writes[1].Outdir != "out-b" || writer.writes[1].Filename != "b.lrc" {
+		t.Fatalf("writes[1] = %+v; want out-b/b.lrc", writer.writes[1])
+	}
 }
 
 func TestConfidence(t *testing.T) {

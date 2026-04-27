@@ -74,6 +74,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 
 	song, cacheHit, err := w.song(ctx, item.Inputs.Track)
 	if err != nil {
+		slog.Warn("worker song resolution failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
 		return w.fail(ctx, item.ID, err)
 	}
 	confidence := Confidence(item.Inputs.Track, song.Track)
@@ -81,6 +82,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 
 	for _, p := range outputPaths(item.Inputs) {
 		if err := w.writer.WriteLRC(song, p.Filename, p.Outdir); err != nil {
+			slog.Warn("worker write failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "outdir", p.Outdir, "filename", p.Filename, "error", err)
 			return w.fail(ctx, item.ID, err)
 		}
 	}

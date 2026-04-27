@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.6.1
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 04-03-PLAN.md — Phase 4 build-verification complete
-last_updated: "2026-04-12T01:12:50Z"
-last_activity: 2026-04-12
+status: in_progress
+stopped_at: Completed quick tasks 260427-m55 and 260427-m6
+last_updated: "2026-04-27T19:15:17Z"
+last_activity: 2026-04-27
 progress:
   total_phases: 4
   completed_phases: 4
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** The tool fetches synced lyrics reliably and writes correct `.lrc` files. Everything else exists to support that.
-**Current focus:** All phases complete — final verification
+**Current focus:** Milestone issues after initial restructure
 
 ## Current Position
 
 Phase: 4 of 4 (Build Verification)
 Plan: 3 of 3 in current phase
-Status: All phases complete — ready for merge
-Last activity: 2026-04-12 - Completed quick task 260411-p8r: replace wantEq sentinel with *float64 (issue #36)
+Status: Quick milestone work in progress
+Last activity: 2026-04-27 - Completed quick tasks 260427-m55 (issue #20) and 260427-m6 (issue #21)
 
 Progress: [██████████] 100%
 
@@ -96,9 +96,11 @@ None yet.
 | 260411-l30 | issues #11 and #12 (Milestone 1) | 2026-04-11 | 2448d8f | [260411-l30-issues-11-and-12-milestone-1](./quick/260411-l30-issues-11-and-12-milestone-1/) |
 | 260411-p8r | Replace wantEq sentinel with *float64 pointer (issue #36) | 2026-04-12 | 8515549 | [260411-p8r-work-on-issue-36](./quick/260411-p8r-work-on-issue-36/) |
 | 260426-q19 | Queue consumer worker (issue #19) | 2026-04-26 | pending | [260426-q19-queue-consumer-worker](./quick/260426-q19-queue-consumer-worker/) |
+| 260427-m55 | Scanner-queue integration (issue #20) | 2026-04-27 | pending | [260427-m55-scanner-queue-integration](./quick/260427-m55-scanner-queue-integration/) |
+| 260427-m6 | API key service (issue #21) | 2026-04-27 | pending | [260427-m6-api-key-service](./quick/260427-m6-api-key-service/) |
 
 ## Session Continuity
 
-Last session: 2026-04-12T01:12:50Z
-Stopped at: Completed quick task 260411-p8r — wantEq *float64 pointer refactor
+Last session: 2026-04-27T19:15:17Z
+Stopped at: Completed quick tasks 260427-m55 and 260427-m6
 Resume file: None

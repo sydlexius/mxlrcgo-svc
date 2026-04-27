@@ -217,6 +217,33 @@ func TestOpen_ScanResultsUniqueIndex(t *testing.T) {
 	}
 }
 
+func TestOpen_ScanResultsOutputColumns(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "scan-outputs.db")
+
+	sqlDB, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
+
+	for _, v := range []string{"outdir", "filename"} {
+		var count int
+		row := sqlDB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM pragma_table_info('scan_results') WHERE name = ?", v)
+		if err := row.Scan(&count); err != nil {
+			t.Fatalf("query scan_results column %q: %v", v, err)
+		}
+		if count != 1 {
+			t.Fatalf("scan_results column %q count = %d; want 1", v, count)
+		}
+	}
+}
+
 func TestOpen_WorkQueueBackoffMigration(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "work-queue.db")

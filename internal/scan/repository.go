@@ -38,9 +38,9 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 	defer func() { _ = tx.Rollback() }()
 
 	for _, res := range results {
-		status := res.Status
-		if status == "" {
-			status = StatusPending
+		insertStatus := res.Status
+		if insertStatus == "" {
+			insertStatus = StatusPending
 		}
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO scan_results (library_id, file_path, artist, title, outdir, filename, status)
@@ -50,14 +50,19 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
                  title = excluded.title,
                  outdir = excluded.outdir,
                  filename = excluded.filename,
-                 status = excluded.status`,
+                 status = CASE
+                     WHEN ? = '' THEN scan_results.status
+                     ELSE ?
+                 END`,
 			libraryID,
 			res.FilePath,
 			res.Track.ArtistName,
 			res.Track.TrackName,
 			res.Outdir,
 			res.Filename,
-			status,
+			insertStatus,
+			res.Status,
+			res.Status,
 		)
 		if err != nil {
 			return fmt.Errorf("scan: upsert %s: %w", res.FilePath, err)

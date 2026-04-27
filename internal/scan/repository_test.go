@@ -99,6 +99,49 @@ func TestRepo_UpsertDefaultsStatus(t *testing.T) {
 	}
 }
 
+func TestRepo_UpsertPreservesExistingStatusWhenStatusUnspecified(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openTestDB(t)
+	libRepo := library.New(sqlDB)
+	scanRepo := scan.New(sqlDB)
+
+	lib, err := libRepo.Add(ctx, "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	initial := []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Status:   scan.StatusDone,
+	}}
+	if err := scanRepo.Upsert(ctx, lib.ID, initial); err != nil {
+		t.Fatalf("Upsert initial: %v", err)
+	}
+	update := []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Updated Title"},
+		Outdir:   "/music",
+		Filename: "a.lrc",
+	}}
+	if err := scanRepo.Upsert(ctx, lib.ID, update); err != nil {
+		t.Fatalf("Upsert update: %v", err)
+	}
+
+	got, err := scanRepo.ListByLibrary(ctx, lib.ID)
+	if err != nil {
+		t.Fatalf("ListByLibrary: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListByLibrary returned %d results; want 1", len(got))
+	}
+	if got[0].Status != scan.StatusDone {
+		t.Fatalf("Status = %q; want %q", got[0].Status, scan.StatusDone)
+	}
+	if got[0].Track.TrackName != "Updated Title" {
+		t.Fatalf("TrackName = %q; want Updated Title", got[0].Track.TrackName)
+	}
+}
+
 func TestRepo_ListByLibrary_IsolatedByLibrary(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := openTestDB(t)

@@ -57,8 +57,6 @@ func (e *Enqueuer) EnqueuePending(ctx context.Context, libraryID int64) error {
 		return fmt.Errorf("scan: list pending for enqueue: %w", err)
 	}
 
-	var doneIDs []int64
-	var queuedIDs []int64
 	for _, res := range results {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -66,27 +64,23 @@ func (e *Enqueuer) EnqueuePending(ctx context.Context, libraryID int64) error {
 		_, err := e.Cache.LookupFallback(ctx, res.Track.ArtistName, res.Track.TrackName)
 		switch {
 		case err == nil:
-			doneIDs = append(doneIDs, res.ID)
+			if err := e.Results.SetStatus(ctx, []int64{res.ID}, StatusDone); err != nil {
+				return fmt.Errorf("scan: mark cache hit done %d: %w", res.ID, err)
+			}
 			continue
 		case errors.Is(err, sql.ErrNoRows):
 		default:
 			return fmt.Errorf("scan: cache lookup %d: %w", res.ID, err)
 		}
 
+		if err := e.Results.SetStatus(ctx, []int64{res.ID}, StatusProcessing); err != nil {
+			return fmt.Errorf("scan: reserve result %d: %w", res.ID, err)
+		}
 		if _, err := e.Queue.Enqueue(ctx, scanInputs(res), e.Priority); err != nil {
+			if restoreErr := e.Results.SetStatus(ctx, []int64{res.ID}, StatusPending); restoreErr != nil {
+				return fmt.Errorf("scan: enqueue result %d: %w; restore pending: %w", res.ID, err, restoreErr)
+			}
 			return fmt.Errorf("scan: enqueue result %d: %w", res.ID, err)
-		}
-		queuedIDs = append(queuedIDs, res.ID)
-	}
-
-	if len(doneIDs) > 0 {
-		if err := e.Results.SetStatus(ctx, doneIDs, StatusDone); err != nil {
-			return fmt.Errorf("scan: mark cache hits done: %w", err)
-		}
-	}
-	if len(queuedIDs) > 0 {
-		if err := e.Results.SetStatus(ctx, queuedIDs, StatusProcessing); err != nil {
-			return fmt.Errorf("scan: mark queued results processing: %w", err)
 		}
 	}
 	return nil

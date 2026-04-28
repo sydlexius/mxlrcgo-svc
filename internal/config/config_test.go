@@ -245,6 +245,11 @@ func TestDockerModeAcceptedValues(t *testing.T) {
 		t.Fatal("dockerMode false for MXLRC_DOCKER=TRUE; want true")
 	}
 
+	t.Setenv("MXLRC_DOCKER", "  true  ")
+	if !dockerMode() {
+		t.Fatal("dockerMode false for spaced MXLRC_DOCKER=true; want true")
+	}
+
 	t.Setenv("MXLRC_DOCKER", "false")
 	if dockerMode() {
 		t.Fatal("dockerMode true for MXLRC_DOCKER=false; want false")

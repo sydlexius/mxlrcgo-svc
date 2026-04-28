@@ -33,5 +33,7 @@ WORKDIR /config
 EXPOSE 50705
 VOLUME ["/config", "/music"]
 
+# USER is intentionally omitted so entrypoint.sh can perform PUID/PGID
+# remapping and volume ownership fixes as root before dropping to mxlrcgo.
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["mxlrcgo-svc", "serve"]

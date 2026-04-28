@@ -99,6 +99,7 @@ None yet.
 | 260427-m55 | Scanner-queue integration (issue #20) | 2026-04-27 | pending | [260427-m55-scanner-queue-integration](./quick/260427-m55-scanner-queue-integration/) |
 | 260427-m6 | API key service (issue #21) | 2026-04-27 | pending | [260427-m6-api-key-service](./quick/260427-m6-api-key-service/) |
 | 260427-rename | Rename project to mxlrcgo-svc | 2026-04-27 | pending | [260427-rename-mxlrcgo-svc](./quick/260427-rename-mxlrcgo-svc/) |
+| 260428-review-pr53 | PR 53 review and CodeQL fixes | 2026-04-28 | pending | [260428-review-pr53](./quick/260428-review-pr53/) |
 
 ## Session Continuity
 

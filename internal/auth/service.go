@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,8 +19,11 @@ const (
 	// KeyPrefix is prepended to every generated API key.
 	KeyPrefix = "mxlrc_"
 
-	keyBytes = 32
+	keyBytes       = 32
+	hashIterations = 210_000
 )
+
+var hashSalt = []byte("mxlrcgo-svc api key hash v1")
 
 var (
 	// ErrDuplicateKey is returned when a generated key hash already exists.
@@ -82,7 +86,7 @@ func NewService(store Store) *Service {
 	}
 }
 
-// CreateKey generates a new raw key and stores only its SHA-256 hash.
+// CreateKey generates a new raw key and stores only its derived hash.
 func (s *Service) CreateKey(ctx context.Context, name string, scopes []Scope) (CreatedKey, error) {
 	if s.store == nil {
 		return CreatedKey{}, fmt.Errorf("auth: store dependency is nil")
@@ -163,10 +167,13 @@ func (s *Service) ListKeys(ctx context.Context) ([]Key, error) {
 	return s.store.List(ctx)
 }
 
-// HashKey returns the lowercase hex SHA-256 hash for raw.
+// HashKey returns the lowercase hex PBKDF2-SHA256 hash for raw.
 func HashKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+	key, err := pbkdf2.Key(sha256.New, raw, hashSalt, hashIterations, sha256.Size)
+	if err != nil {
+		return ""
+	}
+	return hex.EncodeToString(key)
 }
 
 // NormalizeScopes validates, deduplicates, and sorts scopes.

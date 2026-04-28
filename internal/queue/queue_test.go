@@ -234,6 +234,27 @@ func TestDBQueue_CleanupRemovesRetryableDuplicate(t *testing.T) {
 	if _, err := q.Dequeue(ctx); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Dequeue after cleanup error = %v; want sql.ErrNoRows", err)
 	}
+
+	if _, err := q.Enqueue(ctx, inputs, 1); err != nil {
+		t.Fatalf("Enqueue failed case: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue failed case: %v", err)
+	}
+	if _, err := q.Fail(ctx, item.ID, errors.New("retryable")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	removed, err = q.Cleanup(ctx, models.Inputs{Track: models.Track{ArtistName: " artist ", TrackName: "title"}})
+	if err != nil {
+		t.Fatalf("Cleanup failed row: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed failed rows = %d; want 1", removed)
+	}
+	if _, err := q.Dequeue(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Dequeue after failed cleanup error = %v; want sql.ErrNoRows", err)
+	}
 }
 
 func TestDBQueue_CleanupPreservesProcessingAndDone(t *testing.T) {
@@ -255,6 +276,17 @@ func TestDBQueue_CleanupPreservesProcessingAndDone(t *testing.T) {
 	}
 	if removed != 0 {
 		t.Fatalf("removed = %d; want 0 for processing item", removed)
+	}
+
+	if err := q.Complete(ctx, 1); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	removed, err = q.Cleanup(ctx, inputs)
+	if err != nil {
+		t.Fatalf("Cleanup done item: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d; want 0 for done item", removed)
 	}
 }
 

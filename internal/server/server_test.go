@@ -105,6 +105,28 @@ func TestLidarrWebhookBearerAuthAndSingleTrackRetag(t *testing.T) {
 	}
 }
 
+func TestLidarrWebhookLowercaseBearerAuth(t *testing.T) {
+	a := &fakeAuth{}
+	q := &fakeQueue{}
+	h := NewHandler(a, q, "lyrics")
+	body := `{"eventType":"TrackRetag","artist":{"artistName":"Artist"},"track":{"title":"One"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/lidarr", strings.NewReader(body))
+	req.Header.Set("Authorization", "bearer lower-key")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if a.raw != "lower-key" {
+		t.Fatalf("auth raw = %q; want lower-key", a.raw)
+	}
+	if len(q.items) != 1 || q.items[0].Track.TrackName != "One" {
+		t.Fatalf("queued items = %+v; want one TrackRetag item", q.items)
+	}
+}
+
 func TestLidarrWebhookLogOnlyEventsDoNotEnqueue(t *testing.T) {
 	for _, event := range []string{"Grab", "Rename"} {
 		t.Run(event, func(t *testing.T) {

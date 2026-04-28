@@ -9,14 +9,14 @@ Command line tool to fetch synced lyrics from [Musixmatch](https://www.musixmatc
 
 ### Build from source
 Required Go 1.25+
-```
+```sh
 go install github.com/sydlexius/mxlrcgo-svc/cmd/mxlrcgo-svc@latest
 ```
 
 ---
 
 ## Usage
-```
+```text
 Usage: mxlrcgo-svc [--outdir OUTDIR] [--cooldown COOLDOWN] [--token TOKEN] SONG [SONG ...]
 
 Positional arguments:
@@ -35,19 +35,19 @@ Options:
 
 ## Example:
 ### One song
-```
+```sh
 mxlrcgo-svc adele,hello
 ```
 ### Multiple song and custom output directory
-```
+```sh
 mxlrcgo-svc adele,hello "the killers,mr. brightside" -o some_directory
 ```
 ### With a text file and custom cooldown time
-```
+```sh
 mxlrcgo-svc example_input.txt -c 20
 ```
 ### Directory Mode (recursive)
-```
+```sh
 mxlrcgo-svc "Dream Theater"
 ```
 > **_This option overrides the `-o/--outdir` argument which means the lyrics will be saved in the same directory as the given input._**
@@ -72,18 +72,18 @@ Follow steps 1 to 5 from the guide [here](https://spicetify.app/docs/faq#sometim
 A Musixmatch API token is required. Supply it using any of the following methods (listed in order of precedence):
 
 1. **`--token` CLI flag** — highest priority
-   ```
+   ```sh
    mxlrcgo-svc --token YOUR_TOKEN adele,hello
    ```
 
 2. **`MUSIXMATCH_TOKEN` environment variable**
-   ```
+   ```sh
    export MUSIXMATCH_TOKEN=YOUR_TOKEN
    mxlrcgo-svc adele,hello
    ```
 
 3. **`.env` file** — place in the working directory where you run the command
-   ```
+   ```sh
    MUSIXMATCH_TOKEN=YOUR_TOKEN
    ```
 

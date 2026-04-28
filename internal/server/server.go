@@ -160,12 +160,14 @@ func (h *Handler) inputs(payload lidarrWebhook) ([]models.Inputs, error) {
 }
 
 func apiKey(r *http.Request) string {
-	if v := r.URL.Query().Get("apikey"); v != "" {
+	if v := strings.TrimSpace(r.URL.Query().Get("apikey")); v != "" {
 		return v
 	}
-	const prefix = "Bearer "
-	if v := r.Header.Get("Authorization"); strings.HasPrefix(v, prefix) {
-		return strings.TrimSpace(strings.TrimPrefix(v, prefix))
+	if v := strings.TrimSpace(r.Header.Get("Authorization")); v != "" {
+		scheme, token, ok := strings.Cut(v, " ")
+		if ok && strings.EqualFold(scheme, "Bearer") {
+			return strings.TrimSpace(token)
+		}
 	}
 	return ""
 }

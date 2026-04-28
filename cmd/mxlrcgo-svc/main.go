@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -167,7 +168,14 @@ func runWithOptions(opts runOptions) int {
 			return 1
 		}
 		h := server.NewHandler(authSvc, queue.NewDBQueue(sqlDB), outdir)
-		srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 5 * time.Second}
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           h,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      15 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
 		go func() {
 			<-ctx.Done()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -235,8 +243,12 @@ func webhookAuthService(rawKeys []string) (*auth.Service, error) {
 	now := time.Now().UTC()
 	created := 0
 	for i, raw := range rawKeys {
+		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
+		}
+		if !strings.HasPrefix(raw, auth.KeyPrefix) {
+			return nil, fmt.Errorf("webhook API key %d: invalid format", i+1)
 		}
 		hash := auth.HashKey(raw)
 		key := auth.Key{
@@ -247,7 +259,7 @@ func webhookAuthService(rawKeys []string) (*auth.Service, error) {
 			CreatedAt: now,
 		}
 		if err := store.Create(context.Background(), key); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("create webhook API key %d: %w", i+1, err)
 		}
 		created++
 	}

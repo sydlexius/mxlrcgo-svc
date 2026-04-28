@@ -1,6 +1,6 @@
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE IF NOT EXISTS api_key_metadata (
+CREATE TABLE api_key_metadata (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL DEFAULT '',
     hash       TEXT NOT NULL UNIQUE,

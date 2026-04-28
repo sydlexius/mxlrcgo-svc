@@ -90,3 +90,39 @@ func TestSQLStore_InvalidRows(t *testing.T) {
 		t.Fatalf("RevokeByHash missing error = %v; want ErrInvalidKey", err)
 	}
 }
+
+func TestSQLStore_CreateIfNotExistsIgnoresDuplicateHash(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
+
+	store := NewSQLStore(sqlDB)
+	key := Key{
+		ID:        "key-id",
+		Name:      "webhook",
+		Hash:      "0123456789abcdef",
+		Scopes:    []Scope{ScopeWebhook},
+		CreatedAt: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+	}
+	inserted, err := store.CreateIfNotExists(ctx, key)
+	if err != nil {
+		t.Fatalf("CreateIfNotExists first: %v", err)
+	}
+	if !inserted {
+		t.Fatal("CreateIfNotExists first inserted = false; want true")
+	}
+	inserted, err = store.CreateIfNotExists(ctx, key)
+	if err != nil {
+		t.Fatalf("CreateIfNotExists duplicate: %v", err)
+	}
+	if inserted {
+		t.Fatal("CreateIfNotExists duplicate inserted = true; want false")
+	}
+}

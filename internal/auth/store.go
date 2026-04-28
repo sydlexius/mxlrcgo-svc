@@ -39,6 +39,32 @@ func (s *SQLStore) Create(ctx context.Context, key Key) error {
 	return nil
 }
 
+// CreateIfNotExists stores key metadata by hash when it is not already present.
+// It returns true when a row was inserted and false when the hash already exists.
+func (s *SQLStore) CreateIfNotExists(ctx context.Context, key Key) (bool, error) {
+	if key.Hash == "" {
+		return false, fmt.Errorf("auth: key hash must not be empty")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO api_key_metadata (id, name, hash, scopes, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(hash) DO NOTHING`,
+		key.ID,
+		key.Name,
+		key.Hash,
+		encodeScopes(key.Scopes),
+		formatTime(key.CreatedAt),
+	)
+	if err != nil {
+		return false, fmt.Errorf("auth: create key if not exists: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("auth: create key rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
 // FindByHash returns key metadata by hash.
 func (s *SQLStore) FindByHash(ctx context.Context, hash string) (Key, error) {
 	key, err := s.scanKey(s.db.QueryRowContext(ctx,

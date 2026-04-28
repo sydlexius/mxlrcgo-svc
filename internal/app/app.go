@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/lyrics"
-	"github.com/sydlexius/mxlrcsvc-go/internal/musixmatch"
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
+	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 // App owns all processing state and orchestrates the lyrics fetch loop.

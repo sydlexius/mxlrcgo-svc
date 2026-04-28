@@ -7,7 +7,7 @@
 **Overall:** Multi-package CLI application (`cmd/` entry point + `internal/` domain packages)
 
 **Key Characteristics:**
-- Entry point lives in `cmd/mxlrcsvc-go/main.go`; all domain logic lives in `internal/`
+- Entry point lives in `cmd/mxlrcgo-svc/main.go`; all domain logic lives in `internal/`
 - Procedural architecture organized by responsibility across discrete packages
 - Dependency injection via interfaces (`musixmatch.Fetcher`, `lyrics.Writer`)
 - `App` struct owns all processing state — no package-level globals
@@ -17,7 +17,7 @@
 
 **CLI / Entry Point Layer:**
 - Purpose: Parse CLI arguments, load token, wire dependencies, start App
-- Location: `cmd/mxlrcsvc-go/main.go`
+- Location: `cmd/mxlrcgo-svc/main.go`
 - Contains: `main()`, signal context setup, token resolution
 - Depends on: `go-arg`, `godotenv`, `internal/app`, `internal/musixmatch`, `internal/lyrics`, `internal/scanner`
 - Used by: Nothing (top-level entry point)
@@ -27,7 +27,7 @@
 - Location: `internal/app/app.go`, `internal/app/queue.go`
 - Contains: `App` struct, `App.Run(ctx)`, `App.timer()`, `App.handleFailed()`, `InputsQueue`
 - Depends on: `musixmatch.Fetcher`, `lyrics.Writer`, `internal/models`
-- Used by: `cmd/mxlrcsvc-go/main.go`
+- Used by: `cmd/mxlrcgo-svc/main.go`
 
 **API Client Layer:**
 - Purpose: Communicate with the Musixmatch desktop API, parse responses, return structured song data
@@ -48,7 +48,7 @@
 - Location: `internal/scanner/scanner.go`
 - Contains: `Scanner`, `ParseInput()`, `GetSongMulti()`, `GetSongText()`, `GetSongDir()`, `AssertInput()`
 - Depends on: `dhowden/tag`, `internal/app` (for `InputsQueue`), `internal/models`
-- Used by: `cmd/mxlrcsvc-go/main.go`
+- Used by: `cmd/mxlrcgo-svc/main.go`
 
 **Models Layer:**
 - Purpose: Define all data structures used across the application
@@ -112,14 +112,14 @@
 ## Entry Points
 
 **CLI Entry Point:**
-- Location: `cmd/mxlrcsvc-go/main.go` (`func main()`)
-- Triggers: Direct CLI invocation (`mxlrcsvc-go [args]`)
+- Location: `cmd/mxlrcgo-svc/main.go` (`func main()`)
+- Triggers: Direct CLI invocation (`mxlrcgo-svc [args]`)
 - Responsibilities: Token resolution, wires fetcher/writer/scanner/app, starts `App.Run(ctx)`
 
 **Build Entry Point:**
 - Location: `Makefile` and `.goreleaser.yml`
 - Triggers: `make build` or GoReleaser on tag push
-- Responsibilities: Compiles `cmd/mxlrcsvc-go` into `mxlrcsvc-go` binary
+- Responsibilities: Compiles `cmd/mxlrcgo-svc` into `mxlrcgo-svc` binary
 
 ## Error Handling
 

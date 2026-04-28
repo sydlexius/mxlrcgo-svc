@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	"github.com/dhowden/tag"
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 // supportedFileTypes lists audio file extensions that can have metadata read.

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/valyala/fastjson"
 )
 

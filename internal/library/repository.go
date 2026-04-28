@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
 // Repo provides CRUD access to configured library roots.

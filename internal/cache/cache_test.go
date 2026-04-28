@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/cache"
-	"github.com/sydlexius/mxlrcsvc-go/internal/db"
+	"github.com/sydlexius/mxlrcgo-svc/internal/cache"
+	"github.com/sydlexius/mxlrcgo-svc/internal/db"
 )
 
 func openTestDB(t *testing.T) *sql.DB {

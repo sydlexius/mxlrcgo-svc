@@ -27,7 +27,11 @@ func TestService_CreateKeyGeneratesPrefixedKeyAndStoresHash(t *testing.T) {
 	if len(strings.TrimPrefix(created.Raw, KeyPrefix)) != 64 {
 		t.Fatalf("raw key hex length = %d; want 64", len(strings.TrimPrefix(created.Raw, KeyPrefix)))
 	}
-	if created.Key.Hash != HashKey(created.Raw) {
+	hash, err := HashKey(created.Raw)
+	if err != nil {
+		t.Fatalf("HashKey: %v", err)
+	}
+	if created.Key.Hash != hash {
 		t.Fatalf("stored hash = %q; want hash of raw key", created.Key.Hash)
 	}
 	if strings.Contains(created.Key.Hash, created.Raw) {

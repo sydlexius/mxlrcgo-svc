@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
 // Writer abstracts LRC file output.
@@ -68,7 +68,7 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 	var tags []string
 	if writeTags {
 		tags = []string{
-			"[by:fashni]",
+			"[by:mxlrcgo-svc]",
 			fmt.Sprintf("[ar:%s]", song.Track.ArtistName),
 			fmt.Sprintf("[ti:%s]", song.Track.TrackName),
 		}

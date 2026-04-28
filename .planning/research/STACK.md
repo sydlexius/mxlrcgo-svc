@@ -1,6 +1,6 @@
 # Technology Stack
 
-**Project:** mxlrcsvc-go (restructured MxLRC-Go)
+**Project:** mxlrcgo-svc (restructured MxLRC-Go)
 **Researched:** 2026-04-10
 
 ## Recommended Stack
@@ -30,9 +30,9 @@
 
 | Technology | Version | Purpose | Notes |
 |------------|---------|---------|-------|
-| GoReleaser | existing | Cross-platform release builds | Update config for new binary name `mxlrcsvc-go` and new `cmd/` entry point path |
+| GoReleaser | existing | Cross-platform release builds | Update config for new binary name `mxlrcgo-svc` and new `cmd/` entry point path |
 | golangci-lint | v2.11+ | Linter aggregator | No changes needed, already comprehensive |
-| Make | existing | Build orchestration | Update targets for new `cmd/mxlrcsvc-go/` path |
+| Make | existing | Build orchestration | Update targets for new `cmd/mxlrcgo-svc/` path |
 
 ## What NOT to Use
 
@@ -63,7 +63,7 @@
 
 The project requires: CLI flag > env var (`MUSIXMATCH_TOKEN`) > `.env` file.
 
-**Implemented approach in `cmd/mxlrcsvc-go/main.go`:**
+**Implemented approach in `cmd/mxlrcgo-svc/main.go`:**
 
 `arg.MustParse()` runs first (it exits on bad args, so `.env` is only needed for the token).
 After parsing, `godotenv.Load()` populates `os.Environ` from `.env` (does NOT override existing env vars).
@@ -104,7 +104,7 @@ Precedence achieved:
 No library needed -- this is a Go convention, not a dependency:
 
 ```
-cmd/mxlrcsvc-go/main.go          # Entry point, thin: loads .env, parses args, runs app
+cmd/mxlrcgo-svc/main.go          # Entry point, thin: loads .env, parses args, runs app
 internal/app/app.go               # App struct owns state (replaces global vars)
 internal/models/models.go         # Types: Track, Song, Lyrics, etc. (from structs.go)
 internal/musixmatch/client.go     # Musixmatch API client + Fetcher interface
@@ -117,7 +117,7 @@ The `internal/` directory is enforced by the Go compiler -- packages under `inte
 ## Dependency Upgrade Plan
 
 ```bash
-# After module rename to sydlexius/mxlrcsvc-go:
+# After module rename to sydlexius/mxlrcgo-svc:
 
 # Upgrade existing dependencies
 go get github.com/alexflint/go-arg@v1.6.1

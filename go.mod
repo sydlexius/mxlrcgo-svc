@@ -1,4 +1,4 @@
-module github.com/sydlexius/mxlrcsvc-go
+module github.com/sydlexius/mxlrcgo-svc
 
 go 1.25.0
 

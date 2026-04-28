@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/normalize"
+	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 )
 
 // CacheRepo provides read/write access to the lyrics_cache table.

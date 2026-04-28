@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`mxlrcsvc-go` (module `github.com/sydlexius/mxlrcsvc-go`) is a Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them as `.lrc` files. It is a fork of `fashni/mxlrc-go`, restructured to eliminate global state, externalize the API token, and add stateful features (TOML config, SQLite cache).
+`mxlrcgo-svc` (module `github.com/sydlexius/mxlrcgo-svc`) is a Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them as `.lrc` files. It has been restructured to eliminate global state, externalize the API token, and add stateful features (TOML config, SQLite cache).
 
 For deeper detail on the stack, conventions, architecture, and data flow, read `AGENTS.md` -- it is the auto-generated reference and stays in sync with the codebase. Read it whenever you need detail this file omits.
 
@@ -16,12 +16,12 @@ When the user says **"next"**, **"what's next"**, **"keep going"**, or any equiv
 
 `make help` lists every target. Two non-obvious points worth knowing up front:
 
-- The entrypoint lives in `cmd/mxlrcsvc-go`, so `go run .` does not work. Use `go run ./cmd/mxlrcsvc-go [args]`.
+- The entrypoint lives in `cmd/mxlrcgo-svc`, so `go run .` does not work. Use `go run ./cmd/mxlrcgo-svc [args]`.
 - A single test: `go test -run TestFoo ./internal/<pkg>` (tests live next to the code they cover under `internal/`).
 
 ## Architecture (one-paragraph orientation)
 
-Cmd/internal layout. `cmd/mxlrcsvc-go/main.go` is the only entry point and owns no business logic; it parses args, loads config + DB, builds the dependency graph, and runs `app.App.Run`. Under `internal/`: `app` owns the processing loop and queues; `musixmatch` calls the API (exposes a `Fetcher` interface); `lyrics` writes `.lrc` / `.txt` / instrumental output (exposes a `Writer` interface); `scanner` parses CLI/text-file/directory input into the queue; `config` resolves TOML config (XDG paths) with token precedence CLI > env > file; `db` is pure-Go SQLite (`modernc.org/sqlite`, no CGO) with goose migrations in `internal/db/migrations/`; `cache` is the lyrics cache repo over the DB; `normalize` builds NFKC cache lookup keys; `models` holds the shared data types and depends on nothing else internal. `app` depends on `Fetcher` and `Writer` interfaces, never concrete types -- mock at those boundaries. There is no global mutable state. See `AGENTS.md` for full layer/data-flow detail.
+Cmd/internal layout. `cmd/mxlrcgo-svc/main.go` is the only entry point and owns no business logic; it parses args, loads config + DB, builds the dependency graph, and runs `app.App.Run`. Under `internal/`: `app` owns the processing loop and queues; `musixmatch` calls the API (exposes a `Fetcher` interface); `lyrics` writes `.lrc` / `.txt` / instrumental output (exposes a `Writer` interface); `scanner` parses CLI/text-file/directory input into the queue; `config` resolves TOML config (XDG paths) with token precedence CLI > env > file; `db` is pure-Go SQLite (`modernc.org/sqlite`, no CGO) with goose migrations in `internal/db/migrations/`; `cache` is the lyrics cache repo over the DB; `normalize` builds NFKC cache lookup keys; `models` holds the shared data types and depends on nothing else internal. `app` depends on `Fetcher` and `Writer` interfaces, never concrete types -- mock at those boundaries. There is no global mutable state. See `AGENTS.md` for full layer/data-flow detail.
 
 ## CLI usage and input modes
 

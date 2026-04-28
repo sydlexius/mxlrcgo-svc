@@ -5,19 +5,19 @@ subsystem: entry-point
 tags: [token, godotenv, security, layout]
 dependency_graph:
   requires: [02-01-SUMMARY.md]
-  provides: [cmd/mxlrcsvc-go/main.go, token-precedence-chain]
+  provides: [cmd/mxlrcgo-svc/main.go, token-precedence-chain]
   affects: [go.mod, go.sum, .gitignore]
 tech_stack:
   added: [github.com/joho/godotenv v1.5.1]
   patterns: [token-precedence-chain, dotenv-optional-load]
 key_files:
-  created: [cmd/mxlrcsvc-go/main.go]
+  created: [cmd/mxlrcgo-svc/main.go]
   modified: [go.mod, go.sum, .gitignore]
   deleted: [main.go]
 decisions:
   - godotenv.Load() called before signal context setup so env vars are available for all subsequent logic
   - Token error uses os.Exit(1) with slog.Error (not log.Fatal) for consistent structured logging
-  - /mxlrcsvc-go (with leading slash) in .gitignore to target root binary only, not cmd/ directory
+  - /mxlrcgo-svc (with leading slash) in .gitignore to target root binary only, not cmd/ directory
 metrics:
   duration: 2min
   completed: "2026-04-11T00:07:03Z"
@@ -27,11 +27,11 @@ metrics:
 
 # Phase 3 Plan 1: Entry Point & Token Externalization Summary
 
-**One-liner:** godotenv-powered entry point at cmd/mxlrcsvc-go/main.go with CLI flag > MUSIXMATCH_TOKEN env var > .env file token precedence, hardcoded token removed.
+**One-liner:** godotenv-powered entry point at cmd/mxlrcgo-svc/main.go with CLI flag > MUSIXMATCH_TOKEN env var > .env file token precedence, hardcoded token removed.
 
 ## What Was Built
 
-Created the final entry point at `cmd/mxlrcsvc-go/main.go` and externalized the Musixmatch API token with a proper precedence chain. The old root `main.go` containing the hardcoded default token was deleted.
+Created the final entry point at `cmd/mxlrcgo-svc/main.go` and externalized the Musixmatch API token with a proper precedence chain. The old root `main.go` containing the hardcoded default token was deleted.
 
 **Token precedence chain (CLI flag > env var > .env file):**
 1. `--token` CLI flag (checked first via `args.Token`)
@@ -44,12 +44,12 @@ The `godotenv.Load()` call is intentionally placed before any token logic. Becau
 
 | Task | Commit | Message |
 |------|--------|---------|
-| Task 1 | `034ca79` | feat(03-01): create cmd/mxlrcsvc-go/main.go with godotenv token precedence |
-| Task 2 | `85c3286` | feat(03-01): delete root main.go, sole entry point is now cmd/mxlrcsvc-go/main.go |
+| Task 1 | `034ca79` | feat(03-01): create cmd/mxlrcgo-svc/main.go with godotenv token precedence |
+| Task 2 | `85c3286` | feat(03-01): delete root main.go, sole entry point is now cmd/mxlrcgo-svc/main.go |
 
 ## Success Criteria Verification
 
-- [x] `cmd/mxlrcsvc-go/main.go` is the sole entry point (LAYOUT-01)
+- [x] `cmd/mxlrcgo-svc/main.go` is the sole entry point (LAYOUT-01)
 - [x] Token precedence: CLI flag > env var > .env file, with error on missing (API-02)
 - [x] Zero hardcoded tokens in source — hardcoded token `[REDACTED]` removed (API-03)
 - [x] godotenv v1.5.1 in go.mod as direct dependency (BUILD-07)
@@ -62,8 +62,8 @@ The `godotenv.Load()` call is intentionally placed before any token logic. Becau
 
 **1. [Rule 2 - Missing] Fixed .gitignore missing new binary name**
 - **Found during:** Task 1 commit staging
-- **Issue:** `.gitignore` only excluded `mxlrc-go` (old binary name) but not `mxlrcsvc-go` (new binary name). The compiled binary `mxlrcsvc-go` would appear as untracked after every `go build`.
-- **Fix:** Added `mxlrcsvc-go` to `.gitignore`, then refined to `/mxlrcsvc-go` (with leading slash) to prevent the pattern from accidentally matching the `cmd/mxlrcsvc-go/` source directory.
+- **Issue:** `.gitignore` only excluded `mxlrc-go` (old binary name) but not `mxlrcgo-svc` (new binary name). The compiled binary `mxlrcgo-svc` would appear as untracked after every `go build`.
+- **Fix:** Added `mxlrcgo-svc` to `.gitignore`, then refined to `/mxlrcgo-svc` (with leading slash) to prevent the pattern from accidentally matching the `cmd/mxlrcgo-svc/` source directory.
 - **Files modified:** `.gitignore`
 - **Commit:** `034ca79`
 
@@ -77,7 +77,7 @@ No new network endpoints, auth paths, or file access patterns beyond what the pl
 
 ## Self-Check
 
-- `cmd/mxlrcsvc-go/main.go` exists: FOUND
+- `cmd/mxlrcgo-svc/main.go` exists: FOUND
 - `main.go` deleted: CONFIRMED (test ! -f main.go passes)
 - Commit `034ca79` exists: FOUND
 - Commit `85c3286` exists: FOUND

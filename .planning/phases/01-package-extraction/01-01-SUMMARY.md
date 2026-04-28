@@ -10,7 +10,7 @@ requires:
 provides:
   - "internal/models package with 7 exported data types (Track, Song, Lyrics, Synced, Lines, Time, Inputs)"
   - "internal/app package with InputsQueue and NewInputsQueue constructor"
-  - "Module renamed to github.com/sydlexius/mxlrcsvc-go"
+  - "Module renamed to github.com/sydlexius/mxlrcgo-svc"
 affects: [01-02, 01-03, 02-state-elimination, 03-entry-point]
 
 tech-stack:
@@ -28,7 +28,7 @@ key-files:
     - go.mod
 
 key-decisions:
-  - "Module renamed from github.com/fashni/mxlrc-go to github.com/sydlexius/mxlrcsvc-go"
+  - "Module renamed from github.com/fashni/mxlrc-go to github.com/sydlexius/mxlrcgo-svc"
   - "InputsQueue placed in internal/app (processing state), not internal/models (data types only)"
   - "Args struct excluded from internal/models — stays in main.go per D-03"
 
@@ -44,7 +44,7 @@ completed: 2026-04-10
 
 # Phase 1 Plan 01: Foundation Summary
 
-**Module renamed to github.com/sydlexius/mxlrcsvc-go with internal/models (7 data types) and internal/app (InputsQueue) packages created**
+**Module renamed to github.com/sydlexius/mxlrcgo-svc with internal/models (7 data types) and internal/app (InputsQueue) packages created**
 
 ## Performance
 
@@ -55,7 +55,7 @@ completed: 2026-04-10
 - **Files modified:** 3
 
 ## Accomplishments
-- Go module renamed from github.com/fashni/mxlrc-go to github.com/sydlexius/mxlrcsvc-go
+- Go module renamed from github.com/fashni/mxlrc-go to github.com/sydlexius/mxlrcgo-svc
 - Created internal/models with all 7 exported data types preserving JSON tags
 - Created internal/app with InputsQueue, 5 exported methods, and NewInputsQueue constructor
 
@@ -67,7 +67,7 @@ Each task was committed atomically:
 2. **Task 2: Create internal/app package with InputsQueue** - `b08877e` (feat)
 
 ## Files Created/Modified
-- `go.mod` - Module path renamed to github.com/sydlexius/mxlrcsvc-go
+- `go.mod` - Module path renamed to github.com/sydlexius/mxlrcgo-svc
 - `internal/models/models.go` - All 7 exported data types (Track, Song, Lyrics, Synced, Lines, Time, Inputs)
 - `internal/app/queue.go` - InputsQueue with Next, Pop, Push, Len, Empty methods and NewInputsQueue constructor
 

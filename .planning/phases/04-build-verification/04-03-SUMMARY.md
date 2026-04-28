@@ -30,10 +30,10 @@ metrics:
 ## What Was Built
 
 README rewritten to accurately reflect the restructured project identity:
-- Badge points to `sydlexius/mxlrcsvc-go` CI workflow
-- Install path: `go install github.com/sydlexius/mxlrcsvc-go/cmd/mxlrcsvc-go@latest`
+- Badge points to `sydlexius/mxlrcgo-svc` CI workflow
+- Install path: `go install github.com/sydlexius/mxlrcgo-svc/cmd/mxlrcgo-svc@latest`
 - Go version requirement updated to 1.24+
-- All command examples use `mxlrcsvc-go`
+- All command examples use `mxlrcgo-svc`
 - New Token Configuration section documents 3 supply methods with priority order
 
 ## Tasks Completed
@@ -48,10 +48,10 @@ README rewritten to accurately reflect the restructured project identity:
 Human approved the checkpoint. The following were confirmed:
 
 ```
-./mxlrcsvc-go --help → correct usage line with mxlrcsvc-go binary name ✓
-./mxlrcsvc-go "adele,hello" → clean structured error (no token), no panic ✓
+./mxlrcgo-svc --help → correct usage line with mxlrcgo-svc binary name ✓
+./mxlrcgo-svc "adele,hello" → clean structured error (no token), no panic ✓
 go test ./... → all pass ✓
-make build → produces ./mxlrcsvc-go ✓
+make build → produces ./mxlrcgo-svc ✓
 ```
 
 **Phase 4 complete — M0 milestone (v1.6.1) achieved.**
@@ -70,11 +70,11 @@ T-04-03-01 (README token docs) — mitigated. README explains token is required 
 
 ## Self-Check: PASSED
 
-- README.md exists with sydlexius/mxlrcsvc-go references ✓
+- README.md exists with sydlexius/mxlrcgo-svc references ✓
 - No fashni/mxlrc-go references in README ✓
 - MUSIXMATCH_TOKEN documented in README ✓
 - Commit 0f46d6d exists in git log ✓
-- Binary ./mxlrcsvc-go built successfully ✓
+- Binary ./mxlrcgo-svc built successfully ✓
 - No-token error path returns structured error message ✓
 - Smoke test approved by human ✓
 - Phase 4 complete ✓

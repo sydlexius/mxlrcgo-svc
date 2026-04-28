@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 // minimalID3v2 is a minimal ID3v2.3 tag with TIT2 ("Test Title") and TPE1

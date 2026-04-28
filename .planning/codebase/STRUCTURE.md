@@ -7,7 +7,7 @@
 ```
 mxlrc-go/
 ├── cmd/
-│   └── mxlrcsvc-go/
+│   └── mxlrcgo-svc/
 │       └── main.go             # CLI entry point, token resolution, dependency wiring
 ├── internal/
 │   ├── app/
@@ -40,7 +40,7 @@ mxlrc-go/
 │   └── dependabot.yml
 ├── .planning/                  # Planning documents
 │   └── codebase/               # Codebase analysis docs
-├── go.mod                      # Module: github.com/sydlexius/mxlrcsvc-go, Go 1.25
+├── go.mod                      # Module: github.com/sydlexius/mxlrcgo-svc, Go 1.25
 ├── go.sum
 ├── Makefile
 ├── AGENTS.md                   # Project guidance for AI assistants
@@ -58,7 +58,7 @@ mxlrc-go/
 
 ## Directory Purposes
 
-**`cmd/mxlrcsvc-go/`:**
+**`cmd/mxlrcgo-svc/`:**
 - Purpose: Binary entry point — the only `package main`
 - Contains: `main.go` (token resolution, signal context, dependency wiring, `App.Run`)
 - Key file: `main.go`
@@ -105,12 +105,12 @@ mxlrc-go/
 ## Key File Locations
 
 **Entry Points:**
-- `cmd/mxlrcsvc-go/main.go`: CLI entry point. `func main()` — token resolution, wires all dependencies, calls `App.Run(ctx)`.
+- `cmd/mxlrcgo-svc/main.go`: CLI entry point. `func main()` — token resolution, wires all dependencies, calls `App.Run(ctx)`.
 
 **Configuration:**
-- `go.mod`: Module path `github.com/sydlexius/mxlrcsvc-go`, Go 1.25
+- `go.mod`: Module path `github.com/sydlexius/mxlrcgo-svc`, Go 1.25
 - `.golangci.yml`: Linter rules (errcheck, govet, staticcheck, gosec, revive, etc.)
-- `.goreleaser.yml`: Cross-platform build matrix — binary name `mxlrcsvc-go`, build path `./cmd/mxlrcsvc-go`
+- `.goreleaser.yml`: Cross-platform build matrix — binary name `mxlrcgo-svc`, build path `./cmd/mxlrcgo-svc`
 - `Makefile`: Build/test/lint/format commands
 - `.pre-commit-config.yaml`: Pre-commit framework hooks
 
@@ -154,7 +154,7 @@ mxlrc-go/
 - Output formatting: `internal/lyrics/`
 - Input parsing/scanning: `internal/scanner/`
 - New types: `internal/models/models.go`
-- CLI flags/orchestration: `cmd/mxlrcsvc-go/main.go`
+- CLI flags/orchestration: `cmd/mxlrcgo-svc/main.go`
 - Tests: `{package}_test.go` alongside source in same `internal/` package
 
 **New Internal Package:**

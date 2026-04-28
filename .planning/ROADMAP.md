@@ -1,4 +1,4 @@
-# Roadmap: mxlrcsvc-go (M0: Fork & Restructure)
+# Roadmap: mxlrcgo-svc (M0: Fork & Restructure)
 
 ## Overview
 
@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Depends on**: Nothing (first phase)
 **Requirements**: MOD-01, MOD-02, LAYOUT-02, LAYOUT-03, LAYOUT-04, LAYOUT-05, LAYOUT-06, API-01, API-04, API-05
 **Success Criteria** (what must be TRUE):
-  1. `go.mod` shows module path `github.com/sydlexius/mxlrcsvc-go` and `go build ./...` succeeds
+  1. `go.mod` shows module path `github.com/sydlexius/mxlrcgo-svc` and `go build ./...` succeeds
   2. Five internal packages exist (`models`, `musixmatch`, `lyrics`, `scanner`, `app`) with exported types and constructor functions
   3. `Fetcher` interface is defined in `internal/musixmatch` and `Client` implements it
   4. No `log.Fatal` calls exist in any `internal/` package -- all functions return errors
@@ -50,25 +50,25 @@ Plans:
 - [x] 02-01-PLAN.md — Create App struct with Run(ctx), move processing loop + timer + failed handling into internal/app, rewrite main.go as thin entry point with signal.NotifyContext
 
 ### Phase 3: Entry Point & Token
-**Goal**: A thin entry point at `cmd/mxlrcsvc-go/main.go` constructs dependencies and runs the app, with the API token loaded from the correct precedence chain
+**Goal**: A thin entry point at `cmd/mxlrcgo-svc/main.go` constructs dependencies and runs the app, with the API token loaded from the correct precedence chain
 **Depends on**: Phase 2
 **Requirements**: LAYOUT-01, API-02, API-03, BUILD-07
 **Success Criteria** (what must be TRUE):
-  1. `cmd/mxlrcsvc-go/main.go` exists as a thin wrapper (parse args, load .env, construct deps, call `App.Run`)
+  1. `cmd/mxlrcgo-svc/main.go` exists as a thin wrapper (parse args, load .env, construct deps, call `App.Run`)
   2. Token is loaded with correct precedence: CLI `--token` flag > `MUSIXMATCH_TOKEN` env var > `.env` file value
   3. No hardcoded default token exists anywhere in the source code
-  4. `go run ./cmd/mxlrcsvc-go` launches the tool successfully
+  4. `go run ./cmd/mxlrcgo-svc` launches the tool successfully
 **Plans:** 1/1 plans complete
 
 Plans:
-- [x] 03-01-PLAN.md — Create cmd/mxlrcsvc-go/main.go with godotenv, token precedence chain, delete root main.go
+- [x] 03-01-PLAN.md — Create cmd/mxlrcgo-svc/main.go with godotenv, token precedence chain, delete root main.go
 
 ### Phase 4: Build & Verification
 **Goal**: All build tooling produces the correct binary name from the correct paths, dependencies are current, and all three input modes work identically to the original
 **Depends on**: Phase 3
 **Requirements**: BUILD-01, BUILD-02, BUILD-03, BUILD-04, BUILD-05, BUILD-06, BUILD-08
 **Success Criteria** (what must be TRUE):
-  1. `make build` produces a binary named `mxlrcsvc-go` built from `cmd/mxlrcsvc-go/`
+  1. `make build` produces a binary named `mxlrcgo-svc` built from `cmd/mxlrcgo-svc/`
   2. CI workflows and GoReleaser config reference the new build path and binary name
   3. All three input modes (CLI pairs, text file, directory scan) produce identical output to the pre-restructuring baseline
   4. `go.mod` shows Go 1.25.0 minimum and all dependencies are at target versions (go-arg v1.6.1, fastjson v1.6.10, x/text latest, dhowden/tag latest)

@@ -1,7 +1,7 @@
 # Domain Pitfalls
 
 **Domain:** Go CLI project restructuring (flat main package to cmd/internal layout)
-**Project:** MxLRC-Go (sydlexius/mxlrcsvc-go)
+**Project:** MxLRC-Go (sydlexius/mxlrcgo-svc)
 **Researched:** 2026-04-10
 
 ## Critical Pitfalls
@@ -33,7 +33,7 @@ Mistakes that cause broken builds, runtime panics, or require rework.
 
 ### Pitfall 2: Module rename breaks all internal imports simultaneously
 
-**What goes wrong:** Changing `go.mod` from `module github.com/fashni/mxlrc-go` to `module github.com/sydlexius/mxlrcsvc-go` breaks every import statement in the project that references the old module path. Since this project is currently flat `package main` with no internal imports, the module rename itself is safe TODAY. But if you restructure first (creating `internal/` packages with `import "github.com/fashni/mxlrc-go/internal/models"`), then rename, you must update every import path. If you rename first, then restructure, the new imports use the correct path from the start.
+**What goes wrong:** Changing `go.mod` from `module github.com/fashni/mxlrc-go` to `module github.com/sydlexius/mxlrcgo-svc` breaks every import statement in the project that references the old module path. Since this project is currently flat `package main` with no internal imports, the module rename itself is safe TODAY. But if you restructure first (creating `internal/` packages with `import "github.com/fashni/mxlrc-go/internal/models"`), then rename, you must update every import path. If you rename first, then restructure, the new imports use the correct path from the start.
 
 **Why it happens:** Go import paths are tied to the module path in `go.mod`. Module rename and package restructuring are two independent operations, but doing them in the wrong order multiplies the work and risk of stale import paths.
 
@@ -53,7 +53,7 @@ Mistakes that cause broken builds, runtime panics, or require rework.
 ### Pitfall 3: Exported vs unexported identifiers after package split
 
 **What goes wrong:** All types and functions in the current codebase are accessible within `package main` regardless of capitalization. When split into separate packages, anything that needs to be used across package boundaries must be exported (capitalized). In this codebase:
-- `InputsQueue` methods: `next()`, `pop()`, `push()`, `len()`, `empty()` are all lowercase. If `InputsQueue` moves to `internal/models` and `cmd/mxlrcsvc-go/main.go` needs to call them, they must become `Next()`, `Pop()`, `Push()`, `Len()`, `Empty()`.
+- `InputsQueue` methods: `next()`, `pop()`, `push()`, `len()`, `empty()` are all lowercase. If `InputsQueue` moves to `internal/models` and `cmd/mxlrcgo-svc/main.go` needs to call them, they must become `Next()`, `Pop()`, `Push()`, `Len()`, `Empty()`.
 - `findLyrics()` on `Musixmatch` must become `FindLyrics()`.
 - `writeLRC()`, `writeSyncedLRC()`, `writeUnsyncedLRC()`, `writeInstrumentalLRC()` must be exported if called from outside `internal/lyrics`.
 - `parseInput()`, `getSongMulti()`, `getSongText()`, `getSongDir()`, `assertInput()` need export if called from outside scanner.
@@ -98,12 +98,12 @@ Mistakes that cause broken builds, runtime panics, or require rework.
 
 ### Pitfall 5: GoReleaser, CI, and Makefile not updated for new `cmd/` entrypoint
 
-**What goes wrong:** After moving `main.go` to `cmd/mxlrcsvc-go/main.go`, every build path reference breaks:
-- `.goreleaser.yml` has `main: .` -- must become `main: ./cmd/mxlrcsvc-go`
-- `.goreleaser.yml` has `binary: mxlrc-go` -- must become `binary: mxlrcsvc-go`
-- `Makefile` has `go build -o $(BINARY) .` -- must become `go build -o $(BINARY) ./cmd/mxlrcsvc-go`
+**What goes wrong:** After moving `main.go` to `cmd/mxlrcgo-svc/main.go`, every build path reference breaks:
+- `.goreleaser.yml` has `main: .` -- must become `main: ./cmd/mxlrcgo-svc`
+- `.goreleaser.yml` has `binary: mxlrc-go` -- must become `binary: mxlrcgo-svc`
+- `Makefile` has `go build -o $(BINARY) .` -- must become `go build -o $(BINARY) ./cmd/mxlrcgo-svc`
 - CI workflow (`ci.yml`) has `go build -ldflags="-s -w" -o mxlrc-go .` -- must update both the binary name and the build path
-- `go install` path changes: users now run `go install github.com/sydlexius/mxlrcsvc-go/cmd/mxlrcsvc-go@latest`
+- `go install` path changes: users now run `go install github.com/sydlexius/mxlrcgo-svc/cmd/mxlrcgo-svc@latest`
 
 **Why it happens:** Developers focus on the Go code restructuring and forget that the build pipeline is a separate system with its own hardcoded paths. These failures only surface when CI runs or someone tries `make build`.
 
@@ -146,10 +146,10 @@ Mistakes that cause broken builds, runtime panics, or require rework.
 
 **What goes wrong:** The `Args` struct defines CLI flags via `go-arg` struct tags. It lives in `structs.go` today. If it moves to `internal/models`, then `internal/models` depends on `go-arg` (a CLI parsing library) just for struct tags. This is backwards: models should be dependency-free, and CLI concerns should stay in `cmd/`.
 
-If `Args` stays in `cmd/mxlrcsvc-go/main.go`, that is correct for separation of concerns. But then `parseInput` (which receives `Args`) must be called from `cmd/` and cannot live in `internal/scanner` unless scanner accepts individual parameters instead of the full `Args` struct.
+If `Args` stays in `cmd/mxlrcgo-svc/main.go`, that is correct for separation of concerns. But then `parseInput` (which receives `Args`) must be called from `cmd/` and cannot live in `internal/scanner` unless scanner accepts individual parameters instead of the full `Args` struct.
 
 **Prevention:**
-1. Keep `Args` in `cmd/mxlrcsvc-go/` (it is a CLI concern).
+1. Keep `Args` in `cmd/mxlrcgo-svc/` (it is a CLI concern).
 2. Have `cmd/main.go` parse args, then call scanner functions with individual parameters: `scanner.ParseInput(songs []string, outdir string, update bool, depth int, bfs bool, queue *models.InputsQueue)` rather than passing the `Args` struct.
 3. This keeps `internal/scanner` independent of the CLI framework.
 4. Do NOT put `Args` in `internal/models` -- it does not belong there.
@@ -217,7 +217,7 @@ Additionally, `go-arg` supports `env` tags natively (`arg:"env:MUSIXMATCH_TOKEN"
 
 ### Pitfall 12: Goreleaser repo name mismatch
 
-**What goes wrong:** `.goreleaser.yml` has `release.github.name: mxlrc-go`. If the GitHub repository is renamed to `mxlrcsvc-go`, this must be updated. If the repo is NOT renamed (staying `mxlrc-go` while the module is `mxlrcsvc-go`), the goreleaser config is correct as-is but the binary name and module name diverge from the repo name -- a source of user confusion.
+**What goes wrong:** `.goreleaser.yml` has `release.github.name: mxlrc-go`. If the GitHub repository is renamed to `mxlrcgo-svc`, this must be updated. If the repo is NOT renamed (staying `mxlrc-go` while the module is `mxlrcgo-svc`), the goreleaser config is correct as-is but the binary name and module name diverge from the repo name -- a source of user confusion.
 
 **Prevention:** Decide upfront whether the GitHub repo will be renamed. If yes, update `release.github.name` in `.goreleaser.yml`. If no, document the discrepancy.
 

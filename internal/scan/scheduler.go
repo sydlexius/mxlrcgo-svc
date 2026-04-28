@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/scanner"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/scanner"
 )
 
 // LibraryLister lists configured library roots.

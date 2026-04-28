@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/normalize"
+	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 )
 
 // TestOpen_CreatesDatabaseAndAppliesMigrations verifies that Open succeeds,

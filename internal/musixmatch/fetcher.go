@@ -3,7 +3,7 @@ package musixmatch
 import (
 	"context"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
 // Fetcher abstracts lyrics lookup from the Musixmatch API.

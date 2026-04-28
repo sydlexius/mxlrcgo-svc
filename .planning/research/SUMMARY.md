@@ -1,6 +1,6 @@
 # Project Research Summary
 
-**Project:** mxlrcsvc-go (MxLRC-Go restructuring)
+**Project:** mxlrcgo-svc (MxLRC-Go restructuring)
 **Domain:** Go CLI project restructuring (flat main package to idiomatic cmd/internal layout)
 **Researched:** 2026-04-10
 **Confidence:** HIGH
@@ -30,7 +30,7 @@ The stack is conservative and well-justified. No framework swaps, no speculative
 ### Expected Features
 
 **Must have (table stakes) -- all required for M0:**
-- `cmd/mxlrcsvc-go/main.go` entry point (Go convention, correct `go install` binary name)
+- `cmd/mxlrcgo-svc/main.go` entry point (Go convention, correct `go install` binary name)
 - `internal/` package hierarchy (compiler-enforced boundaries)
 - Global state elimination (the documented known issue)
 - Exported types across packages (mechanical but necessary)
@@ -38,7 +38,7 @@ The stack is conservative and well-justified. No framework swaps, no speculative
 - Token externalization: CLI flag > env var > .env file (security fix)
 - Proper error returns (`error` not `bool`)
 - Updated Makefile/CI/GoReleaser for new paths
-- Module path rename to `sydlexius/mxlrcsvc-go`
+- Module path rename to `sydlexius/mxlrcgo-svc`
 - Behavior preservation across all three input modes
 
 **Should have (low-cost differentiators to include in M0):**
@@ -55,10 +55,10 @@ The stack is conservative and well-justified. No framework swaps, no speculative
 
 ### Architecture Approach
 
-The target is a strict DAG of five internal packages with `models` as the leaf node. `app` is the sole orchestrator that connects `scanner`, `musixmatch`, and `lyrics` -- they never import each other. The `cmd/mxlrcsvc-go/main.go` is a 15-25 line thin entry point that parses args, constructs dependencies, and calls `app.Run()`. The `Fetcher` interface lives in `internal/musixmatch` alongside its implementation, accepted by `App` as a constructor parameter. `Args` stays in `cmd/` (CLI concern, not a model) and scanner functions accept individual parameters rather than the full Args struct.
+The target is a strict DAG of five internal packages with `models` as the leaf node. `app` is the sole orchestrator that connects `scanner`, `musixmatch`, and `lyrics` -- they never import each other. The `cmd/mxlrcgo-svc/main.go` is a 15-25 line thin entry point that parses args, constructs dependencies, and calls `app.Run()`. The `Fetcher` interface lives in `internal/musixmatch` alongside its implementation, accepted by `App` as a constructor parameter. `Args` stays in `cmd/` (CLI concern, not a model) and scanner functions accept individual parameters rather than the full Args struct.
 
 **Major components:**
-1. **`cmd/mxlrcsvc-go`** -- Thin entry: parse args, load .env, construct App, call Run()
+1. **`cmd/mxlrcgo-svc`** -- Thin entry: parse args, load .env, construct App, call Run()
 2. **`internal/app`** -- Owns state (input/failed queues), orchestrates processing loop, signal handling
 3. **`internal/models`** -- All data types (Track, Song, Lyrics, InputsQueue). Zero internal imports. Leaf package.
 4. **`internal/musixmatch`** -- API client + Fetcher interface. HTTP communication, JSON parsing. Depends only on models.
@@ -81,7 +81,7 @@ The target is a strict DAG of five internal packages with `models` as the leaf n
 
 ### Phase 1: Module Rename
 **Rationale:** Must happen first. Currently flat `package main` with no self-imports, so this is a zero-risk one-line change. All subsequent phases create packages using the new module path, avoiding double import-path updates.
-**Delivers:** Updated `go.mod` module path (`sydlexius/mxlrcsvc-go`), cleaned `go.sum`.
+**Delivers:** Updated `go.mod` module path (`sydlexius/mxlrcgo-svc`), cleaned `go.sum`.
 **Addresses:** Module path rename (table stakes)
 **Avoids:** Pitfall 2 (module rename breaks imports)
 
@@ -105,7 +105,7 @@ The target is a strict DAG of five internal packages with `models` as the leaf n
 
 ### Phase 5: Entry Point + Token Externalization + Build System
 **Rationale:** The entry point depends on `app`, `models`, and `musixmatch` all being in place. Token externalization is implemented here (godotenv.Load before arg.MustParse). Build system updates must happen atomically with the main.go relocation to keep CI green.
-**Delivers:** `cmd/mxlrcsvc-go/main.go` (thin entry point), token precedence (CLI > env > .env), updated Makefile, .goreleaser.yml, CI workflows. Hardcoded token removed. `Args` struct lives in `cmd/`. Behavior verification across all three input modes.
+**Delivers:** `cmd/mxlrcgo-svc/main.go` (thin entry point), token precedence (CLI > env > .env), updated Makefile, .goreleaser.yml, CI workflows. Hardcoded token removed. `Args` struct lives in `cmd/`. Behavior verification across all three input modes.
 **Addresses:** Entry point, token externalization, build tooling, behavior preservation (table stakes)
 **Avoids:** Pitfall 5 (build pipeline breakage), Pitfall 7 (Args in cmd/ not models), Pitfall 8 (token precedence in one place), Pitfall 9 (linter path updates)
 
@@ -149,7 +149,7 @@ All four research dimensions used primary sources (official Go documentation, pk
 
 ### Gaps to Address
 
-- **Repository rename decision:** PITFALLS.md flags that the GitHub repo name (`mxlrc-go`) may diverge from the module name (`mxlrcsvc-go`). This needs a decision before Phase 1: rename the repo or document the discrepancy. Affects goreleaser config and user-facing install instructions.
+- **Repository rename decision:** PITFALLS.md flags that the GitHub repo name (`mxlrc-go`) may diverge from the module name (`mxlrcgo-svc`). This needs a decision before Phase 1: rename the repo or document the discrepancy. Affects goreleaser config and user-facing install instructions.
 - **godotenv loading timing in Phase 5 vs Phase 6:** If token externalization (Phase 5) requires godotenv, it must be added as a dependency in Phase 5, not Phase 6. The phasing should treat godotenv as part of the token work, not as a "dependency upgrade."
 - **Existing test coverage for behavior preservation:** Only `utils_test.go` exists (tests `slugify`). Behavior preservation across all three input modes relies on manual smoke testing. No automated integration tests exist. This is an accepted gap per PROJECT.md ("move existing tests only, no new coverage").
 

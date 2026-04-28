@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,7 +19,9 @@ const (
 	// KeyPrefix is prepended to every generated API key.
 	KeyPrefix = "mxlrc_"
 
-	keyBytes = 32
+	keyBytes       = 32
+	hashIterations = 210_000
+	hashSalt       = "mxlrcgo-svc api key hash v1"
 )
 
 var (
@@ -58,7 +61,7 @@ type CreatedKey struct {
 	Key Key
 }
 
-// Store persists API key metadata by SHA-256 hash.
+// Store persists API key metadata by derived hash.
 type Store interface {
 	Create(ctx context.Context, key Key) error
 	FindByHash(ctx context.Context, hash string) (Key, error)
@@ -82,7 +85,7 @@ func NewService(store Store) *Service {
 	}
 }
 
-// CreateKey generates a new raw key and stores only its SHA-256 hash.
+// CreateKey generates a new raw key and stores only its derived hash.
 func (s *Service) CreateKey(ctx context.Context, name string, scopes []Scope) (CreatedKey, error) {
 	if s.store == nil {
 		return CreatedKey{}, fmt.Errorf("auth: store dependency is nil")
@@ -102,7 +105,13 @@ func (s *Service) CreateKey(ctx context.Context, name string, scopes []Scope) (C
 	if err != nil {
 		return CreatedKey{}, err
 	}
-	hash := HashKey(raw)
+	hash, err := HashKey(raw)
+	if err != nil {
+		return CreatedKey{}, err
+	}
+	if len(hash) < 16 {
+		return CreatedKey{}, fmt.Errorf("auth: derived key hash is too short")
+	}
 	key := Key{
 		ID:        hash[:16],
 		Name:      strings.TrimSpace(name),
@@ -124,7 +133,10 @@ func (s *Service) ValidateKey(ctx context.Context, raw string, required Scope) (
 	if !strings.HasPrefix(raw, KeyPrefix) {
 		return Key{}, ErrInvalidKey
 	}
-	hash := HashKey(raw)
+	hash, err := HashKey(raw)
+	if err != nil {
+		return Key{}, err
+	}
 	key, err := s.store.FindByHash(ctx, hash)
 	if err != nil {
 		return Key{}, err
@@ -152,7 +164,11 @@ func (s *Service) RevokeKey(ctx context.Context, raw string) (Key, error) {
 	if !strings.HasPrefix(raw, KeyPrefix) {
 		return Key{}, ErrInvalidKey
 	}
-	return s.store.RevokeByHash(ctx, HashKey(raw), s.now().UTC())
+	hash, err := HashKey(raw)
+	if err != nil {
+		return Key{}, err
+	}
+	return s.store.RevokeByHash(ctx, hash, s.now().UTC())
 }
 
 // ListKeys returns stored key metadata without raw key material.
@@ -163,10 +179,13 @@ func (s *Service) ListKeys(ctx context.Context) ([]Key, error) {
 	return s.store.List(ctx)
 }
 
-// HashKey returns the lowercase hex SHA-256 hash for raw.
-func HashKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+// HashKey returns the lowercase hex PBKDF2-SHA256 hash for raw.
+func HashKey(raw string) (string, error) {
+	key, err := pbkdf2.Key(sha256.New, raw, []byte(hashSalt), hashIterations, sha256.Size)
+	if err != nil {
+		return "", fmt.Errorf("auth: derive key hash: %w", err)
+	}
+	return hex.EncodeToString(key), nil
 }
 
 // NormalizeScopes validates, deduplicates, and sorts scopes.

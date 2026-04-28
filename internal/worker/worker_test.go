@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 type fakeQueue struct {

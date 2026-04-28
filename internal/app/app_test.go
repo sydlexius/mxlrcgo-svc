@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/lyrics"
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 type fakeFetcher struct {
@@ -84,7 +84,7 @@ func TestRunFetchesAndWritesSyncedLyrics(t *testing.T) {
 		t.Fatalf("reading LRC output: %v", err)
 	}
 	want := strings.Join([]string{
-		"[by:fashni]",
+		"[by:mxlrcgo-svc]",
 		"[ar:Test Artist]",
 		"[ti:Test Song]",
 		"[al:Test Album]",

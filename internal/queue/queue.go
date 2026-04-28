@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/normalize"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 )
 
 const (
@@ -221,6 +221,28 @@ func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 		return fmt.Errorf("queue: complete: %w", err)
 	}
 	return requireAffected(res, "queue: complete")
+}
+
+// Cleanup removes retryable queued work for the same normalized artist/title.
+// Processing and completed rows are preserved to avoid racing active workers or
+// losing history for work that has already finished.
+func (q *DBQueue) Cleanup(ctx context.Context, inputs models.Inputs) (int64, error) {
+	res, err := q.db.ExecContext(ctx,
+		`DELETE FROM work_queue
+         WHERE artist_key = ?
+           AND title_key = ?
+           AND status IN ('pending', 'failed')`,
+		normalize.NormalizeKey(inputs.Track.ArtistName),
+		normalize.NormalizeKey(inputs.Track.TrackName),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("queue: cleanup: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("queue: cleanup rows affected: %w", err)
+	}
+	return n, nil
 }
 
 // Fail records a failed attempt and schedules the item after geometric backoff.

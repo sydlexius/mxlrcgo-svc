@@ -25,7 +25,7 @@
 
 **Core:**
 - None - Pure Go standard library for HTTP, I/O, and CLI orchestration
-- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing via struct tags (`cmd/mxlrcsvc-go/main.go`)
+- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing via struct tags (`cmd/mxlrcgo-svc/main.go`)
 
 **Testing:**
 - Go standard `testing` package - No third-party test framework
@@ -38,9 +38,9 @@
 ## Key Dependencies
 
 **Critical (direct):**
-- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing. Defines the user interface via struct tags on `Args` in `cmd/mxlrcsvc-go/main.go`
+- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing. Defines the user interface via struct tags on `Args` in `cmd/mxlrcgo-svc/main.go`
 - `github.com/dhowden/tag` v0.0.0-20240417053706 - Audio file metadata reading (ID3, MP4, FLAC, OGG, DSF). Used in `internal/scanner/scanner.go` for directory-scan mode
-- `github.com/joho/godotenv` v1.5.1 - Optional `.env` file loading for token resolution. Used in `cmd/mxlrcsvc-go/main.go`
+- `github.com/joho/godotenv` v1.5.1 - Optional `.env` file loading for token resolution. Used in `cmd/mxlrcgo-svc/main.go`
 - `github.com/valyala/fastjson` v1.6.10 - High-performance JSON parsing for Musixmatch API responses. Used in `internal/musixmatch/client.go`
 - `golang.org/x/text` v0.36.0 - Unicode normalization (NFKC) for filename sanitization in `Slugify()` (`internal/lyrics/slugify.go`)
 
@@ -54,7 +54,7 @@
 - No hardcoded token fallback — missing token is a fatal startup error
 - Optional `.env` file in working directory for local development
 
-**CLI Arguments** (defined in `cmd/mxlrcsvc-go/main.go` `Args` struct):
+**CLI Arguments** (defined in `cmd/mxlrcgo-svc/main.go` `Args` struct):
 - `Song` (positional, required) - Song info as `artist,title` pairs, a `.txt` file path, or a directory path
 - `-o/--outdir` (default: `lyrics`) - Output directory for `.lrc` files
 - `-c/--cooldown` (default: `15`) - Cooldown between API requests in seconds

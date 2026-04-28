@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/lyrics"
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/musixmatch"
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 type runRecord struct {
@@ -57,7 +57,7 @@ func isolateCLIEnv(t *testing.T) {
 	for _, v := range []string{
 		"MUSIXMATCH_TOKEN", "MXLRC_API_TOKEN",
 		"MXLRC_API_COOLDOWN", "MXLRC_COOLDOWN",
-		"MXLRC_OUTPUT_DIR", "MXLRC_DB_PATH",
+		"MXLRC_OUTPUT_DIR", "MXLRC_DB_PATH", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
 	} {
 		t.Setenv(v, "")
 	}
@@ -142,7 +142,7 @@ func TestRunWithOptions_HelpDoesNotStartApplication(t *testing.T) {
 	if rec.appCreated {
 		t.Fatal("app was created; want help to stop before startup")
 	}
-	if !strings.Contains(out.String(), "Usage: mxlrcsvc-go") {
+	if !strings.Contains(out.String(), "Usage: mxlrcgo-svc") {
 		t.Fatalf("help output = %q; want usage", out.String())
 	}
 }

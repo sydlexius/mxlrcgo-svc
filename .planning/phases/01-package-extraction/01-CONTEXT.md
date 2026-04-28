@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-Rename the Go module from `github.com/fashni/mxlrc-go` to `github.com/sydlexius/mxlrcsvc-go`, create five internal packages (`models`, `musixmatch`, `lyrics`, `scanner`, `app`), export types, introduce interfaces, convert error handling from `log.Fatal`/`bool` returns to proper error returns, and clean up legacy naming. The entry point (`cmd/`) and token externalization are Phase 3. Global state elimination is Phase 2.
+Rename the Go module from `github.com/fashni/mxlrc-go` to `github.com/sydlexius/mxlrcgo-svc`, create five internal packages (`models`, `musixmatch`, `lyrics`, `scanner`, `app`), export types, introduce interfaces, convert error handling from `log.Fatal`/`bool` returns to proper error returns, and clean up legacy naming. The entry point (`cmd/`) and token externalization are Phase 3. Global state elimination is Phase 2.
 
 </domain>
 
@@ -16,7 +16,7 @@ Rename the Go module from `github.com/fashni/mxlrc-go` to `github.com/sydlexius/
 ### Package boundaries
 - **D-01:** Five internal packages as defined in roadmap: `internal/models`, `internal/musixmatch`, `internal/lyrics`, `internal/scanner`, `internal/app`
 - **D-02:** `InputsQueue` moves to `internal/app` (it is processing state, not a domain model). `models` holds only data types: `Track`, `Song`, `Lyrics`, `Synced`, `Lines`, `Time`, `Inputs`
-- **D-03:** `Args` struct stays in the main entry point (`main.go` for now, `cmd/mxlrcsvc-go/main.go` in Phase 3). Internal packages receive individual values, not the whole Args struct
+- **D-03:** `Args` struct stays in the main entry point (`main.go` for now, `cmd/mxlrcgo-svc/main.go` in Phase 3). Internal packages receive individual values, not the whole Args struct
 
 ### Interface design
 - **D-04:** Two interfaces created in Phase 1: `Fetcher` in `internal/musixmatch` and `Writer` in `internal/lyrics`
@@ -77,7 +77,7 @@ No external specs -- requirements fully captured in decisions above and in the f
 
 ### Integration Points
 - `main.go` currently imports nothing (flat `package main`). After extraction, `main.go` imports all five internal packages
-- `go.mod` module path changes from `github.com/fashni/mxlrc-go` to `github.com/sydlexius/mxlrcsvc-go`
+- `go.mod` module path changes from `github.com/fashni/mxlrc-go` to `github.com/sydlexius/mxlrcgo-svc`
 - No existing self-imports to update (confirmed: no cross-file package imports exist today)
 
 </code_context>

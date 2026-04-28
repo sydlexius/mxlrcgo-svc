@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
 func TestWriteLRC_NothingToSave(t *testing.T) {

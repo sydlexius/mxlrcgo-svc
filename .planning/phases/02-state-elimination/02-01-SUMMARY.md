@@ -84,7 +84,7 @@ None
 None - no external service configuration required.
 
 ## Next Phase Readiness
-- App struct is complete and ready for Phase 3 to move main.go into cmd/mxlrcsvc-go/
+- App struct is complete and ready for Phase 3 to move main.go into cmd/mxlrcgo-svc/
 - Token hardcoded in main.go is ready for externalization in Phase 3 (API-02, API-03)
 - No blockers for Phase 3
 

@@ -2,20 +2,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/mxlrcsvc-go-smoke.XXXXXX")"
+TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/mxlrcgo-svc-smoke.XXXXXX")"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-BIN="$TMPDIR/mxlrcsvc-go"
+BIN="$TMPDIR/mxlrcgo-svc"
 CONFIG_HOME="$TMPDIR/config"
 DATA_HOME="$TMPDIR/data"
 OUTDIR="$TMPDIR/out"
 
 mkdir -p "$CONFIG_HOME" "$DATA_HOME" "$OUTDIR"
 
-CGO_ENABLED=0 go build -o "$BIN" "$ROOT/cmd/mxlrcsvc-go"
+CGO_ENABLED=0 go build -o "$BIN" "$ROOT/cmd/mxlrcgo-svc"
 
 help_output="$("$BIN" --help)"
-if [[ "$help_output" != *"Usage: mxlrcsvc-go"* ]]; then
+if [[ "$help_output" != *"Usage: mxlrcgo-svc"* ]]; then
   echo "smoke: --help output did not include usage" >&2
   exit 1
 fi
@@ -41,7 +41,7 @@ if [[ "$missing_token_output" != *"no API token provided"* ]]; then
   echo "$missing_token_output" >&2
   exit 1
 fi
-if [[ -e "$DATA_HOME/mxlrcsvc-go/mxlrcsvc.db" ]]; then
+if [[ -e "$DATA_HOME/mxlrcgo-svc/mxlrcgo.db" ]]; then
   echo "smoke: missing-token command created a database" >&2
   exit 1
 fi

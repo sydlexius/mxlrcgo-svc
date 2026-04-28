@@ -12,14 +12,14 @@ The Go team documents the recommended project layouts at go.dev/doc/modules/layo
 
 > "For larger packages or commands, it is recommended to place supporting functionality into an internal directory. This practice prevents other modules from depending on code that is not intended for external use."
 
-This applies directly to mxlrcsvc-go: a single binary with no exported API, where all packages exist to serve that binary.
+This applies directly to mxlrcgo-svc: a single binary with no exported API, where all packages exist to serve that binary.
 
 ## Recommended Architecture
 
 ### Target Layout
 
 ```
-cmd/mxlrcsvc-go/
+cmd/mxlrcgo-svc/
   main.go               Entry point: arg parsing, App construction, run
 
 internal/
@@ -41,7 +41,7 @@ internal/
 ### Why This Layout (Not Alternatives)
 
 **Why `internal/app/` instead of inlining orchestration in `cmd/`:**
-The current `main.go` has ~70 lines of orchestration logic (the processing loop, timer, failedHandler, closeHandler) plus global state. Putting this into `cmd/mxlrcsvc-go/main.go` would repeat the flat-file mistake. The `app` package owns the `App` struct that replaces global state, runs the processing loop, and handles signals. `main.go` becomes a thin 15-20 line file that parses args, constructs an `App`, and calls `app.Run()`.
+The current `main.go` has ~70 lines of orchestration logic (the processing loop, timer, failedHandler, closeHandler) plus global state. Putting this into `cmd/mxlrcgo-svc/main.go` would repeat the flat-file mistake. The `app` package owns the `App` struct that replaces global state, runs the processing loop, and handles signals. `main.go` becomes a thin 15-20 line file that parses args, constructs an `App`, and calls `app.Run()`.
 
 **Why `internal/lyrics/slugify.go` instead of a shared `internal/util/`:**
 `slugify()` is only called from `writeLRC()`. Keeping it in `lyrics/` avoids a "junk drawer" utils package. If another package later needs it, promote it then. Go convention: avoid generic `util` packages; name packages for what they provide.
@@ -56,7 +56,7 @@ The `pkg/` convention is for libraries that export packages for external consump
 
 | Component | Package | Responsibility | Exports | Depends On |
 |-----------|---------|---------------|---------|------------|
-| Entry Point | `cmd/mxlrcsvc-go` | Parse CLI args, construct App, call Run | `main()` only | `internal/app`, `internal/models` |
+| Entry Point | `cmd/mxlrcgo-svc` | Parse CLI args, construct App, call Run | `main()` only | `internal/app`, `internal/models` |
 | Application | `internal/app` | Own state (inputs/failed queues), orchestrate processing loop, signal handling, timer, failed-item handler | `App` struct, `Run()`, `NewApp()` | `internal/models`, `internal/musixmatch`, `internal/lyrics`, `internal/scanner` |
 | Models | `internal/models` | Define all data types, input queue operations | `Track`, `Song`, `Lyrics`, `Synced`, `Lines`, `Time`, `Args`, `Inputs`, `InputsQueue` | Nothing (leaf package) |
 | API Client | `internal/musixmatch` | HTTP communication with Musixmatch API, JSON parsing | `Client` struct, `Fetcher` interface, `NewClient()` | `internal/models` |
@@ -152,7 +152,7 @@ failedHandler() --- writes _failed.txt from global `failed` queue
 ### Target Flow (cmd/internal layout)
 
 ```
-cmd/mxlrcsvc-go/main.go
+cmd/mxlrcgo-svc/main.go
   |
   | 1. Parse CLI args (go-arg -> models.Args)
   | 2. Resolve token (flag > env > .env)
@@ -190,7 +190,7 @@ internal/app.Run()
 ### Import Graph (no cycles)
 
 ```
-cmd/mxlrcsvc-go
+cmd/mxlrcgo-svc
   imports: internal/app, internal/models, internal/musixmatch
 
 internal/app
@@ -216,14 +216,14 @@ internal/models
 
 ### Pattern 1: Thin Main, Fat App
 
-**What:** `cmd/mxlrcsvc-go/main.go` should be 15-25 lines. Parse args, resolve configuration, construct dependencies, call `app.Run()`, handle the returned error.
+**What:** `cmd/mxlrcgo-svc/main.go` should be 15-25 lines. Parse args, resolve configuration, construct dependencies, call `app.Run()`, handle the returned error.
 
 **When:** Always for CLI tools with any orchestration logic.
 
 **Example:**
 
 ```go
-// cmd/mxlrcsvc-go/main.go
+// cmd/mxlrcgo-svc/main.go
 package main
 
 import (
@@ -231,9 +231,9 @@ import (
     "os"
 
     "github.com/alexflint/go-arg"
-    "github.com/sydlexius/mxlrcsvc-go/internal/app"
-    "github.com/sydlexius/mxlrcsvc-go/internal/models"
-    "github.com/sydlexius/mxlrcsvc-go/internal/musixmatch"
+    "github.com/sydlexius/mxlrcgo-svc/internal/app"
+    "github.com/sydlexius/mxlrcgo-svc/internal/models"
+    "github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 )
 
 func main() {
@@ -338,13 +338,13 @@ Phase 3: internal/app
     Move orchestration logic from main.go: processing loop, timer,
     failedHandler, closeHandler. Create App struct owning inputs/failed state.
 
-Phase 4: cmd/mxlrcsvc-go/main.go
+Phase 4: cmd/mxlrcgo-svc/main.go
     Depends on app + models + musixmatch (to construct client).
     Thin entry point. Token resolution. Wire everything together.
 
 Phase 5: Build system updates
-    Makefile, goreleaser, CI workflows point to cmd/mxlrcsvc-go/.
-    go.mod module path changes to sydlexius/mxlrcsvc-go.
+    Makefile, goreleaser, CI workflows point to cmd/mxlrcgo-svc/.
+    go.mod module path changes to sydlexius/mxlrcgo-svc.
     Depends on all code being in its final location.
 ```
 
@@ -376,7 +376,7 @@ Exact mapping from current files to target locations:
 | `utils.go` (scanner) | `internal/scanner` | `scanner.go` | parseInput, getSongDir, getSongText, getSongMulti, assertInput |
 | `utils.go` (helpers) | inline / delete | -- | `isInArray` replaced with generic or `slices.Contains`; `supportedFType` moves to scanner |
 | `main.go` (loop/state) | `internal/app` | `app.go` | Processing loop, timer, failedHandler, closeHandler, global vars -> App struct fields |
-| `main.go` (entry) | `cmd/mxlrcsvc-go` | `main.go` | Arg parsing, token resolution, wiring |
+| `main.go` (entry) | `cmd/mxlrcgo-svc` | `main.go` | Arg parsing, token resolution, wiring |
 | `utils_test.go` | `internal/lyrics` | `slugify_test.go` | TestSlugify (tests the slugify function that moves to lyrics/) |
 
 ## Sources

@@ -1,4 +1,4 @@
-# Requirements: mxlrcsvc-go (M0: Fork & Restructure)
+# Requirements: mxlrcgo-svc (M0: Fork & Restructure)
 
 **Defined:** 2026-04-10
 **Core Value:** The tool fetches synced lyrics reliably and writes correct `.lrc` files. Everything else exists to support that.
@@ -9,12 +9,12 @@ Requirements for M0. Each maps to roadmap phases.
 
 ### Module Identity
 
-- [x] **MOD-01**: Go module path renamed to `github.com/sydlexius/mxlrcsvc-go` in go.mod
+- [x] **MOD-01**: Go module path renamed to `github.com/sydlexius/mxlrcgo-svc` in go.mod
 - [x] **MOD-02**: All import paths updated to reflect new module path
 
 ### Project Layout
 
-- [x] **LAYOUT-01**: Entry point lives at `cmd/mxlrcsvc-go/main.go` as a thin wrapper (parse args, construct deps, call App.Run)
+- [x] **LAYOUT-01**: Entry point lives at `cmd/mxlrcgo-svc/main.go` as a thin wrapper (parse args, construct deps, call App.Run)
 - [x] **LAYOUT-02**: Internal packages created: `internal/models`, `internal/musixmatch`, `internal/lyrics`, `internal/scanner`, `internal/app`
 - [x] **LAYOUT-03**: All types and methods exported from internal packages (uppercase names)
 - [x] **LAYOUT-04**: Constructor functions (`NewClient`, `NewWriter`, etc.) for each internal package
@@ -37,7 +37,7 @@ Requirements for M0. Each maps to roadmap phases.
 
 ### Build & Verification
 
-- [x] **BUILD-01**: Makefile updated for `cmd/mxlrcsvc-go/` build path and `mxlrcsvc-go` binary name
+- [x] **BUILD-01**: Makefile updated for `cmd/mxlrcgo-svc/` build path and `mxlrcgo-svc` binary name
 - [x] **BUILD-02**: GoReleaser config updated for new binary name and main path
 - [x] **BUILD-03**: CI workflows updated for new build paths
 - [x] **BUILD-04**: README updated for new module path and binary name

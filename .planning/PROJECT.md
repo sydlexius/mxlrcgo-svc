@@ -1,4 +1,4 @@
-# MxLRC-Go (sydlexius/mxlrcsvc-go)
+# MxLRC-Go (sydlexius/mxlrcgo-svc)
 
 ## What This Is
 
@@ -20,8 +20,8 @@ The tool fetches synced lyrics reliably and writes correct `.lrc` files. Everyth
 - Graceful shutdown with failed-item retry file (`_failed.txt`) -- existing
 - Cross-platform builds (linux/darwin/windows, amd64/arm64) -- existing
 - BFS/DFS directory traversal options -- existing
-- Rename Go module to `sydlexius/mxlrcsvc-go` -- completed M0
-- Restructure flat main package into `cmd/mxlrcsvc-go/` + `internal/` layout -- completed M0
+- Rename Go module to `sydlexius/mxlrcgo-svc` -- completed M0
+- Restructure flat main package into `cmd/mxlrcgo-svc/` + `internal/` layout -- completed M0
 - Eliminate global `inputs` and `failed` variables -- completed M0
 - Externalize Musixmatch token (CLI flag > env var > .env file) -- completed M0
 - Define `Fetcher` interface for the Musixmatch client -- completed M0
@@ -44,7 +44,7 @@ The existing codebase has minimal test coverage (`slugify_test.go`). Quality gat
 
 Current layout after M0:
 ```
-cmd/mxlrcsvc-go/main.go
+cmd/mxlrcgo-svc/main.go
 internal/models/models.go
 internal/musixmatch/client.go
 internal/lyrics/writer.go
@@ -56,7 +56,7 @@ internal/app/queue.go
 
 ## Constraints
 
-- **Binary name**: `mxlrcsvc-go` (matches new module name)
+- **Binary name**: `mxlrcgo-svc` (matches new module name)
 - **No CGO**: Must remain CGO_ENABLED=0 for cross-compilation
 - **Go 1.25+**: Minimum Go version per go.mod (bumped from 1.22 during M0 for x/text v0.36.0 compatibility)
 - **Behavior preservation**: All existing CLI flags and behaviors must work identically after restructuring
@@ -66,7 +66,7 @@ internal/app/queue.go
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Module path: `sydlexius/mxlrcsvc-go` | New fork identity, distinct from upstream | Implemented in M0 |
+| Module path: `sydlexius/mxlrcgo-svc` | New fork identity, distinct from upstream | Implemented in M0 |
 | App struct for state ownership | Replaces global `inputs`/`failed` vars; enables testability | Implemented in M0 |
 | Token: flag + env + .env | Maximum flexibility; flag for scripting, env for CI, .env for local dev | Implemented in M0 |
 | `Fetcher` interface on Musixmatch client | Enables mocking in tests without hitting the real API | Implemented in M0 |

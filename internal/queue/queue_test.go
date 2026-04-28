@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/db"
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/db"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
 func TestNext_EmptyQueue(t *testing.T) {
@@ -211,6 +211,82 @@ func TestDBQueue_EnqueuePersistsOutputPaths(t *testing.T) {
 	}
 	if got.Inputs.OutputPaths[0].Outdir != "out-a" || got.Inputs.OutputPaths[1].Filename != "b.lrc" {
 		t.Fatalf("dequeued output paths = %+v; want persisted paths", got.Inputs.OutputPaths)
+	}
+}
+
+func TestDBQueue_CleanupRemovesRetryableDuplicate(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	inputs := models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}
+	if _, err := q.Enqueue(ctx, inputs, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	removed, err := q.Cleanup(ctx, models.Inputs{Track: models.Track{ArtistName: " artist ", TrackName: "title"}})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d; want 1", removed)
+	}
+	if _, err := q.Dequeue(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Dequeue after cleanup error = %v; want sql.ErrNoRows", err)
+	}
+
+	if _, err := q.Enqueue(ctx, inputs, 1); err != nil {
+		t.Fatalf("Enqueue failed case: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue failed case: %v", err)
+	}
+	if _, err := q.Fail(ctx, item.ID, errors.New("retryable")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	removed, err = q.Cleanup(ctx, models.Inputs{Track: models.Track{ArtistName: " artist ", TrackName: "title"}})
+	if err != nil {
+		t.Fatalf("Cleanup failed row: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed failed rows = %d; want 1", removed)
+	}
+	if _, err := q.Dequeue(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Dequeue after failed cleanup error = %v; want sql.ErrNoRows", err)
+	}
+}
+
+func TestDBQueue_CleanupPreservesProcessingAndDone(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	inputs := models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}
+	if _, err := q.Enqueue(ctx, inputs, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	removed, err := q.Cleanup(ctx, inputs)
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d; want 0 for processing item", removed)
+	}
+
+	if err := q.Complete(ctx, 1); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	removed, err = q.Cleanup(ctx, inputs)
+	if err != nil {
+		t.Fatalf("Cleanup done item: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d; want 0 for done item", removed)
 	}
 }
 

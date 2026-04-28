@@ -1,11 +1,11 @@
 .PHONY: build run test test-cover smoke lint fmt hooks clean help
 
 # Binary name
-BINARY=mxlrcsvc-go
+BINARY=mxlrcgo-svc
 
 ## build: Build the binary
 build:
-	go build -o $(BINARY) ./cmd/mxlrcsvc-go
+	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/mxlrcgo-svc
 
 ## run: Build and run
 run: build

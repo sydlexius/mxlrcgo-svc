@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/lyrics"
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/musixmatch"
-	"github.com/sydlexius/mxlrcsvc-go/internal/normalize"
-	"github.com/sydlexius/mxlrcsvc-go/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
 // Queue provides durable worker queue operations.

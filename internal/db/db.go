@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/pressly/goose/v3"
-	"github.com/sydlexius/mxlrcsvc-go/internal/normalize"
+	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 	"modernc.org/sqlite" // pure-Go SQLite driver
 )
 

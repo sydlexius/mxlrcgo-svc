@@ -16,7 +16,7 @@ func isolateEnv(t *testing.T) {
 	for _, k := range []string{
 		"MUSIXMATCH_TOKEN", "MXLRC_API_TOKEN",
 		"MXLRC_API_COOLDOWN", "MXLRC_COOLDOWN",
-		"MXLRC_OUTPUT_DIR",
+		"MXLRC_OUTPUT_DIR", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME",
 	} {
 		// t.Setenv("", "") clears the variable; applyEnvOverrides uses os.Getenv
@@ -101,8 +101,8 @@ func TestLoad_BlankDBPathInTOMLReDefaultsViaXDG(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	// The re-default should compute: XDG_DATA_HOME/mxlrcsvc-go/mxlrcsvc.db
-	want := filepath.Join(xdgData, "mxlrcsvc-go", "mxlrcsvc.db")
+	// The re-default should compute: XDG_DATA_HOME/mxlrcgo-svc/mxlrcgo.db
+	want := filepath.Join(xdgData, "mxlrcgo-svc", "mxlrcgo.db")
 	if cfg.DB.Path != want {
 		t.Errorf("DB.Path = %q; want re-defaulted XDG path %q", cfg.DB.Path, want)
 	}
@@ -212,6 +212,31 @@ func TestLoad_DBPathFromEnv(t *testing.T) {
 	}
 	if cfg.DB.Path != want {
 		t.Errorf("DB.Path = %q; want %q", cfg.DB.Path, want)
+	}
+}
+
+func TestLoad_ServerConfigFromFileAndEnv(t *testing.T) {
+	isolateEnv(t)
+
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	content := "[server]\n" +
+		"addr = \"127.0.0.1:9999\"\n" +
+		"webhook_api_keys = [\"file-key\"]\n"
+	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+	t.Setenv("MXLRC_SERVER_ADDR", "127.0.0.1:8888")
+	t.Setenv("MXLRC_WEBHOOK_API_KEY", "env-a, env-b")
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.Addr != "127.0.0.1:8888" {
+		t.Fatalf("server addr = %q; want env override", cfg.Server.Addr)
+	}
+	if len(cfg.Server.WebhookAPIKeys) != 2 || cfg.Server.WebhookAPIKeys[0] != "env-a" || cfg.Server.WebhookAPIKeys[1] != "env-b" {
+		t.Fatalf("webhook keys = %+v; want env keys", cfg.Server.WebhookAPIKeys)
 	}
 }
 

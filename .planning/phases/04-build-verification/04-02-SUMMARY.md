@@ -43,7 +43,7 @@ Updated `go.mod` and `go.sum` with the latest stable versions of all direct depe
 ## Final go.mod State
 
 ```
-module github.com/sydlexius/mxlrcsvc-go
+module github.com/sydlexius/mxlrcgo-svc
 
 go 1.25.0
 

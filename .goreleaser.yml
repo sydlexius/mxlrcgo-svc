@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: mxlrcsvc-go
-    main: ./cmd/mxlrcsvc-go
-    binary: mxlrcsvc-go
+  - id: mxlrcgo-svc
+    main: ./cmd/mxlrcgo-svc
+    binary: mxlrcgo-svc
     env:
       - CGO_ENABLED=0
     goos:
@@ -58,6 +58,6 @@ changelog:
 release:
   github:
     owner: sydlexius
-    name: mxlrcsvc-go
+    name: mxlrcgo-svc
   prerelease: auto
   make_latest: auto

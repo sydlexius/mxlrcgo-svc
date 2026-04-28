@@ -1,15 +1,15 @@
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
-**MxLRC-Go (sydlexius/mxlrcsvc-go)**
+**mxlrcgo-svc (sydlexius/mxlrcgo-svc)**
 
-A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them as `.lrc` files. This is a fork of fashni/mxlrc-go being restructured into a maintainable Go project layout under a new module path, with global state eliminated and the hardcoded API token externalized.
+A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them as `.lrc` files. The project is being maintained under its own module path, with global state eliminated and the hardcoded API token externalized.
 
 **Core Value:** The tool fetches synced lyrics reliably and writes correct `.lrc` files. Everything else (project structure, config handling, CI) exists to support that.
 
 ### Constraints
 
-- **Binary name**: `mxlrcsvc-go` (matches new module name)
+- **Binary name**: `mxlrcgo-svc` (matches new module name)
 - **No CGO**: Must remain CGO_ENABLED=0 for cross-compilation
 - **Go 1.25+**: Minimum Go version per go.mod
 - **Behavior preservation**: All existing CLI flags and behaviors must work identically after restructuring
@@ -30,15 +30,15 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Lockfile: `go.sum` present
 ## Frameworks
 - None - Pure Go standard library for HTTP, I/O, and CLI orchestration
-- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing via struct tags (`Args` in `cmd/mxlrcsvc-go/main.go`)
+- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing via struct tags (`Args` in `cmd/mxlrcgo-svc/main.go`)
 - Go standard `testing` package - No third-party test framework
 - Make (`Makefile`) - Build orchestration (build, test, lint, fmt, clean)
 - GoReleaser (`.goreleaser.yml`) - Cross-platform release builds
 - golangci-lint v2.11.4 (`.golangci.yml`) - Linter aggregator with 12 enabled linters
 ## Key Dependencies
-- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing. Defines the entire user interface via struct tags on `Args` in `cmd/mxlrcsvc-go/main.go`
+- `github.com/alexflint/go-arg` v1.6.1 - CLI argument parsing. Defines the entire user interface via struct tags on `Args` in `cmd/mxlrcgo-svc/main.go`
 - `github.com/dhowden/tag` v0.0.0-20240417053706-3d75831295e8 - Audio file metadata reading (ID3, MP4, FLAC, OGG, DSF). Used in `internal/scanner/scanner.go` for directory-scan mode
-- `github.com/joho/godotenv` v1.5.1 - `.env` file loading for token configuration. Used in `cmd/mxlrcsvc-go/main.go`
+- `github.com/joho/godotenv` v1.5.1 - `.env` file loading for token configuration. Used in `cmd/mxlrcgo-svc/main.go`
 - `github.com/valyala/fastjson` v1.6.10 - High-performance JSON parsing for Musixmatch API responses. Used in `internal/musixmatch/client.go` to navigate deeply nested JSON
 - `golang.org/x/text` v0.36.0 - Unicode normalization (NFKC) for filename sanitization in `Slugify()` (`internal/lyrics/slugify.go`)
 - `github.com/alexflint/go-scalar` v1.2.0 - Transitive dependency of go-arg
@@ -84,7 +84,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 ## Conventions
 
 ## Naming Patterns
-- `cmd/mxlrcsvc-go/main.go` - CLI entry point (single file)
+- `cmd/mxlrcgo-svc/main.go` - CLI entry point (single file)
 - `internal/<package>/<file>.go` - lowercase single-word filenames per package: `client.go`, `fetcher.go`, `writer.go`, `slugify.go`, `scanner.go`, `app.go`, `queue.go`, `models.go`
 - Test files use Go's standard `_test.go` suffix: `slugify_test.go`
 - PascalCase for all exported identifiers: `NewClient()`, `FindLyrics()`, `WriteLRC()`, `InputsQueue`, `Track`, `Song`
@@ -136,7 +136,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - `error` return for write operations: `WriteLRC()`, `writeSyncedLRC()`, etc.
 - Pointer-or-nil for validation: `AssertInput(song string) *models.Track`
 ## Module Design
-- `cmd/mxlrcsvc-go/` - CLI entry point only; no business logic
+- `cmd/mxlrcgo-svc/` - CLI entry point only; no business logic
 - `internal/models/` - shared data types; no dependencies on other internal packages
 - `internal/musixmatch/` - API client + `Fetcher` interface; depends on `models`
 - `internal/lyrics/` - LRC writer + `Writer` interface + `Slugify`; depends on `models`
@@ -157,14 +157,14 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 ## Architecture
 
 ## Pattern Overview
-- `cmd/mxlrcsvc-go/` contains the CLI entry point; all business logic lives under `internal/`
+- `cmd/mxlrcgo-svc/` contains the CLI entry point; all business logic lives under `internal/`
 - Layered architecture with dependency injection via interfaces (`musixmatch.Fetcher`, `lyrics.Writer`)
 - No global mutable state -- all state is owned by the `App` struct
 - Sequential processing loop with cooldown timer between API calls
 - Context propagation throughout for graceful shutdown on Ctrl+C / SIGTERM
 ## Layers
 - Purpose: Parse CLI arguments, resolve token, orchestrate startup
-- Location: `cmd/mxlrcsvc-go/main.go`
+- Location: `cmd/mxlrcgo-svc/main.go`
 - Contains: `main()`, `Args` struct
 - Depends on: `go-arg`, `godotenv`, `internal/app`, `internal/lyrics`, `internal/musixmatch`, `internal/scanner`
 - Used by: Nothing (top-level entry point)
@@ -172,7 +172,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Location: `internal/app/app.go`, `internal/app/queue.go`
 - Contains: `App` struct, `NewApp()`, `Run()`, `timer()`, `handleFailed()`, `InputsQueue`, `NewInputsQueue()`
 - Depends on: `musixmatch.Fetcher`, `lyrics.Writer`, `internal/models`
-- Used by: `cmd/mxlrcsvc-go/main.go`
+- Used by: `cmd/mxlrcgo-svc/main.go`
 - Purpose: Communicate with the Musixmatch desktop API, parse responses, return structured song data
 - Location: `internal/musixmatch/client.go`, `internal/musixmatch/fetcher.go`
 - Contains: `Client` struct, `FindLyrics(ctx, track) (Song, error)`, `Fetcher` interface
@@ -187,7 +187,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Location: `internal/scanner/scanner.go`
 - Contains: `Scanner`, `ParseInput()`, `GetSongMulti()`, `GetSongText()`, `GetSongDir()`, `AssertInput()`
 - Depends on: `dhowden/tag`, `internal/app`, `internal/models`
-- Used by: `cmd/mxlrcsvc-go/main.go`
+- Used by: `cmd/mxlrcgo-svc/main.go`
 - Purpose: Define all shared data structures
 - Location: `internal/models/models.go`
 - Contains: `Track`, `Song`, `Lyrics`, `Synced`, `Lines`, `Time`, `Inputs`
@@ -213,12 +213,12 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Location: `internal/models/models.go`
 - Pattern: Bundles a `Track` (what to search for) with `Outdir` and `Filename` (where to write output)
 ## Entry Points
-- Location: `cmd/mxlrcsvc-go/main.go` (`func main()`)
-- Triggers: Direct CLI invocation (`mxlrcsvc-go [args]`)
+- Location: `cmd/mxlrcgo-svc/main.go` (`func main()`)
+- Triggers: Direct CLI invocation (`mxlrcgo-svc [args]`)
 - Responsibilities: Parses args, loads token, creates scanner/fetcher/writer, runs processing loop, handles failures and graceful shutdown
 - Location: `Makefile` and `.goreleaser.yml`
 - Triggers: `make build` or GoReleaser on tag push
-- Responsibilities: Compiles `cmd/mxlrcsvc-go` into `mxlrcsvc-go` binary
+- Responsibilities: Compiles `cmd/mxlrcgo-svc` into `mxlrcgo-svc` binary
 ## Runtime Error Handling
 - `FindLyrics()` returns `(Song, error)` -- caller logs the error and pushes to the `failed` queue
 - `WriteLRC()` returns `error` -- uses named return `retErr` to capture deferred close errors

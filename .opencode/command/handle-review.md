@@ -194,7 +194,7 @@ Print the full triage table before making any changes:
 | # | ID     | Category       | File              | Summary |
 |---|--------|----------------|-------------------|---------|
 | 1 | 123456 | bug            | internal/app/app.go | context not propagated |
-| 2 | 789012 | false-positive | cmd/mxlrcsvc-go/main.go | godotenv pattern |
+| 2 | 789012 | false-positive | cmd/mxlrcgo-svc/main.go | godotenv pattern |
 | 3 | 345678 | already-fixed  | internal/scanner/scanner.go | fixed in abc1234 |
 ...
 ```

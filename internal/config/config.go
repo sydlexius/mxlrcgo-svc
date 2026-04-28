@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -15,6 +16,7 @@ type Config struct {
 	API    APIConfig    `toml:"api"`
 	Output OutputConfig `toml:"output"`
 	DB     DBConfig     `toml:"db"`
+	Server ServerConfig `toml:"server"`
 }
 
 // APIConfig holds API-related configuration.
@@ -33,12 +35,19 @@ type DBConfig struct {
 	Path string `toml:"path"`
 }
 
+// ServerConfig holds HTTP server configuration.
+type ServerConfig struct {
+	Addr           string   `toml:"addr"`
+	WebhookAPIKeys []string `toml:"webhook_api_keys"`
+}
+
 // defaults sets built-in fallback values.
 func defaults() Config {
 	return Config{
 		API:    APIConfig{Cooldown: 15},
 		Output: OutputConfig{Dir: "lyrics"},
-		DB:     DBConfig{Path: xdgDataPath("mxlrcsvc-go", "mxlrcsvc.db")},
+		DB:     DBConfig{Path: xdgDataPath("mxlrcgo-svc", "mxlrcgo.db")},
+		Server: ServerConfig{Addr: "127.0.0.1:3876"},
 	}
 }
 
@@ -47,7 +56,7 @@ func defaults() Config {
 func Load(path string) (Config, error) {
 	cfg := defaults()
 	if path == "" {
-		path = xdgConfigPath("mxlrcsvc-go", "config.toml")
+		path = xdgConfigPath("mxlrcgo-svc", "config.toml")
 	}
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
@@ -66,6 +75,9 @@ func Load(path string) (Config, error) {
 			if cfg.Output.Dir == "" {
 				cfg.Output.Dir = d.Output.Dir
 			}
+			if cfg.Server.Addr == "" {
+				cfg.Server.Addr = d.Server.Addr
+			}
 		} else if !os.IsNotExist(err) {
 			return cfg, fmt.Errorf("config: stat %s: %w", path, err)
 		}
@@ -80,7 +92,7 @@ func Load(path string) (Config, error) {
 // applyEnvOverrides overlays environment variables onto cfg.
 // Token precedence within env vars: MUSIXMATCH_TOKEN > MXLRC_API_TOKEN.
 // Cooldown precedence: MXLRC_API_COOLDOWN > MXLRC_COOLDOWN.
-// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH
+// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY
 func applyEnvOverrides(cfg *Config) {
 	// Token: MUSIXMATCH_TOKEN takes precedence over MXLRC_API_TOKEN (backward compat).
 	if v := os.Getenv("MUSIXMATCH_TOKEN"); v != "" {
@@ -111,6 +123,22 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("MXLRC_DB_PATH"); v != "" {
 		cfg.DB.Path = v
 	}
+	if v := os.Getenv("MXLRC_SERVER_ADDR"); v != "" {
+		cfg.Server.Addr = v
+	}
+	if v := os.Getenv("MXLRC_WEBHOOK_API_KEY"); v != "" {
+		cfg.Server.WebhookAPIKeys = splitCSV(v)
+	}
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // xdgConfigPath returns the XDG config path for the given app and file.

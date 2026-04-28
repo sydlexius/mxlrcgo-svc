@@ -26,7 +26,7 @@ base PR, restack before handling the next PR up the chain.
   without processing any reviews. Useful to see what would be reviewed.
 
 ```bash
-SESSION_PRS_FILE="/tmp/mxlrc-go-session-prs.txt"
+SESSION_PRS_FILE="/tmp/mxlrcgo-svc-session-prs.txt"
 
 if [ "$ARGUMENTS" = "--clear" ]; then
   rm -f "$SESSION_PRS_FILE"
@@ -86,7 +86,7 @@ session breadcrumb file. Other commands (`/prep-pr`, `/handle-review`) append PR
 numbers to this file as they push PRs, so it tracks exactly what was worked on.
 
 ```bash
-SESSION_PRS_FILE="/tmp/mxlrc-go-session-prs.txt"
+SESSION_PRS_FILE="/tmp/mxlrcgo-svc-session-prs.txt"
 
 if [ -f "$SESSION_PRS_FILE" ]; then
   # Read unique PR numbers, filter to still-open PRs
@@ -359,7 +359,7 @@ git push origin <branch_name>
 After a successful push, record the PR number in the session breadcrumb file:
 
 ```bash
-SESSION_PRS_FILE="/tmp/mxlrc-go-session-prs.txt"
+SESSION_PRS_FILE="/tmp/mxlrcgo-svc-session-prs.txt"
 echo "<PR>" >> "$SESSION_PRS_FILE"
 ```
 

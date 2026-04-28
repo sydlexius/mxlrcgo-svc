@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sydlexius/mxlrcsvc-go/internal/models"
-	"github.com/sydlexius/mxlrcsvc-go/internal/scan"
-	"github.com/sydlexius/mxlrcsvc-go/internal/scanner"
+	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
+	"github.com/sydlexius/mxlrcgo-svc/internal/scanner"
 )
 
 type fakeLibraries struct {

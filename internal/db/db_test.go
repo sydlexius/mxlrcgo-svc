@@ -26,7 +26,7 @@ func TestOpen_CreatesDatabaseAndAppliesMigrations(t *testing.T) {
 	})
 
 	// Verify expected tables were created by the migration.
-	tables := []string{"libraries", "scan_results", "lyrics_cache", "work_queue", "api_keys"}
+	tables := []string{"libraries", "scan_results", "lyrics_cache", "work_queue", "api_keys", "api_key_metadata"}
 	for _, tbl := range tables {
 		var count int
 		row := sqlDB.QueryRowContext(ctx,

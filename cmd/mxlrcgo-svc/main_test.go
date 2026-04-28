@@ -192,8 +192,8 @@ func TestRunWithOptions_CLIPrecedenceAndPairInput(t *testing.T) {
 	if rec.findCalls != 0 {
 		t.Fatalf("FindLyrics calls = %d; want 0", rec.findCalls)
 	}
-	if _, err := os.Stat(dbPath); err != nil {
-		t.Fatalf("stat db path: %v", err)
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("stat db path error = %v; want not exist for standalone fetch", err)
 	}
 }
 
@@ -315,5 +315,167 @@ func TestRunWithOptions_TextFileInputSetup(t *testing.T) {
 		if v.Outdir != outdir {
 			t.Fatalf("input outdir = %q; want %q", v.Outdir, outdir)
 		}
+	}
+}
+
+func TestRunWithOptions_FetchSubcommandUsesOneShotPath(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state", "test.db")
+	cfg := writeConfig(t, "config-token", 4, filepath.Join(dir, "out"), dbPath)
+
+	rec := &runRecord{}
+	code := runStartup(t, []string{"fetch", "--config", cfg, "Artist,Title"}, rec)
+	if code != 0 {
+		t.Fatalf("run exit code = %d; want 0", code)
+	}
+	if rec.token != "config-token" {
+		t.Fatalf("token = %q; want config token", rec.token)
+	}
+	if rec.cooldown != 4 {
+		t.Fatalf("cooldown = %d; want 4", rec.cooldown)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("stat db path error = %v; want not exist for fetch subcommand", err)
+	}
+}
+
+func TestRunWithOptions_LegacyFlagValueNamedFetchIsNotSubcommand(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+
+	rec := &runRecord{}
+	code := runStartup(t, []string{"--config", cfg, "--token", "fetch", "Artist,Title"}, rec)
+	if code != 0 {
+		t.Fatalf("run exit code = %d; want 0", code)
+	}
+	if rec.token != "fetch" {
+		t.Fatalf("token = %q; want legacy flag value", rec.token)
+	}
+}
+
+func TestRunWithOptions_ServeSubcommandRequiresToken(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+
+	code := runWithOptions(runOptions{
+		args:       []string{"serve", "--config", cfg},
+		loadDotenv: func() error { return nil },
+	})
+	if code == 0 {
+		t.Fatal("run exit code = 0; want missing-token failure")
+	}
+}
+
+func TestRunWithOptions_LibrarySubcommands(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+	libPath := filepath.Join(dir, "music")
+	if err := os.Mkdir(libPath, 0o750); err != nil {
+		t.Fatalf("mkdir library: %v", err)
+	}
+
+	var out bytes.Buffer
+	code := runWithOptions(runOptions{args: []string{"library", "add", libPath, "--name", "Music", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("library add exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "Music") || !strings.Contains(out.String(), libPath) {
+		t.Fatalf("library add output = %q; want name and path", out.String())
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{args: []string{"library", "list", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("library list exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "Music") {
+		t.Fatalf("library list output = %q; want Music", out.String())
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{args: []string{"library", "remove", "1", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("library remove exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "removed library 1") {
+		t.Fatalf("library remove output = %q; want removed message", out.String())
+	}
+}
+
+func TestRunWithOptions_KeySubcommands(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+
+	var out bytes.Buffer
+	code := runWithOptions(runOptions{args: []string{"keys", "create", "--name", "webhook", "--scope", "webhook", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("keys create exit code = %d; want 0", code)
+	}
+	raw := strings.TrimSpace(out.String())
+	if !strings.HasPrefix(raw, "mxlrc_") {
+		t.Fatalf("created key = %q; want mxlrc_ prefix", raw)
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{args: []string{"keys", "list", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("keys list exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "webhook") {
+		t.Fatalf("keys list output = %q; want webhook", out.String())
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{args: []string{"keys", "revoke", raw, "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("keys revoke exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "revoked") {
+		t.Fatalf("keys revoke output = %q; want revoked", out.String())
+	}
+}
+
+func TestRunWithOptions_ConfigSubcommands(t *testing.T) {
+	isolateCLIEnv(t)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+
+	var out bytes.Buffer
+	code := runWithOptions(runOptions{args: []string{"config", "set", "api.cooldown", "3", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("config set exit code = %d; want 0", code)
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{args: []string{"config", "get", "api.cooldown", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("config get exit code = %d; want 0", code)
+	}
+	if strings.TrimSpace(out.String()) != "3" {
+		t.Fatalf("config get output = %q; want 3", out.String())
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{args: []string{"config", "list", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("config list exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "api.cooldown=3") {
+		t.Fatalf("config list output = %q; want api.cooldown", out.String())
+	}
+}
+
+func TestRunWithOptions_ScanSubcommand(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+
+	code := runWithOptions(runOptions{args: []string{"scan", "--config", cfg}, loadDotenv: func() error { return nil }})
+	if code != 0 {
+		t.Fatalf("scan exit code = %d; want 0", code)
 	}
 }

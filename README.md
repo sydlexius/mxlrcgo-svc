@@ -17,30 +17,25 @@ go install github.com/sydlexius/mxlrcgo-svc/cmd/mxlrcgo-svc@latest
 
 ## Usage
 ```text
-Usage: mxlrcgo-svc [--outdir OUTDIR] [--cooldown COOLDOWN] [--depth DEPTH] [--update] [--upgrade] [--bfs] [--serve] [--listen LISTEN] [--token TOKEN] [--config CONFIG] [SONG ...]
+Usage: mxlrcgo-svc [fetch|serve|scan|library|keys|config]
 
-Positional arguments:
-  SONG                        song information in [ artist,title ] format, a .txt file, or a directory path
+Commands:
+  fetch     fetch lyrics once without HTTP server or DB queue
+  serve     run HTTP server, worker, and library scheduler
+  scan      scan configured libraries and enqueue missing lyrics
+  library   manage library roots
+  keys      manage API keys
+  config    inspect or update configuration
 
-Options:
-  --outdir OUTDIR, -o OUTDIR  output directory (default: from config or 'lyrics')
-  --cooldown COOLDOWN, -c COOLDOWN
-                              cooldown time in seconds (default: from config or 15)
-  --depth DEPTH, -d DEPTH     (directory mode) maximum recursion depth [default: 100]
-  --update, -u                (directory mode) re-fetch and overwrite existing .lrc files
-  --upgrade                   (directory mode) re-fetch songs with .txt lyrics to promote to .lrc
-  --bfs                       (directory mode) use breadth-first-search traversal
-  --serve                     run HTTP server mode
-  --listen LISTEN             HTTP listen address (default: from config or 127.0.0.1:3876)
-  --token TOKEN, -t TOKEN     musixmatch token (or MUSIXMATCH_TOKEN / MXLRC_API_TOKEN env var, or config file)
-  --config CONFIG             path to config file (default: XDG)
-  --help, -h                  display this help and exit
+Legacy flag-only invocation is still supported:
+  mxlrcgo-svc [--outdir OUTDIR] [--cooldown COOLDOWN] [--depth DEPTH] [--update] [--upgrade] [--bfs] [--serve] [--listen LISTEN] [--token TOKEN] [--config CONFIG] [SONG ...]
 ```
 
 ## Example:
 ### One song
 ```sh
 mxlrcgo-svc adele,hello
+mxlrcgo-svc fetch adele,hello
 ```
 ### Multiple song and custom output directory
 ```sh
@@ -61,9 +56,20 @@ mxlrcgo-svc "Dream Theater"
 ### Lidarr webhook server
 ```sh
 MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key mxlrcgo-svc --serve --listen 127.0.0.1:3876
+mxlrcgo-svc serve --listen 127.0.0.1:3876
 ```
 
-The server listens on `MXLRC_SERVER_ADDR` when `--listen` is not provided. Configure one or more webhook keys with `MXLRC_WEBHOOK_API_KEY`, or put the server address and webhook keys in a config file and start with `--config path/to/config.toml --serve`.
+The server listens on `MXLRC_SERVER_ADDR` when `--listen` is not provided. Configure one or more webhook keys with `MXLRC_WEBHOOK_API_KEY`, use `mxlrcgo-svc keys create`, or put the server address and webhook keys in a config file and start with `mxlrcgo-svc serve --config path/to/config.toml`.
+
+### Library and key management
+```sh
+mxlrcgo-svc library add /music --name Music
+mxlrcgo-svc library list
+mxlrcgo-svc scan
+mxlrcgo-svc keys create --name lidarr --scope webhook
+mxlrcgo-svc keys list
+mxlrcgo-svc config get db.path
+```
 
 ## Development
 

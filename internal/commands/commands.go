@@ -482,6 +482,7 @@ func newVerifier(cfg config.Config) (verification.Verifier, error) {
 		cfg.Verification.WhisperURL,
 		cfg.Verification.SampleDurationSeconds,
 		cfg.Verification.MinSimilarity,
+		cfg.Verification.FFmpegPath,
 	)
 }
 
@@ -803,6 +804,7 @@ func configKeys() []string {
 		"providers.disabled",
 		"verification.enabled",
 		"verification.whisper_url",
+		"verification.ffmpeg_path",
 		"verification.sample_duration_seconds",
 		"verification.min_confidence",
 		"verification.min_similarity",
@@ -831,6 +833,8 @@ func configValue(cfg config.Config, key string) (string, bool) {
 		return strconv.FormatBool(cfg.Verification.Enabled), true
 	case "verification.whisper_url":
 		return cfg.Verification.WhisperURL, true
+	case "verification.ffmpeg_path":
+		return cfg.Verification.FFmpegPath, true
 	case "verification.sample_duration_seconds":
 		return strconv.Itoa(cfg.Verification.SampleDurationSeconds), true
 	case "verification.min_confidence":
@@ -872,6 +876,11 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		cfg.Verification.Enabled = v
 	case "verification.whisper_url":
 		cfg.Verification.WhisperURL = value
+	case "verification.ffmpeg_path":
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("verification.ffmpeg_path must not be empty")
+		}
+		cfg.Verification.FFmpegPath = value
 	case "verification.sample_duration_seconds":
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {

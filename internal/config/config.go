@@ -53,6 +53,7 @@ type ProvidersConfig struct {
 type VerificationConfig struct {
 	Enabled               bool    `toml:"enabled"`
 	WhisperURL            string  `toml:"whisper_url"`
+	FFmpegPath            string  `toml:"ffmpeg_path"`
 	SampleDurationSeconds int     `toml:"sample_duration_seconds"`
 	MinConfidence         float64 `toml:"min_confidence"`
 	MinSimilarity         float64 `toml:"min_similarity"`
@@ -66,7 +67,7 @@ func defaults() Config {
 		DB:           DBConfig{Path: xdgDataPath("mxlrcgo-svc", "mxlrcgo.db")},
 		Server:       ServerConfig{Addr: "127.0.0.1:3876"},
 		Providers:    ProvidersConfig{Primary: "musixmatch"},
-		Verification: VerificationConfig{SampleDurationSeconds: 30, MinConfidence: 0.85, MinSimilarity: 0.35},
+		Verification: VerificationConfig{FFmpegPath: "ffmpeg", SampleDurationSeconds: 30, MinConfidence: 0.85, MinSimilarity: 0.35},
 	}
 }
 
@@ -103,6 +104,9 @@ func Load(path string) (Config, error) {
 			if cfg.Verification.SampleDurationSeconds <= 0 {
 				cfg.Verification.SampleDurationSeconds = d.Verification.SampleDurationSeconds
 			}
+			if cfg.Verification.FFmpegPath == "" {
+				cfg.Verification.FFmpegPath = d.Verification.FFmpegPath
+			}
 			if cfg.Verification.MinConfidence <= 0 || cfg.Verification.MinConfidence > 1 {
 				cfg.Verification.MinConfidence = d.Verification.MinConfidence
 			}
@@ -123,7 +127,7 @@ func Load(path string) (Config, error) {
 // applyEnvOverrides overlays environment variables onto cfg.
 // Token precedence within env vars: MUSIXMATCH_TOKEN > MXLRC_API_TOKEN.
 // Cooldown precedence: MXLRC_API_COOLDOWN > MXLRC_COOLDOWN.
-// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY, MXLRC_PROVIDER_PRIMARY, MXLRC_PROVIDERS_DISABLED, MXLRC_VERIFICATION_ENABLED, MXLRC_VERIFICATION_WHISPER_URL, MXLRC_WHISPER_URL, MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS, MXLRC_VERIFICATION_SAMPLE_DURATION, MXLRC_VERIFICATION_MIN_CONFIDENCE, MXLRC_VERIFICATION_MIN_SIMILARITY
+// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY, MXLRC_PROVIDER_PRIMARY, MXLRC_PROVIDERS_DISABLED, MXLRC_VERIFICATION_ENABLED, MXLRC_VERIFICATION_WHISPER_URL, MXLRC_WHISPER_URL, MXLRC_VERIFICATION_FFMPEG_PATH, MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS, MXLRC_VERIFICATION_SAMPLE_DURATION, MXLRC_VERIFICATION_MIN_CONFIDENCE, MXLRC_VERIFICATION_MIN_SIMILARITY
 func applyEnvOverrides(cfg *Config) {
 	// Token: MUSIXMATCH_TOKEN takes precedence over MXLRC_API_TOKEN (backward compat).
 	if v := os.Getenv("MUSIXMATCH_TOKEN"); v != "" {
@@ -182,6 +186,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v != "" {
 		cfg.Verification.WhisperURL = v
+	}
+	if v := os.Getenv("MXLRC_VERIFICATION_FFMPEG_PATH"); v != "" {
+		cfg.Verification.FFmpegPath = v
 	}
 	sampleDurationVar := "MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS"
 	v = os.Getenv(sampleDurationVar)

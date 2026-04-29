@@ -3,10 +3,13 @@ package verification
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
@@ -57,6 +60,7 @@ func TestHTTPVerifierVerifyPostsAudioAndComparesTranscript(t *testing.T) {
 	if err := os.WriteFile(audioPath, []byte("fake audio"), 0600); err != nil {
 		t.Fatalf("write audio: %v", err)
 	}
+	ffmpegPath := fakeFFmpeg(t, `printf 'sampled audio' > "$last"`)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/audio/transcriptions" {
@@ -72,12 +76,19 @@ func TestHTTPVerifierVerifyPostsAudioAndComparesTranscript(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FormFile: %v", err)
 		}
+		b, err := io.ReadAll(f)
 		_ = f.Close()
+		if err != nil {
+			t.Fatalf("read form file: %v", err)
+		}
+		if string(b) != "sampled audio" {
+			t.Fatalf("uploaded audio = %q; want sampled audio", string(b))
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "hello world"})
 	}))
 	defer srv.Close()
 
-	v, err := NewHTTPVerifier(srv.URL, 45, 0.5)
+	v, err := NewHTTPVerifier(srv.URL, 45, 0.5, ffmpegPath)
 	if err != nil {
 		t.Fatalf("NewHTTPVerifier: %v", err)
 	}
@@ -95,6 +106,90 @@ func TestHTTPVerifierVerifyPostsAudioAndComparesTranscript(t *testing.T) {
 	}
 }
 
+func TestHTTPVerifierBuildsFFmpegSampleCommand(t *testing.T) {
+	got := ffmpegSampleArgs("song.flac", "sample.wav", 45)
+	want := []string{
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-y",
+		"-i", "song.flac",
+		"-t", "45",
+		"-vn",
+		"-ac", "1",
+		"-ar", "16000",
+		"sample.wav",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ffmpegSampleArgs = %#v; want %#v", got, want)
+	}
+}
+
+func TestNewHTTPVerifierErrorsWhenFFmpegMissing(t *testing.T) {
+	_, err := NewHTTPVerifier("http://whisper:9000", 30, 0.5, filepath.Join(t.TempDir(), "missing-ffmpeg"))
+	if err == nil {
+		t.Fatal("NewHTTPVerifier returned nil error; want missing ffmpeg error")
+	}
+}
+
+func TestHTTPVerifierCleansSampleAfterFFmpegFailure(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	ffmpegPath := fakeFFmpeg(t, `printf 'partial sample' > "$last"; exit 2`)
+	v, err := NewHTTPVerifier("http://whisper:9000", 30, 0.5, ffmpegPath)
+	if err != nil {
+		t.Fatalf("NewHTTPVerifier: %v", err)
+	}
+
+	_, err = v.Verify(context.Background(), audioPath, models.Song{
+		Lyrics: models.Lyrics{LyricsBody: "hello world lyrics"},
+	})
+	if err == nil {
+		t.Fatal("Verify returned nil error; want ffmpeg failure")
+	}
+	matches, err := filepath.Glob(filepath.Join(tmp, "mxlrcgo-svc-verify-*.wav"))
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("sample files after failure = %#v; want cleanup", matches)
+	}
+}
+
+func TestHTTPVerifierCleansSampleAfterContextCancellation(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	ffmpegPath := fakeFFmpeg(t, `printf 'sampled audio' > "$last"`)
+	v, err := NewHTTPVerifier("http://whisper:9000", 30, 0.5, ffmpegPath)
+	if err != nil {
+		t.Fatalf("NewHTTPVerifier: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = v.Verify(ctx, audioPath, models.Song{
+		Lyrics: models.Lyrics{LyricsBody: "hello world lyrics"},
+	})
+	if err == nil {
+		t.Fatal("Verify returned nil error; want context cancellation")
+	}
+	matches, err := filepath.Glob(filepath.Join(tmp, "mxlrcgo-svc-verify-*.wav"))
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("sample files after cancellation = %#v; want cleanup", matches)
+	}
+}
+
 func TestHTTPVerifierTranscriptionURL(t *testing.T) {
 	tests := map[string]string{
 		"http://whisper:9000":                         "http://whisper:9000/v1/audio/transcriptions",
@@ -103,8 +198,9 @@ func TestHTTPVerifierTranscriptionURL(t *testing.T) {
 		"http://whisper:9000/v1/":                     "http://whisper:9000/v1/audio/transcriptions",
 		"http://whisper:9000/v1/audio/transcriptions": "http://whisper:9000/v1/audio/transcriptions",
 	}
+	ffmpegPath := fakeFFmpeg(t, `printf 'sampled audio' > "$last"`)
 	for rawURL, want := range tests {
-		v, err := NewHTTPVerifier(rawURL, 30, 0.5)
+		v, err := NewHTTPVerifier(rawURL, 30, 0.5, ffmpegPath)
 		if err != nil {
 			t.Fatalf("NewHTTPVerifier(%q): %v", rawURL, err)
 		}
@@ -112,4 +208,14 @@ func TestHTTPVerifierTranscriptionURL(t *testing.T) {
 			t.Fatalf("transcriptionURL(%q) = %q; want %q", rawURL, got, want)
 		}
 	}
+}
+
+func fakeFFmpeg(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	script := "#!/bin/sh\nlast=''\nfor arg do\n  last=\"$arg\"\ndone\n" + strings.TrimSpace(body) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
+	}
+	return path
 }

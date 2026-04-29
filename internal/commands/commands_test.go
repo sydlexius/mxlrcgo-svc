@@ -48,6 +48,21 @@ func TestNewVerifierRequiresURLWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestNewVerifierDisabledDoesNotRequireFFmpeg(t *testing.T) {
+	got, err := newVerifier(config.Config{
+		Verification: config.VerificationConfig{
+			Enabled:    false,
+			FFmpegPath: "/path/that/does/not/exist",
+		},
+	})
+	if err != nil {
+		t.Fatalf("newVerifier: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("newVerifier = %#v; want nil", got)
+	}
+}
+
 func TestConfigureWorkerVerificationAcceptsNilVerifier(t *testing.T) {
 	w := worker.New(nil, nil, fakeFetcher{}, fakeWriter{})
 	configureWorkerVerification(w, config.Config{}, nil)
@@ -58,6 +73,7 @@ func TestVerificationConfigKeys(t *testing.T) {
 		Verification: config.VerificationConfig{
 			Enabled:               true,
 			WhisperURL:            "http://whisper:9000",
+			FFmpegPath:            "/usr/bin/ffmpeg",
 			SampleDurationSeconds: 45,
 			MinConfidence:         0.7,
 			MinSimilarity:         0.5,
@@ -66,6 +82,7 @@ func TestVerificationConfigKeys(t *testing.T) {
 	tests := map[string]string{
 		"verification.enabled":                 "true",
 		"verification.whisper_url":             "http://whisper:9000",
+		"verification.ffmpeg_path":             "/usr/bin/ffmpeg",
 		"verification.sample_duration_seconds": "45",
 		"verification.min_confidence":          "0.7",
 		"verification.min_similarity":          "0.5",
@@ -83,6 +100,18 @@ func TestVerificationConfigKeys(t *testing.T) {
 	if err := setConfigValue(&cfg, "verification.min_similarity", "0"); err == nil {
 		t.Fatal("setConfigValue accepted invalid verification.min_similarity")
 	}
+	if err := setConfigValue(&cfg, "verification.ffmpeg_path", " "); err == nil {
+		t.Fatal("setConfigValue accepted blank verification.ffmpeg_path")
+	}
+}
+
+func TestConfigKeysIncludesVerificationFFmpegPath(t *testing.T) {
+	for _, key := range configKeys() {
+		if key == "verification.ffmpeg_path" {
+			return
+		}
+	}
+	t.Fatal("configKeys missing verification.ffmpeg_path")
 }
 
 var _ lyrics.Writer = fakeWriter{}

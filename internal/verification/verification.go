@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -36,11 +38,12 @@ type HTTPVerifier struct {
 	baseURL               string
 	sampleDurationSeconds int
 	minSimilarity         float64
+	ffmpegPath            string
 	client                *http.Client
 }
 
 // NewHTTPVerifier creates a verifier for an OpenAI-compatible transcription API.
-func NewHTTPVerifier(baseURL string, sampleDurationSeconds int, minSimilarity float64) (*HTTPVerifier, error) {
+func NewHTTPVerifier(baseURL string, sampleDurationSeconds int, minSimilarity float64, ffmpegPath string) (*HTTPVerifier, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		return nil, fmt.Errorf("verification: whisper_url must not be empty")
@@ -54,10 +57,19 @@ func NewHTTPVerifier(baseURL string, sampleDurationSeconds int, minSimilarity fl
 	if minSimilarity <= 0 || minSimilarity > 1 {
 		minSimilarity = 0.35
 	}
+	ffmpegPath = strings.TrimSpace(ffmpegPath)
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+	resolvedFFmpegPath, err := exec.LookPath(ffmpegPath)
+	if err != nil {
+		return nil, fmt.Errorf("verification: ffmpeg unavailable at %q: %w", ffmpegPath, err)
+	}
 	return &HTTPVerifier{
 		baseURL:               strings.TrimRight(baseURL, "/"),
-		sampleDurationSeconds: sampleDurationSeconds, // reserved for ffmpeg sampling before upload
+		sampleDurationSeconds: sampleDurationSeconds,
 		minSimilarity:         minSimilarity,
+		ffmpegPath:            resolvedFFmpegPath,
 		client:                &http.Client{Timeout: 2 * time.Minute},
 	}, nil
 }
@@ -71,7 +83,14 @@ func (v *HTTPVerifier) Verify(ctx context.Context, audioPath string, song models
 	if lyrics == "" {
 		return Result{}, fmt.Errorf("verification: lyrics text is empty")
 	}
-	transcript, err := v.transcribe(ctx, audioPath)
+	samplePath, err := v.sample(ctx, audioPath)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		_ = os.Remove(samplePath)
+	}()
+	transcript, err := v.transcribe(ctx, samplePath)
 	if err != nil {
 		return Result{}, err
 	}
@@ -81,6 +100,48 @@ func (v *HTTPVerifier) Verify(ctx context.Context, audioPath string, song models
 		Similarity: similarity,
 		Transcript: transcript,
 	}, nil
+}
+
+func (v *HTTPVerifier) sample(ctx context.Context, audioPath string) (_ string, retErr error) {
+	f, err := os.CreateTemp("", "mxlrcgo-svc-verify-*.wav")
+	if err != nil {
+		return "", fmt.Errorf("verification: create sample file: %w", err)
+	}
+	samplePath := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(samplePath)
+		return "", fmt.Errorf("verification: close sample file: %w", err)
+	}
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(samplePath)
+		}
+	}()
+
+	cmd := exec.CommandContext(ctx, v.ffmpegPath, ffmpegSampleArgs(audioPath, samplePath, v.sampleDurationSeconds)...) //nolint:gosec // ffmpeg path is configured and validated; audio path is a scanned user file
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("verification: sample audio: %w", ctxErr)
+		}
+		return "", fmt.Errorf("verification: sample audio with ffmpeg: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return samplePath, nil
+}
+
+func ffmpegSampleArgs(audioPath, samplePath string, durationSeconds int) []string {
+	return []string{
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-y",
+		"-i", audioPath,
+		"-t", strconv.Itoa(durationSeconds),
+		"-vn",
+		"-ac", "1",
+		"-ar", "16000",
+		samplePath,
+	}
 }
 
 func (v *HTTPVerifier) transcribe(ctx context.Context, audioPath string) (text string, err error) {

@@ -11,7 +11,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 
 - **Binary name**: `mxlrcgo-svc` (matches new module name)
 - **No CGO**: Must remain CGO_ENABLED=0 for cross-compilation
-- **Go 1.25+**: Minimum Go version per go.mod
+- **Go 1.26.2+**: Minimum Go version per go.mod
 - **Behavior preservation**: All existing CLI flags and behaviors must work identically after restructuring
 - **Token precedence**: CLI flag > environment variable (`MUSIXMATCH_TOKEN`) > `.env` file
 <!-- GSD:project-end -->
@@ -20,7 +20,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 ## Technology Stack
 
 ## Languages
-- Go 1.25 (minimum, per `go.mod`) - All application code
+- Go 1.26.2 (minimum, per `go.mod`) - All application code
 - Bash - Pre-commit hooks (`.githooks/pre-commit`), Makefile targets
 - YAML - CI/CD workflows (`.github/workflows/`), configuration files
 ## Runtime
@@ -61,7 +61,7 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - `.pre-commit-config.yaml` - Pre-commit framework hooks: trailing-whitespace, end-of-file-fixer, check-yaml, check-added-large-files (500KB), check-merge-conflict, typos, gitleaks, golangci-lint, gofmt, conventional-pre-commit
 - `.githooks/pre-commit` - Manual pre-commit hook: typos, gofmt, go build, golangci-lint, govulncheck
 ## Platform Requirements
-- Go 1.25+
+- Go 1.26.2+
 - golangci-lint v2.11+ (for linting)
 - typos-cli (for spell checking)
 - govulncheck (for vulnerability scanning)

@@ -12,7 +12,7 @@ Command line tool to fetch synced lyrics from [Musixmatch](https://www.musixmatc
 **TBA**
 
 ### Build from source
-Required Go 1.25+
+Required Go 1.26.2+
 ```sh
 go install github.com/sydlexius/mxlrcgo-svc/cmd/mxlrcgo-svc@latest
 ```
@@ -77,14 +77,15 @@ disabled = []
 [verification]
 enabled = false
 whisper_url = ""
+ffmpeg_path = "ffmpeg"
 sample_duration_seconds = 30
 min_confidence = 0.85
 min_similarity = 0.35
 ```
 
-Environment variables override the TOML file: `MXLRC_PROVIDER_PRIMARY`, `MXLRC_PROVIDERS_DISABLED`, `MXLRC_VERIFICATION_ENABLED`, `MXLRC_VERIFICATION_WHISPER_URL`, `MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS`, `MXLRC_VERIFICATION_MIN_CONFIDENCE`, and `MXLRC_VERIFICATION_MIN_SIMILARITY`. `MXLRC_WHISPER_URL` and `MXLRC_VERIFICATION_SAMPLE_DURATION` remain accepted as legacy aliases.
+Environment variables override the TOML file: `MXLRC_PROVIDER_PRIMARY`, `MXLRC_PROVIDERS_DISABLED`, `MXLRC_VERIFICATION_ENABLED`, `MXLRC_VERIFICATION_WHISPER_URL`, `MXLRC_VERIFICATION_FFMPEG_PATH`, `MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS`, `MXLRC_VERIFICATION_MIN_CONFIDENCE`, and `MXLRC_VERIFICATION_MIN_SIMILARITY`. `MXLRC_WHISPER_URL` and `MXLRC_VERIFICATION_SAMPLE_DURATION` remain accepted as legacy aliases.
 
-When verification is enabled, the worker calls a Whisper-compatible `/v1/audio/transcriptions` sidecar for scanned audio whose Musixmatch metadata confidence is below `min_confidence`. The transcript must overlap the candidate lyrics by at least `min_similarity`. `sample_duration_seconds` is reserved for the ffmpeg sampling follow-up and is not sent to the Whisper-compatible API.
+When verification is enabled, `ffmpeg` must be installed or `ffmpeg_path` must point to an executable ffmpeg binary. The worker extracts a bounded mono 16 kHz WAV sample using `sample_duration_seconds`, then sends that sample to a Whisper-compatible `/v1/audio/transcriptions` sidecar for scanned audio whose Musixmatch metadata confidence is below `min_confidence`. The transcript must overlap the candidate lyrics by at least `min_similarity`.
 
 ### Library and key management
 ```sh

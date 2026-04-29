@@ -19,6 +19,7 @@ func isolateEnv(t *testing.T) {
 		"MXLRC_OUTPUT_DIR", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
 		"MXLRC_PROVIDER_PRIMARY", "MXLRC_PROVIDERS_DISABLED",
 		"MXLRC_VERIFICATION_ENABLED", "MXLRC_VERIFICATION_WHISPER_URL", "MXLRC_WHISPER_URL",
+		"MXLRC_VERIFICATION_FFMPEG_PATH",
 		"MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS", "MXLRC_VERIFICATION_SAMPLE_DURATION",
 		"MXLRC_VERIFICATION_MIN_CONFIDENCE", "MXLRC_VERIFICATION_MIN_SIMILARITY",
 		"MXLRC_DOCKER",
@@ -55,6 +56,9 @@ func TestLoad_MissingConfigFileIsNotFatal(t *testing.T) {
 	}
 	if cfg.Verification.MinConfidence != 0.85 {
 		t.Errorf("default verification min confidence = %v; want 0.85", cfg.Verification.MinConfidence)
+	}
+	if cfg.Verification.FFmpegPath != "ffmpeg" {
+		t.Errorf("default verification ffmpeg path = %q; want ffmpeg", cfg.Verification.FFmpegPath)
 	}
 	if cfg.Verification.MinSimilarity != 0.35 {
 		t.Errorf("default verification min similarity = %v; want 0.35", cfg.Verification.MinSimilarity)
@@ -307,6 +311,7 @@ func TestLoad_ProvidersAndVerificationFromFileAndEnv(t *testing.T) {
 		"[verification]\n" +
 		"enabled = true\n" +
 		"whisper_url = \"http://whisper:9000\"\n" +
+		"ffmpeg_path = \"/usr/bin/ffmpeg\"\n" +
 		"sample_duration_seconds = 45\n" +
 		"min_confidence = 0.8\n" +
 		"min_similarity = 0.4\n"
@@ -318,6 +323,7 @@ func TestLoad_ProvidersAndVerificationFromFileAndEnv(t *testing.T) {
 	t.Setenv("MXLRC_VERIFICATION_ENABLED", "false")
 	t.Setenv("MXLRC_VERIFICATION_WHISPER_URL", "http://env-whisper:9000")
 	t.Setenv("MXLRC_WHISPER_URL", "http://legacy-whisper:9000")
+	t.Setenv("MXLRC_VERIFICATION_FFMPEG_PATH", "/opt/ffmpeg")
 	t.Setenv("MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS", "60")
 	t.Setenv("MXLRC_VERIFICATION_SAMPLE_DURATION", "45")
 	t.Setenv("MXLRC_VERIFICATION_MIN_CONFIDENCE", "0.7")
@@ -341,6 +347,9 @@ func TestLoad_ProvidersAndVerificationFromFileAndEnv(t *testing.T) {
 	}
 	if cfg.Verification.SampleDurationSeconds != 60 {
 		t.Fatalf("verification.sample_duration_seconds = %d; want 60", cfg.Verification.SampleDurationSeconds)
+	}
+	if cfg.Verification.FFmpegPath != "/opt/ffmpeg" {
+		t.Fatalf("verification.ffmpeg_path = %q; want env value", cfg.Verification.FFmpegPath)
 	}
 	if cfg.Verification.MinConfidence != 0.7 {
 		t.Fatalf("verification.min_confidence = %v; want 0.7", cfg.Verification.MinConfidence)

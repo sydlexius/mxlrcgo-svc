@@ -17,6 +17,7 @@ func isolateEnv(t *testing.T) {
 		"MUSIXMATCH_TOKEN", "MXLRC_API_TOKEN",
 		"MXLRC_API_COOLDOWN", "MXLRC_COOLDOWN",
 		"MXLRC_OUTPUT_DIR", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
+		"MXLRC_DOCKER",
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME",
 	} {
 		// t.Setenv("", "") clears the variable; applyEnvOverrides uses os.Getenv
@@ -212,6 +213,46 @@ func TestLoad_DBPathFromEnv(t *testing.T) {
 	}
 	if cfg.DB.Path != want {
 		t.Errorf("DB.Path = %q; want %q", cfg.DB.Path, want)
+	}
+}
+
+func TestLoad_DockerModeUsesConfigForStorageDefaults(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("MXLRC_DOCKER", "true")
+	t.Setenv("MXLRC_DB_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DB.Path != filepath.Join("/config", "mxlrcgo.db") {
+		t.Errorf("DB.Path = %q; want Docker /config DB path", cfg.DB.Path)
+	}
+}
+
+func TestDockerModeAcceptedValues(t *testing.T) {
+	isolateEnv(t)
+
+	t.Setenv("MXLRC_DOCKER", "1")
+	if !dockerMode() {
+		t.Fatal("dockerMode false for MXLRC_DOCKER=1; want true")
+	}
+
+	t.Setenv("MXLRC_DOCKER", "TRUE")
+	if !dockerMode() {
+		t.Fatal("dockerMode false for MXLRC_DOCKER=TRUE; want true")
+	}
+
+	t.Setenv("MXLRC_DOCKER", "  true  ")
+	if !dockerMode() {
+		t.Fatal("dockerMode false for spaced MXLRC_DOCKER=true; want true")
+	}
+
+	t.Setenv("MXLRC_DOCKER", "false")
+	if dockerMode() {
+		t.Fatal("dockerMode true for MXLRC_DOCKER=false; want false")
 	}
 }
 

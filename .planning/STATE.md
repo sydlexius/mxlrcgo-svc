@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.6.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Renamed project to mxlrcgo-svc
-last_updated: "2026-04-27T20:15:00Z"
+stopped_at: Docker and Unraid packaging for issue #24
+last_updated: "2026-04-28T23:45:00Z"
 last_activity: 2026-04-27
 progress:
   total_phases: 4
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 Phase: 4 of 4 (Build Verification)
 Plan: 3 of 3 in current phase
 Status: Quick milestone work in progress
-Last activity: 2026-04-27 - Renamed project to mxlrcgo-svc and cleaned merged local branches
+Last activity: 2026-04-28 - Added Docker and Unraid packaging for issue #24
 
 Progress: [██████████] 100%
 
@@ -103,9 +103,10 @@ None yet.
 | 260428-review-pr53-followup | PR 53 follow-up review fixes | 2026-04-28 | pending | [260428-review-pr53-followup](./quick/260428-review-pr53-followup/) |
 | 260428-review-pr53-followup2 | PR 53 second follow-up review fixes | 2026-04-28 | pending | [260428-review-pr53-followup2](./quick/260428-review-pr53-followup2/) |
 | 260428-review-pr53-followup3 | PR 53 third follow-up review fixes | 2026-04-28 | pending | [260428-review-pr53-followup3](./quick/260428-review-pr53-followup3/) |
+| 260428-issue-24 | Dockerfile, compose example, and Unraid template | 2026-04-28 | pending | [260428-issue-24-docker-unraid](./quick/260428-issue-24-docker-unraid/) |
 
 ## Session Continuity
 
-Last session: 2026-04-27T20:15:00Z
-Stopped at: Renamed project to mxlrcgo-svc and cleaned merged local branches
+Last session: 2026-04-28T23:45:00Z
+Stopped at: Docker and Unraid packaging for issue #24
 Resume file: None

@@ -144,6 +144,9 @@ func splitCSV(s string) []string {
 // xdgConfigPath returns the XDG config path for the given app and file.
 // Returns "" if the home directory cannot be determined.
 func xdgConfigPath(app, file string) string {
+	if dockerMode() {
+		return filepath.Join("/config", file)
+	}
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -162,6 +165,9 @@ func xdgConfigPath(app, file string) string {
 // xdgDataPath returns the XDG data path for the given app and file.
 // Returns "" if the home directory cannot be determined and not running in Docker.
 func xdgDataPath(app, file string) string {
+	if dockerMode() {
+		return filepath.Join("/config", file)
+	}
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -175,4 +181,9 @@ func xdgDataPath(app, file string) string {
 		base = filepath.Join(home, ".local", "share")
 	}
 	return filepath.Join(base, app, file)
+}
+
+func dockerMode() bool {
+	v := strings.TrimSpace(os.Getenv("MXLRC_DOCKER"))
+	return strings.EqualFold(v, "true") || v == "1"
 }

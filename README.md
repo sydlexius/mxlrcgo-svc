@@ -71,6 +71,36 @@ mxlrcgo-svc keys list
 mxlrcgo-svc config get db.path
 ```
 
+## Docker
+
+The container runs the webhook service on port `50705` and stores its config and SQLite database under `/config`. Mount your music library at `/music`.
+
+```sh
+docker run -d \
+  --name mxlrcgo-svc \
+  -p 50705:50705 \
+  -e MUSIXMATCH_TOKEN=YOUR_TOKEN \
+  -e MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key \
+  -e PUID=99 \
+  -e PGID=100 \
+  -v mxlrcgo-svc-config:/config \
+  -v /path/to/your/music:/music:rw \
+  --restart unless-stopped \
+  ghcr.io/sydlexius/mxlrcgo-svc:latest
+```
+
+For Compose, copy `docker-compose.example.yml`, set `MUSIXMATCH_TOKEN` and `MXLRC_WEBHOOK_API_KEY`, adjust the music volume, then run:
+
+```sh
+docker compose up -d
+```
+
+`MXLRC_DOCKER=true` makes default storage paths resolve to `/config/config.toml` and `/config/mxlrcgo.db`.
+
+## Unraid
+
+An Unraid Community Applications template is provided at `unraid/mxlrcgo-svc.xml`. It follows the same template conventions as the `sydlexius/unraid-templates` repository: GHCR image, bridge networking, `/config` appdata, `/music` library mapping, and advanced `PUID`/`PGID` permission fields.
+
 ## Development
 
 Run the lightweight CLI smoke test:

@@ -32,6 +32,11 @@ func NewClient(token string) *Client {
 	}
 }
 
+// Name returns the provider name.
+func (c *Client) Name() string {
+	return "musixmatch"
+}
+
 // FindLyrics looks up lyrics for the given track from the Musixmatch API.
 func (c *Client) FindLyrics(ctx context.Context, track models.Track) (models.Song, error) {
 	song := models.Song{}

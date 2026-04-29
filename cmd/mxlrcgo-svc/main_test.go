@@ -58,6 +58,10 @@ func isolateCLIEnv(t *testing.T) {
 		"MUSIXMATCH_TOKEN", "MXLRC_API_TOKEN",
 		"MXLRC_API_COOLDOWN", "MXLRC_COOLDOWN",
 		"MXLRC_OUTPUT_DIR", "MXLRC_DB_PATH", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
+		"MXLRC_PROVIDER_PRIMARY", "MXLRC_PROVIDERS_DISABLED",
+		"MXLRC_VERIFICATION_ENABLED", "MXLRC_VERIFICATION_WHISPER_URL", "MXLRC_WHISPER_URL",
+		"MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS", "MXLRC_VERIFICATION_SAMPLE_DURATION",
+		"MXLRC_VERIFICATION_MIN_CONFIDENCE", "MXLRC_VERIFICATION_MIN_SIMILARITY",
 	} {
 		t.Setenv(v, "")
 	}
@@ -283,6 +287,38 @@ func TestRunWithOptions_MissingTokenFailsBeforeAppRun(t *testing.T) {
 	}
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
 		t.Fatalf("stat db path error = %v; want not exist", err)
+	}
+}
+
+func TestRunWithOptions_DisabledConfiguredProviderFailsBeforeAppRun(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+	t.Setenv("MXLRC_PROVIDERS_DISABLED", "musixmatch")
+
+	rec := &runRecord{}
+	code := runStartup(t, []string{"--config", cfg, "Artist,Title"}, rec)
+	if code == 0 {
+		t.Fatal("run exit code = 0; want provider failure")
+	}
+	if rec.appCreated {
+		t.Fatal("app was created; want disabled provider to stop startup before app creation")
+	}
+}
+
+func TestRunWithOptions_UnsupportedConfiguredProviderFailsBeforeAppRun(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+	t.Setenv("MXLRC_PROVIDER_PRIMARY", "future")
+
+	rec := &runRecord{}
+	code := runStartup(t, []string{"--config", cfg, "Artist,Title"}, rec)
+	if code == 0 {
+		t.Fatal("run exit code = 0; want provider failure")
+	}
+	if rec.appCreated {
+		t.Fatal("app was created; want unsupported provider to stop startup before app creation")
 	}
 }
 

@@ -112,9 +112,10 @@ func scanInputs(res models.ScanResult) (models.Inputs, error) {
 		return models.Inputs{}, fmt.Errorf("invalid scan result: missing file path and output destination")
 	}
 	return models.Inputs{
-		Track:    res.Track,
-		Outdir:   outdir,
-		Filename: filename,
+		Track:      res.Track,
+		Outdir:     outdir,
+		Filename:   filename,
+		SourcePath: res.FilePath,
 		OutputPaths: []models.OutputPath{{
 			Outdir:   outdir,
 			Filename: filename,

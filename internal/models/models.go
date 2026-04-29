@@ -47,6 +47,7 @@ type Inputs struct {
 	Track       Track
 	Outdir      string
 	Filename    string
+	SourcePath  string
 	OutputPaths []OutputPath
 }
 

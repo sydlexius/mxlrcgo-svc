@@ -104,6 +104,9 @@ func TestEnqueuer_EnqueuePendingSkipsCacheHitsAndEnqueuesMisses(t *testing.T) {
 	if got.Track.ArtistName != "Missing" || got.OutputPaths[0].Filename != "missing.lrc" {
 		t.Fatalf("enqueued input = %+v; want Missing/missing.lrc", got)
 	}
+	if got.SourcePath != "/music/missing.mp3" {
+		t.Fatalf("source path = %q; want scan result file path", got.SourcePath)
+	}
 	if len(store.status) != 2 {
 		t.Fatalf("status calls = %+v; want done and processing calls", store.status)
 	}

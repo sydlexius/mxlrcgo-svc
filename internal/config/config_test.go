@@ -17,6 +17,10 @@ func isolateEnv(t *testing.T) {
 		"MUSIXMATCH_TOKEN", "MXLRC_API_TOKEN",
 		"MXLRC_API_COOLDOWN", "MXLRC_COOLDOWN",
 		"MXLRC_OUTPUT_DIR", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
+		"MXLRC_PROVIDER_PRIMARY", "MXLRC_PROVIDERS_DISABLED",
+		"MXLRC_VERIFICATION_ENABLED", "MXLRC_VERIFICATION_WHISPER_URL", "MXLRC_WHISPER_URL",
+		"MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS", "MXLRC_VERIFICATION_SAMPLE_DURATION",
+		"MXLRC_VERIFICATION_MIN_CONFIDENCE", "MXLRC_VERIFICATION_MIN_SIMILARITY",
 		"MXLRC_DOCKER",
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME",
 	} {
@@ -42,6 +46,18 @@ func TestLoad_MissingConfigFileIsNotFatal(t *testing.T) {
 	}
 	if cfg.Output.Dir != "lyrics" {
 		t.Errorf("default output dir = %q; want %q", cfg.Output.Dir, "lyrics")
+	}
+	if cfg.Providers.Primary != "musixmatch" {
+		t.Errorf("default provider = %q; want musixmatch", cfg.Providers.Primary)
+	}
+	if cfg.Verification.SampleDurationSeconds != 30 {
+		t.Errorf("default verification sample duration = %d; want 30", cfg.Verification.SampleDurationSeconds)
+	}
+	if cfg.Verification.MinConfidence != 0.85 {
+		t.Errorf("default verification min confidence = %v; want 0.85", cfg.Verification.MinConfidence)
+	}
+	if cfg.Verification.MinSimilarity != 0.35 {
+		t.Errorf("default verification min similarity = %v; want 0.35", cfg.Verification.MinSimilarity)
 	}
 }
 
@@ -278,6 +294,103 @@ func TestLoad_ServerConfigFromFileAndEnv(t *testing.T) {
 	}
 	if len(cfg.Server.WebhookAPIKeys) != 2 || cfg.Server.WebhookAPIKeys[0] != "env-a" || cfg.Server.WebhookAPIKeys[1] != "env-b" {
 		t.Fatalf("webhook keys = %+v; want env keys", cfg.Server.WebhookAPIKeys)
+	}
+}
+
+func TestLoad_ProvidersAndVerificationFromFileAndEnv(t *testing.T) {
+	isolateEnv(t)
+
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	content := "[providers]\n" +
+		"primary = \"musixmatch\"\n" +
+		"disabled = [\"future\"]\n" +
+		"[verification]\n" +
+		"enabled = true\n" +
+		"whisper_url = \"http://whisper:9000\"\n" +
+		"sample_duration_seconds = 45\n" +
+		"min_confidence = 0.8\n" +
+		"min_similarity = 0.4\n"
+	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+	t.Setenv("MXLRC_PROVIDER_PRIMARY", "override")
+	t.Setenv("MXLRC_PROVIDERS_DISABLED", "musixmatch, other")
+	t.Setenv("MXLRC_VERIFICATION_ENABLED", "false")
+	t.Setenv("MXLRC_VERIFICATION_WHISPER_URL", "http://env-whisper:9000")
+	t.Setenv("MXLRC_WHISPER_URL", "http://legacy-whisper:9000")
+	t.Setenv("MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS", "60")
+	t.Setenv("MXLRC_VERIFICATION_SAMPLE_DURATION", "45")
+	t.Setenv("MXLRC_VERIFICATION_MIN_CONFIDENCE", "0.7")
+	t.Setenv("MXLRC_VERIFICATION_MIN_SIMILARITY", "0.5")
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Providers.Primary != "override" {
+		t.Fatalf("providers.primary = %q; want override", cfg.Providers.Primary)
+	}
+	if len(cfg.Providers.Disabled) != 2 || cfg.Providers.Disabled[0] != "musixmatch" || cfg.Providers.Disabled[1] != "other" {
+		t.Fatalf("providers.disabled = %#v; want musixmatch,other", cfg.Providers.Disabled)
+	}
+	if cfg.Verification.Enabled {
+		t.Fatal("verification.enabled = true; want env override false")
+	}
+	if cfg.Verification.WhisperURL != "http://env-whisper:9000" {
+		t.Fatalf("verification.whisper_url = %q; want env value", cfg.Verification.WhisperURL)
+	}
+	if cfg.Verification.SampleDurationSeconds != 60 {
+		t.Fatalf("verification.sample_duration_seconds = %d; want 60", cfg.Verification.SampleDurationSeconds)
+	}
+	if cfg.Verification.MinConfidence != 0.7 {
+		t.Fatalf("verification.min_confidence = %v; want 0.7", cfg.Verification.MinConfidence)
+	}
+	if cfg.Verification.MinSimilarity != 0.5 {
+		t.Fatalf("verification.min_similarity = %v; want 0.5", cfg.Verification.MinSimilarity)
+	}
+}
+
+func TestLoad_VerificationEnvLegacyFallbacks(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("MXLRC_WHISPER_URL", "http://legacy-whisper:9000")
+	t.Setenv("MXLRC_VERIFICATION_SAMPLE_DURATION", "45")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Verification.WhisperURL != "http://legacy-whisper:9000" {
+		t.Fatalf("verification.whisper_url = %q; want legacy env value", cfg.Verification.WhisperURL)
+	}
+	if cfg.Verification.SampleDurationSeconds != 45 {
+		t.Fatalf("verification.sample_duration_seconds = %d; want legacy duration", cfg.Verification.SampleDurationSeconds)
+	}
+}
+
+func TestLoad_BlankProviderAndInvalidVerificationSampleReDefault(t *testing.T) {
+	isolateEnv(t)
+
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	content := "[providers]\nprimary = \"\"\n[verification]\nsample_duration_seconds = 0\nmin_confidence = 2\nmin_similarity = -1\n"
+	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Providers.Primary != "musixmatch" {
+		t.Fatalf("providers.primary = %q; want musixmatch", cfg.Providers.Primary)
+	}
+	if cfg.Verification.SampleDurationSeconds != 30 {
+		t.Fatalf("verification.sample_duration_seconds = %d; want 30", cfg.Verification.SampleDurationSeconds)
+	}
+	if cfg.Verification.MinConfidence != 0.85 {
+		t.Fatalf("verification.min_confidence = %v; want 0.85", cfg.Verification.MinConfidence)
+	}
+	if cfg.Verification.MinSimilarity != 0.35 {
+		t.Fatalf("verification.min_similarity = %v; want 0.35", cfg.Verification.MinSimilarity)
 	}
 }
 

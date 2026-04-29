@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Docker and Unraid packaging for issue #24
-last_updated: "2026-04-28T23:45:00Z"
-last_activity: 2026-04-27
+stopped_at: Provider abstraction config slice for issue #25
+last_updated: "2026-04-29T12:00:00Z"
+last_activity: 2026-04-29
 progress:
   total_phases: 4
   completed_phases: 4
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 Phase: 4 of 4 (Build Verification)
 Plan: 3 of 3 in current phase
 Status: Quick milestone work in progress
-Last activity: 2026-04-28 - Added Docker and Unraid packaging for issue #24
+Last activity: 2026-04-29 - Added provider abstraction config slice for issue #25
 
 Progress: [██████████] 100%
 
@@ -79,6 +79,7 @@ Recent decisions affecting current work:
 - [Phase 04]: Binary name mxlrcgo-svc and build path ./cmd/mxlrcgo-svc applied consistently across Makefile, GoReleaser, and CI
 - [Phase 04]: Go directive bumped to 1.25.0 (not planned 1.24) because x/text v0.36.0 requires Go 1.25 — accepted as correct toolchain behavior
 - [Phase 04]: README Token Configuration section added documenting CLI flag > env var > .env file priority order
+- [Issue 25]: Provider selection is config-driven with Musixmatch as the only active provider; optional STT verification runs only for low-confidence scanned audio with a configured Whisper-compatible sidecar
 
 ### Pending Todos
 
@@ -104,9 +105,10 @@ None yet.
 | 260428-review-pr53-followup2 | PR 53 second follow-up review fixes | 2026-04-28 | pending | [260428-review-pr53-followup2](./quick/260428-review-pr53-followup2/) |
 | 260428-review-pr53-followup3 | PR 53 third follow-up review fixes | 2026-04-28 | pending | [260428-review-pr53-followup3](./quick/260428-review-pr53-followup3/) |
 | 260428-issue-24 | Dockerfile, compose example, and Unraid template | 2026-04-28 | pending | [260428-issue-24-docker-unraid](./quick/260428-issue-24-docker-unraid/) |
+| 260429-issue-25 | Provider abstraction and dormant STT verification config | 2026-04-29 | pending | [260429-issue-25-provider-abstraction](./quick/260429-issue-25-provider-abstraction/) |
 
 ## Session Continuity
 
-Last session: 2026-04-28T23:45:00Z
-Stopped at: Docker and Unraid packaging for issue #24
+Last session: 2026-04-29T12:00:00Z
+Stopped at: Provider abstraction config slice for issue #25
 Resume file: None

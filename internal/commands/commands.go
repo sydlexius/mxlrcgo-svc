@@ -27,10 +27,12 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/providers"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scanner"
 	"github.com/sydlexius/mxlrcgo-svc/internal/server"
+	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 	"github.com/sydlexius/mxlrcgo-svc/internal/worker"
 )
 
@@ -327,6 +329,11 @@ func runFetch(ctx context.Context, out io.Writer, args FetchCmd, newFetcher func
 	if args.Outdir != nil {
 		outdir = *args.Outdir
 	}
+	fetcher, err := selectedProvider(cfg, token, newFetcher)
+	if err != nil {
+		slog.Error("failed to configure lyrics provider", "error", err)
+		return 1
+	}
 
 	inputs := queue.NewInputsQueue()
 	sc := scanner.NewScanner()
@@ -343,7 +350,7 @@ func runFetch(ctx context.Context, out io.Writer, args FetchCmd, newFetcher func
 		}
 	}
 
-	application := newApp(newFetcher(token), newWriter(), inputs, cooldown, mode)
+	application := newApp(fetcher, newWriter(), inputs, cooldown, mode)
 	if err := application.Run(ctx); err != nil {
 		slog.Error("application error", "error", err)
 		return 1
@@ -369,6 +376,16 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	if args.Outdir != nil {
 		outdir = *args.Outdir
 	}
+	fetcher, err := selectedProvider(cfg, token, newFetcher)
+	if err != nil {
+		slog.Error("failed to configure lyrics provider", "error", err)
+		return 1
+	}
+	verifier, err := newVerifier(cfg)
+	if err != nil {
+		slog.Error("failed to configure verification", "error", err)
+		return 1
+	}
 	sqlDB, err := db.Open(ctx, cfg.DB.Path)
 	if err != nil {
 		slog.Error("failed to open database", "error", err)
@@ -382,7 +399,8 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 		return 1
 	}
 	workQ := queue.NewDBQueue(sqlDB)
-	w := worker.New(workQ, cache.New(sqlDB), newFetcher(token), newWriter())
+	w := worker.New(workQ, cache.New(sqlDB), fetcher, newWriter())
+	configureWorkerVerification(w, cfg, verifier)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
@@ -446,6 +464,32 @@ func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration
 		case <-ticker.C:
 		}
 	}
+}
+
+func selectedProvider(cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) (providers.LyricsProvider, error) {
+	return providers.Select(
+		cfg.Providers.Primary,
+		cfg.Providers.Disabled,
+		providers.New(providers.Musixmatch, newFetcher(token)),
+	)
+}
+
+func newVerifier(cfg config.Config) (verification.Verifier, error) {
+	if !cfg.Verification.Enabled {
+		return nil, nil
+	}
+	return verification.NewHTTPVerifier(
+		cfg.Verification.WhisperURL,
+		cfg.Verification.SampleDurationSeconds,
+		cfg.Verification.MinSimilarity,
+	)
+}
+
+func configureWorkerVerification(w *worker.Worker, cfg config.Config, verifier verification.Verifier) {
+	if verifier == nil {
+		return
+	}
+	w.EnableVerification(verifier, cfg.Verification.MinConfidence)
 }
 
 func runScheduler(ctx context.Context, sqlDB *sql.DB, args ServeCmd) {
@@ -755,6 +799,13 @@ func configKeys() []string {
 		"db.path",
 		"server.addr",
 		"server.webhook_api_keys",
+		"providers.primary",
+		"providers.disabled",
+		"verification.enabled",
+		"verification.whisper_url",
+		"verification.sample_duration_seconds",
+		"verification.min_confidence",
+		"verification.min_similarity",
 	}
 }
 
@@ -772,6 +823,20 @@ func configValue(cfg config.Config, key string) (string, bool) {
 		return cfg.Server.Addr, true
 	case "server.webhook_api_keys":
 		return strings.Join(cfg.Server.WebhookAPIKeys, ","), true
+	case "providers.primary":
+		return cfg.Providers.Primary, true
+	case "providers.disabled":
+		return strings.Join(cfg.Providers.Disabled, ","), true
+	case "verification.enabled":
+		return strconv.FormatBool(cfg.Verification.Enabled), true
+	case "verification.whisper_url":
+		return cfg.Verification.WhisperURL, true
+	case "verification.sample_duration_seconds":
+		return strconv.Itoa(cfg.Verification.SampleDurationSeconds), true
+	case "verification.min_confidence":
+		return strconv.FormatFloat(cfg.Verification.MinConfidence, 'f', -1, 64), true
+	case "verification.min_similarity":
+		return strconv.FormatFloat(cfg.Verification.MinSimilarity, 'f', -1, 64), true
 	default:
 		return "", false
 	}
@@ -795,6 +860,36 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		cfg.Server.Addr = value
 	case "server.webhook_api_keys":
 		cfg.Server.WebhookAPIKeys = splitCSV(value)
+	case "providers.primary":
+		cfg.Providers.Primary = value
+	case "providers.disabled":
+		cfg.Providers.Disabled = splitCSV(value)
+	case "verification.enabled":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("verification.enabled must be a boolean")
+		}
+		cfg.Verification.Enabled = v
+	case "verification.whisper_url":
+		cfg.Verification.WhisperURL = value
+	case "verification.sample_duration_seconds":
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("verification.sample_duration_seconds must be a positive integer")
+		}
+		cfg.Verification.SampleDurationSeconds = n
+	case "verification.min_confidence":
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil || n <= 0 || n > 1 {
+			return fmt.Errorf("verification.min_confidence must be a number between 0 and 1")
+		}
+		cfg.Verification.MinConfidence = n
+	case "verification.min_similarity":
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil || n <= 0 || n > 1 {
+			return fmt.Errorf("verification.min_similarity must be a number between 0 and 1")
+		}
+		cfg.Verification.MinSimilarity = n
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

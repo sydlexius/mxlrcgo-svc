@@ -204,9 +204,10 @@ func (sc *Scanner) GetSongDir(dir string, songs *queue.InputsQueue, update bool,
 	}
 	for _, res := range results {
 		songs.Push(models.Inputs{
-			Track:    res.Track,
-			Outdir:   res.Outdir,
-			Filename: res.Filename,
+			Track:      res.Track,
+			Outdir:     res.Outdir,
+			Filename:   res.Filename,
+			SourcePath: res.FilePath,
 		})
 	}
 	return nil

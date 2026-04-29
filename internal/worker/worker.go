@@ -13,6 +13,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 )
 
 // Queue provides durable worker queue operations.
@@ -31,10 +32,12 @@ type Cache interface {
 
 // Worker consumes queued lyrics work one item at a time.
 type Worker struct {
-	queue   Queue
-	cache   Cache
-	fetcher musixmatch.Fetcher
-	writer  lyrics.Writer
+	queue                 Queue
+	cache                 Cache
+	fetcher               musixmatch.Fetcher
+	writer                lyrics.Writer
+	verifier              verification.Verifier
+	verifyBelowConfidence float64
 }
 
 var errQueueEmpty = errors.New("worker queue empty")
@@ -42,10 +45,19 @@ var errQueueEmpty = errors.New("worker queue empty")
 // New creates a queue consumer worker.
 func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Worker {
 	return &Worker{
-		queue:   q,
-		cache:   c,
-		fetcher: fetcher,
-		writer:  writer,
+		queue:                 q,
+		cache:                 c,
+		fetcher:               fetcher,
+		writer:                writer,
+		verifyBelowConfidence: 0.85,
+	}
+}
+
+// EnableVerification configures optional STT verification for low-confidence matches.
+func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfidence float64) {
+	w.verifier = verifier
+	if belowConfidence > 0 && belowConfidence <= 1 {
+		w.verifyBelowConfidence = belowConfidence
 	}
 }
 
@@ -84,6 +96,16 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	}
 	confidence := Confidence(item.Inputs.Track, song.Track)
 	slog.Info("worker lyrics match", "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "cache_hit", cacheHit)
+	if !cacheHit {
+		if err := w.verify(ctx, item, song, confidence); err != nil {
+			slog.Warn("worker verification failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "error", err)
+			return w.fail(ctx, item.ID, err)
+		}
+		if err := w.store(ctx, item.Inputs.Track, song); err != nil {
+			slog.Warn("worker cache store failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
+			return w.fail(ctx, item.ID, err)
+		}
+	}
 
 	for _, p := range outputPaths(item.Inputs) {
 		if err := w.writer.WriteLRC(song, p.Filename, p.Outdir); err != nil {
@@ -100,6 +122,21 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(cause, err))
 		}
 		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
+	}
+	return nil
+}
+
+func (w *Worker) verify(ctx context.Context, item queue.WorkItem, song models.Song, confidence float64) error {
+	if w.verifier == nil || item.Inputs.SourcePath == "" || confidence >= w.verifyBelowConfidence {
+		return nil
+	}
+	res, err := w.verifier.Verify(ctx, item.Inputs.SourcePath, song)
+	if err != nil {
+		return fmt.Errorf("worker: verify lyrics: %w", err)
+	}
+	slog.Info("worker verification result", "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "similarity", res.Similarity, "accepted", res.Accepted)
+	if !res.Accepted {
+		return fmt.Errorf("worker: verification rejected lyrics: similarity %.3f", res.Similarity)
 	}
 	return nil
 }
@@ -125,14 +162,18 @@ func (w *Worker) song(ctx context.Context, track models.Track) (models.Song, boo
 	if err != nil {
 		return models.Song{}, false, fmt.Errorf("worker: find lyrics: %w", err)
 	}
+	return song, false, nil
+}
+
+func (w *Worker) store(ctx context.Context, track models.Track, song models.Song) error {
 	encoded, err := encodeSong(song)
 	if err != nil {
-		return models.Song{}, false, err
+		return err
 	}
 	if err := w.cache.Store(ctx, track.ArtistName, track.TrackName, track.AlbumName, encoded); err != nil {
-		return models.Song{}, false, fmt.Errorf("worker: store cache: %w", err)
+		return fmt.Errorf("worker: store cache: %w", err)
 	}
-	return song, false, nil
+	return nil
 }
 
 func (w *Worker) fail(ctx context.Context, id int64, cause error) error {

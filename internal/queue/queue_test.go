@@ -214,6 +214,34 @@ func TestDBQueue_EnqueuePersistsOutputPaths(t *testing.T) {
 	}
 }
 
+func TestDBQueue_EnqueuePersistsSourcePath(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	item, err := q.Enqueue(ctx, models.Inputs{
+		Track:      models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Outdir:     "out",
+		Filename:   "artist-title.lrc",
+		SourcePath: "/music/artist-title.flac",
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if item.Inputs.SourcePath != "/music/artist-title.flac" {
+		t.Fatalf("enqueued source path = %q; want source path", item.Inputs.SourcePath)
+	}
+
+	got, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if got.Inputs.SourcePath != "/music/artist-title.flac" {
+		t.Fatalf("dequeued source path = %q; want source path", got.Inputs.SourcePath)
+	}
+}
+
 func TestDBQueue_CleanupRemovesRetryableDuplicate(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

@@ -13,10 +13,12 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	API    APIConfig    `toml:"api"`
-	Output OutputConfig `toml:"output"`
-	DB     DBConfig     `toml:"db"`
-	Server ServerConfig `toml:"server"`
+	API          APIConfig          `toml:"api"`
+	Output       OutputConfig       `toml:"output"`
+	DB           DBConfig           `toml:"db"`
+	Server       ServerConfig       `toml:"server"`
+	Providers    ProvidersConfig    `toml:"providers"`
+	Verification VerificationConfig `toml:"verification"`
 }
 
 // APIConfig holds API-related configuration.
@@ -41,13 +43,30 @@ type ServerConfig struct {
 	WebhookAPIKeys []string `toml:"webhook_api_keys"`
 }
 
+// ProvidersConfig holds lyrics provider selection settings.
+type ProvidersConfig struct {
+	Primary  string   `toml:"primary"`
+	Disabled []string `toml:"disabled"`
+}
+
+// VerificationConfig holds optional STT verification settings.
+type VerificationConfig struct {
+	Enabled               bool    `toml:"enabled"`
+	WhisperURL            string  `toml:"whisper_url"`
+	SampleDurationSeconds int     `toml:"sample_duration_seconds"`
+	MinConfidence         float64 `toml:"min_confidence"`
+	MinSimilarity         float64 `toml:"min_similarity"`
+}
+
 // defaults sets built-in fallback values.
 func defaults() Config {
 	return Config{
-		API:    APIConfig{Cooldown: 15},
-		Output: OutputConfig{Dir: "lyrics"},
-		DB:     DBConfig{Path: xdgDataPath("mxlrcgo-svc", "mxlrcgo.db")},
-		Server: ServerConfig{Addr: "127.0.0.1:3876"},
+		API:          APIConfig{Cooldown: 15},
+		Output:       OutputConfig{Dir: "lyrics"},
+		DB:           DBConfig{Path: xdgDataPath("mxlrcgo-svc", "mxlrcgo.db")},
+		Server:       ServerConfig{Addr: "127.0.0.1:3876"},
+		Providers:    ProvidersConfig{Primary: "musixmatch"},
+		Verification: VerificationConfig{SampleDurationSeconds: 30, MinConfidence: 0.85, MinSimilarity: 0.35},
 	}
 }
 
@@ -78,6 +97,18 @@ func Load(path string) (Config, error) {
 			if cfg.Server.Addr == "" {
 				cfg.Server.Addr = d.Server.Addr
 			}
+			if cfg.Providers.Primary == "" {
+				cfg.Providers.Primary = d.Providers.Primary
+			}
+			if cfg.Verification.SampleDurationSeconds <= 0 {
+				cfg.Verification.SampleDurationSeconds = d.Verification.SampleDurationSeconds
+			}
+			if cfg.Verification.MinConfidence <= 0 || cfg.Verification.MinConfidence > 1 {
+				cfg.Verification.MinConfidence = d.Verification.MinConfidence
+			}
+			if cfg.Verification.MinSimilarity <= 0 || cfg.Verification.MinSimilarity > 1 {
+				cfg.Verification.MinSimilarity = d.Verification.MinSimilarity
+			}
 		} else if !os.IsNotExist(err) {
 			return cfg, fmt.Errorf("config: stat %s: %w", path, err)
 		}
@@ -92,7 +123,7 @@ func Load(path string) (Config, error) {
 // applyEnvOverrides overlays environment variables onto cfg.
 // Token precedence within env vars: MUSIXMATCH_TOKEN > MXLRC_API_TOKEN.
 // Cooldown precedence: MXLRC_API_COOLDOWN > MXLRC_COOLDOWN.
-// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY
+// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY, MXLRC_PROVIDER_PRIMARY, MXLRC_PROVIDERS_DISABLED, MXLRC_VERIFICATION_ENABLED, MXLRC_VERIFICATION_WHISPER_URL, MXLRC_WHISPER_URL, MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS, MXLRC_VERIFICATION_SAMPLE_DURATION, MXLRC_VERIFICATION_MIN_CONFIDENCE, MXLRC_VERIFICATION_MIN_SIMILARITY
 func applyEnvOverrides(cfg *Config) {
 	// Token: MUSIXMATCH_TOKEN takes precedence over MXLRC_API_TOKEN (backward compat).
 	if v := os.Getenv("MUSIXMATCH_TOKEN"); v != "" {
@@ -128,6 +159,59 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MXLRC_WEBHOOK_API_KEY"); v != "" {
 		cfg.Server.WebhookAPIKeys = splitCSV(v)
+	}
+	if v := os.Getenv("MXLRC_PROVIDER_PRIMARY"); v != "" {
+		cfg.Providers.Primary = v
+	}
+	if v := os.Getenv("MXLRC_PROVIDERS_DISABLED"); v != "" {
+		cfg.Providers.Disabled = splitCSV(v)
+	}
+	if v := os.Getenv("MXLRC_VERIFICATION_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			slog.Warn("env var is invalid; using current value", "var", "MXLRC_VERIFICATION_ENABLED", "value", v, "current", cfg.Verification.Enabled) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
+		} else {
+			cfg.Verification.Enabled = enabled
+		}
+	}
+	whisperVar := "MXLRC_VERIFICATION_WHISPER_URL"
+	v = os.Getenv(whisperVar)
+	if v == "" {
+		whisperVar = "MXLRC_WHISPER_URL"
+		v = os.Getenv(whisperVar)
+	}
+	if v != "" {
+		cfg.Verification.WhisperURL = v
+	}
+	sampleDurationVar := "MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS"
+	v = os.Getenv(sampleDurationVar)
+	if v == "" {
+		sampleDurationVar = "MXLRC_VERIFICATION_SAMPLE_DURATION"
+		v = os.Getenv(sampleDurationVar)
+	}
+	if v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			slog.Warn("env var is invalid; using current value", "var", sampleDurationVar, "value", v, "current", cfg.Verification.SampleDurationSeconds) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
+		} else {
+			cfg.Verification.SampleDurationSeconds = n
+		}
+	}
+	if v := os.Getenv("MXLRC_VERIFICATION_MIN_CONFIDENCE"); v != "" {
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil || n <= 0 || n > 1 {
+			slog.Warn("env var is invalid; using current value", "var", "MXLRC_VERIFICATION_MIN_CONFIDENCE", "value", v, "current", cfg.Verification.MinConfidence) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
+		} else {
+			cfg.Verification.MinConfidence = n
+		}
+	}
+	if v := os.Getenv("MXLRC_VERIFICATION_MIN_SIMILARITY"); v != "" {
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil || n <= 0 || n > 1 {
+			slog.Warn("env var is invalid; using current value", "var", "MXLRC_VERIFICATION_MIN_SIMILARITY", "value", v, "current", cfg.Verification.MinSimilarity) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
+		} else {
+			cfg.Verification.MinSimilarity = n
+		}
 	}
 }
 

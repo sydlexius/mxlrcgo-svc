@@ -115,9 +115,9 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 	}
 	row := q.db.QueryRowContext(ctx,
 		`INSERT INTO work_queue (
-             artist, title, artist_key, title_key, outdir, filename, output_paths, status, priority, next_attempt_at
+             artist, title, artist_key, title_key, outdir, filename, source_path, output_paths, status, priority, next_attempt_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(artist_key, title_key) DO UPDATE SET
              artist = CASE
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.artist
@@ -134,6 +134,10 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
              filename = CASE
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.filename
                  ELSE excluded.filename
+             END,
+             source_path = CASE
+                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.source_path
+                 ELSE excluded.source_path
              END,
              output_paths = CASE
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.output_paths
@@ -156,7 +160,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
                  WHEN work_queue.status = 'done' THEN work_queue.completed_at
                  ELSE NULL
              END
-         RETURNING id, artist, title, outdir, filename, status, priority, attempts,
+         RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
                    next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
 		inputs.Track.ArtistName,
 		inputs.Track.TrackName,
@@ -164,6 +168,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 		normalize.NormalizeKey(inputs.Track.TrackName),
 		inputs.Outdir,
 		inputs.Filename,
+		inputs.SourcePath,
 		outputPaths,
 		StatusPending,
 		priority,
@@ -190,7 +195,7 @@ func (q *DBQueue) Dequeue(ctx context.Context) (WorkItem, error) {
              ORDER BY priority DESC, created_at ASC, id ASC
              LIMIT 1
          )
-         RETURNING id, artist, title, outdir, filename, status, priority, attempts,
+         RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
                    next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
 		now,
 	)
@@ -278,7 +283,7 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
              last_error = ?
          WHERE id = ?
            AND status = 'processing'
-         RETURNING id, artist, title, outdir, filename, status, priority, attempts,
+         RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
                    next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
 		nextAttempts,
 		nextAttemptAt,
@@ -329,6 +334,7 @@ func scanWorkItem(row rowScanner) (WorkItem, error) {
 		&item.Inputs.Track.TrackName,
 		&item.Inputs.Outdir,
 		&item.Inputs.Filename,
+		&item.Inputs.SourcePath,
 		&item.Status,
 		&item.Priority,
 		&item.Attempts,

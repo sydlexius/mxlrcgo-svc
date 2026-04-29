@@ -125,6 +125,31 @@ func TestHTTPVerifierBuildsFFmpegSampleCommand(t *testing.T) {
 	}
 }
 
+func TestNewHTTPVerifierClampsSampleDuration(t *testing.T) {
+	ffmpegPath := fakeFFmpeg(t, `printf 'sampled audio' > "$last"`)
+	tests := []struct {
+		name     string
+		duration int
+		want     int
+	}{
+		{name: "zero defaults to minimum", duration: 0, want: 30},
+		{name: "below minimum", duration: 10, want: 30},
+		{name: "within bounds", duration: 45, want: 45},
+		{name: "above maximum", duration: 300, want: 60},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := NewHTTPVerifier("http://whisper:9000", tc.duration, 0.5, ffmpegPath)
+			if err != nil {
+				t.Fatalf("NewHTTPVerifier: %v", err)
+			}
+			if v.sampleDurationSeconds != tc.want {
+				t.Fatalf("sampleDurationSeconds = %d; want %d", v.sampleDurationSeconds, tc.want)
+			}
+		})
+	}
+}
+
 func TestNewHTTPVerifierErrorsWhenFFmpegMissing(t *testing.T) {
 	_, err := NewHTTPVerifier("http://whisper:9000", 30, 0.5, filepath.Join(t.TempDir(), "missing-ffmpeg"))
 	if err == nil {

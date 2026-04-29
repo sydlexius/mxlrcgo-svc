@@ -51,9 +51,7 @@ func NewHTTPVerifier(baseURL string, sampleDurationSeconds int, minSimilarity fl
 	if _, err := url.ParseRequestURI(baseURL); err != nil {
 		return nil, fmt.Errorf("verification: invalid whisper_url: %w", err)
 	}
-	if sampleDurationSeconds <= 0 {
-		sampleDurationSeconds = 30
-	}
+	sampleDurationSeconds = clampSampleDuration(sampleDurationSeconds)
 	if minSimilarity <= 0 || minSimilarity > 1 {
 		minSimilarity = 0.35
 	}
@@ -127,6 +125,16 @@ func (v *HTTPVerifier) sample(ctx context.Context, audioPath string) (_ string, 
 		return "", fmt.Errorf("verification: sample audio with ffmpeg: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return samplePath, nil
+}
+
+func clampSampleDuration(durationSeconds int) int {
+	if durationSeconds < 30 {
+		return 30
+	}
+	if durationSeconds > 60 {
+		return 60
+	}
+	return durationSeconds
 }
 
 func ffmpegSampleArgs(audioPath, samplePath string, durationSeconds int) []string {

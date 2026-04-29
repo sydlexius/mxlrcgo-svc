@@ -83,12 +83,16 @@ func (v *HTTPVerifier) Verify(ctx context.Context, audioPath string, song models
 	}, nil
 }
 
-func (v *HTTPVerifier) transcribe(ctx context.Context, audioPath string) (string, error) {
+func (v *HTTPVerifier) transcribe(ctx context.Context, audioPath string) (text string, err error) {
 	f, err := os.Open(audioPath) //nolint:gosec // path comes from scanned audio file
 	if err != nil {
 		return "", fmt.Errorf("verification: open audio: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("verification: close audio: %w", closeErr)
+		}
+	}()
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -119,7 +123,11 @@ func (v *HTTPVerifier) transcribe(ctx context.Context, audioPath string) (string
 	if err != nil {
 		return "", fmt.Errorf("verification: transcribe audio: %w", err)
 	}
-	defer func() { _ = res.Body.Close() }()
+	defer func() {
+		if closeErr := res.Body.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("verification: close response body: %w", closeErr)
+		}
+	}()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(res.Body, 8<<10))
 		return "", fmt.Errorf("verification: transcribe status %d: %s", res.StatusCode, strings.TrimSpace(string(errBody)))
@@ -147,10 +155,14 @@ func (v *HTTPVerifier) transcribe(ctx context.Context, audioPath string) (string
 }
 
 func (v *HTTPVerifier) transcriptionURL() string {
-	if strings.HasSuffix(v.baseURL, "/v1/audio/transcriptions") {
-		return v.baseURL
+	baseURL := strings.TrimRight(v.baseURL, "/")
+	if strings.HasSuffix(baseURL, "/v1/audio/transcriptions") {
+		return baseURL
 	}
-	return v.baseURL + "/v1/audio/transcriptions"
+	if strings.HasSuffix(baseURL, "/v1") {
+		return baseURL + "/audio/transcriptions"
+	}
+	return baseURL + "/v1/audio/transcriptions"
 }
 
 // SongText returns the best lyrics text available for transcript comparison.

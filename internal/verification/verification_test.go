@@ -87,3 +87,22 @@ func TestHTTPVerifierVerifyPostsAudioAndComparesTranscript(t *testing.T) {
 		t.Fatalf("accepted = false; want true")
 	}
 }
+
+func TestHTTPVerifierTranscriptionURL(t *testing.T) {
+	tests := map[string]string{
+		"http://whisper:9000":                         "http://whisper:9000/v1/audio/transcriptions",
+		"http://whisper:9000/":                        "http://whisper:9000/v1/audio/transcriptions",
+		"http://whisper:9000/v1":                      "http://whisper:9000/v1/audio/transcriptions",
+		"http://whisper:9000/v1/":                     "http://whisper:9000/v1/audio/transcriptions",
+		"http://whisper:9000/v1/audio/transcriptions": "http://whisper:9000/v1/audio/transcriptions",
+	}
+	for rawURL, want := range tests {
+		v, err := NewHTTPVerifier(rawURL, 30, 0.5)
+		if err != nil {
+			t.Fatalf("NewHTTPVerifier(%q): %v", rawURL, err)
+		}
+		if got := v.transcriptionURL(); got != want {
+			t.Fatalf("transcriptionURL(%q) = %q; want %q", rawURL, got, want)
+		}
+	}
+}

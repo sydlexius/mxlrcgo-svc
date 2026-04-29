@@ -7,6 +7,8 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions: read-all
+
 jobs:
   analysis:
     name: Scorecard analysis
@@ -25,7 +27,6 @@ jobs:
       - name: Run analysis
         uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
-          repo_token: ${{ secrets.SCORECARD_TOKEN }}
           results_file: scorecard-results.sarif
           results_format: sarif
           publish_results: true

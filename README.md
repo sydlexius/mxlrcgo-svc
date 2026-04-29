@@ -1,5 +1,9 @@
 # mxlrcgo-svc
-[![build](https://github.com/sydlexius/mxlrcgo-svc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sydlexius/mxlrcgo-svc/actions/workflows/ci.yml)
+
+[![CI](https://github.com/sydlexius/mxlrcgo-svc/actions/workflows/ci.yml/badge.svg)](https://github.com/sydlexius/mxlrcgo-svc/actions/workflows/ci.yml)
+[![Release](https://github.com/sydlexius/mxlrcgo-svc/actions/workflows/release.yml/badge.svg)](https://github.com/sydlexius/mxlrcgo-svc/actions/workflows/release.yml)
+[![codecov](https://codecov.io/gh/sydlexius/mxlrcgo-svc/branch/main/graph/badge.svg)](https://codecov.io/gh/sydlexius/mxlrcgo-svc)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/sydlexius/mxlrcgo-svc/badge)](https://securityscorecards.dev/viewer/?uri=github.com/sydlexius/mxlrcgo-svc)
 
 Command line tool to fetch synced lyrics from [Musixmatch](https://www.musixmatch.com/) and save it as *.lrc file.
 
@@ -128,6 +132,12 @@ Run the lightweight CLI smoke test:
 
 ```sh
 make smoke
+```
+
+Generate a local coverage profile and HTML report:
+
+```sh
+make test-cover
 ```
 
 ---

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
@@ -129,5 +130,36 @@ func TestRunWritesFailedFileOnFetchFailure(t *testing.T) {
 	}
 	if string(got) != "Failure Artist,Failure Song\n" {
 		t.Fatalf("failed file content = %q", got)
+	}
+}
+
+func TestRunBacksOffGeometricallyAfterFetchFailures(t *testing.T) {
+	inputs := queue.NewInputsQueue()
+	inputs.Push(models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "One"}})
+	inputs.Push(models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "Two"}})
+	inputs.Push(models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "Three"}})
+	fetcher := &fakeFetcher{err: errors.New("rate limited")}
+
+	a := NewApp(fetcher, lyrics.NewLRCWriter(), inputs, 0, "dir")
+	a.baseBackoff = time.Second
+	a.maxBackoff = time.Hour
+	var sleeps []time.Duration
+	a.sleep = func(_ context.Context, d time.Duration) bool {
+		sleeps = append(sleeps, d)
+		return true
+	}
+
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	want := []time.Duration{time.Second, 2 * time.Second}
+	if len(sleeps) != len(want) {
+		t.Fatalf("sleep count = %d, want %d: %v", len(sleeps), len(want), sleeps)
+	}
+	for i := range want {
+		if sleeps[i] != want[i] {
+			t.Fatalf("sleep[%d] = %s, want %s", i, sleeps[i], want[i])
+		}
 	}
 }

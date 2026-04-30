@@ -9,7 +9,9 @@ Command line tool to fetch synced lyrics from [Musixmatch](https://www.musixmatc
 
 ## Download
 ### Standalone binary
-**TBA**
+Versioned binaries are published on the [GitHub Releases](https://github.com/sydlexius/mxlrcgo-svc/releases) page for Linux, macOS, and Windows on amd64/arm64 where supported.
+
+This fork starts its release line at `v1.0.0`. The upstream `fashni/mxlrc-go` repository does not publish semver release tags, so `v1.0.0` is reserved as the first `mxlrcgo-svc` version.
 
 ### Build from source
 Required Go 1.26.2+
@@ -100,6 +102,16 @@ mxlrcgo-svc config get db.path
 ## Docker
 
 The container runs the webhook service on port `50705` and stores its config and SQLite database under `/config`. Mount your music library at `/music`.
+
+Published GHCR tags:
+
+- `latest` - latest stable `v*.*.*` release
+- `<version>` - exact release version, for example `1.0.0`
+- `<major>.<minor>` - stable minor line, for example `1.0`
+- `beta` - latest prerelease channel tag
+- `<version>-<pre>` - exact prerelease version, for example `1.1.0-beta.1` or `1.1.0-rc.1`
+- `dev` / `nightly` - latest scheduled build from `main`
+- `nightly-YYYYMMDD` - dated nightly build from `main`
 
 ```sh
 docker run -d \

@@ -1,0 +1,13 @@
+[versioning]
+file = "VERSION"
+pattern = '^(?P<version>\d+\.\d+\.\d+)$'
+
+[build]
+working_dir = "."
+pre_checks = [
+  "go test -count=1 ./...",
+  "golangci-lint run",
+]
+
+[release]
+tag_prefix = "v"

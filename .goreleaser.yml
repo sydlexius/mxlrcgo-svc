@@ -29,6 +29,55 @@ archives:
           - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
+dockers:
+  - id: amd64
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
+    dockerfile: build/docker/Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    extra_files:
+      - build/docker/entrypoint.sh
+
+  - id: arm64
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
+    dockerfile: build/docker/Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    extra_files:
+      - build/docker/entrypoint.sh
+
+docker_manifests:
+  - name_template: "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
+
+  - name_template: "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Major }}.{{ .Minor }}"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
+
+  - name_template: "ghcr.io/sydlexius/mxlrcgo-svc:latest"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
+
+  - name_template: "ghcr.io/sydlexius/mxlrcgo-svc:beta"
+    skip_push: '{{ not .Prerelease }}'
+    image_templates:
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
+      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
+
 signs:
   - artifacts: checksum
     cmd: cosign
@@ -40,6 +89,14 @@ signs:
       - --yes
     signature: ${artifact}.sig
     certificate: ${artifact}.pem
+
+docker_signs:
+  - artifacts: all
+    cmd: cosign
+    args:
+      - sign
+      - --yes
+      - ${artifact}
 
 changelog:
   sort: asc
@@ -75,3 +132,15 @@ release:
     name: mxlrcgo-svc
   prerelease: auto
   make_latest: auto
+  header: |
+    ## mxlrcgo-svc {{ .Tag }}
+
+    {{ if .Prerelease }}> This is a pre-release version. Use the `beta` Docker tag to try it out.{{ end }}
+  footer: |
+    **Docker:** `docker pull ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}`
+
+    {{- if .PreviousTag }}
+    **Full Changelog:** [{{ .PreviousTag }}...{{ .Tag }}](https://github.com/sydlexius/mxlrcgo-svc/compare/{{ .PreviousTag }}...{{ .Tag }})
+    {{- else }}
+    **Full Changelog:** [{{ .Tag }}](https://github.com/sydlexius/mxlrcgo-svc/releases/tag/{{ .Tag }})
+    {{- end }}

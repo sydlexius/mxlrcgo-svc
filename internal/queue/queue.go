@@ -145,15 +145,15 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
              END,
              priority = max(work_queue.priority, excluded.priority),
              status = CASE
-                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.status
+                 WHEN work_queue.status IN ('done', 'processing', 'failed') THEN work_queue.status
                  ELSE 'pending'
              END,
              next_attempt_at = CASE
-                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.next_attempt_at
+                 WHEN work_queue.status IN ('done', 'processing', 'failed') THEN work_queue.next_attempt_at
                  ELSE excluded.next_attempt_at
              END,
              last_error = CASE
-                 WHEN work_queue.status IN ('done', 'processing') THEN work_queue.last_error
+                 WHEN work_queue.status IN ('done', 'processing', 'failed') THEN work_queue.last_error
                  ELSE ''
              END,
              completed_at = CASE

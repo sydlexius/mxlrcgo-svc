@@ -13,15 +13,24 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 )
 
+const (
+	defaultBaseBackoff = time.Minute
+	defaultMaxBackoff  = time.Hour
+)
+
 // App owns all processing state and orchestrates the lyrics fetch loop.
 type App struct {
-	inputs   *queue.InputsQueue
-	failed   *queue.InputsQueue
-	fetcher  musixmatch.Fetcher
-	writer   lyrics.Writer
-	mode     string
-	total    int
-	cooldown int
+	inputs       *queue.InputsQueue
+	failed       *queue.InputsQueue
+	fetcher      musixmatch.Fetcher
+	writer       lyrics.Writer
+	mode         string
+	total        int
+	cooldown     int
+	baseBackoff  time.Duration
+	maxBackoff   time.Duration
+	sleep        func(context.Context, time.Duration) bool
+	failureCount int
 }
 
 // NewApp creates an App with the given dependencies.
@@ -29,13 +38,16 @@ type App struct {
 // A new failed queue is created internally.
 func NewApp(fetcher musixmatch.Fetcher, writer lyrics.Writer, inputs *queue.InputsQueue, cooldown int, mode string) *App {
 	return &App{
-		inputs:   inputs,
-		failed:   queue.NewInputsQueue(),
-		fetcher:  fetcher,
-		writer:   writer,
-		mode:     mode,
-		total:    inputs.Len(),
-		cooldown: cooldown,
+		inputs:      inputs,
+		failed:      queue.NewInputsQueue(),
+		fetcher:     fetcher,
+		writer:      writer,
+		mode:        mode,
+		total:       inputs.Len(),
+		cooldown:    cooldown,
+		baseBackoff: defaultBaseBackoff,
+		maxBackoff:  defaultMaxBackoff,
+		sleep:       sleep,
 	}
 }
 
@@ -55,6 +67,7 @@ func (a *App) Run(ctx context.Context) error {
 		slog.Info("searching song", "artist", cur.Track.ArtistName, "track", cur.Track.TrackName)
 		song, err := a.fetcher.FindLyrics(ctx, cur.Track)
 		if err == nil {
+			a.failureCount = 0
 			cur, err = a.inputs.Pop()
 			if err != nil {
 				slog.Error("unexpected empty queue on pop", "error", err)
@@ -66,6 +79,7 @@ func (a *App) Run(ctx context.Context) error {
 				a.failed.Push(cur)
 			}
 		} else {
+			a.failureCount++
 			slog.Error("lyrics fetch failed", "error", err)
 			item, popErr := a.inputs.Pop()
 			if popErr != nil {
@@ -74,7 +88,11 @@ func (a *App) Run(ctx context.Context) error {
 			}
 			a.failed.Push(item)
 		}
-		a.timer(ctx)
+		if err != nil {
+			a.backoffTimer(ctx, a.failureCount)
+		} else {
+			a.timer(ctx)
+		}
 	}
 
 	return a.handleFailed()
@@ -86,21 +104,60 @@ func (a *App) timer(ctx context.Context) {
 		return
 	}
 
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
 	for i := a.cooldown; i >= 0; i-- {
 		fmt.Printf("    Please wait... %ds    \r", i)
 		if i == 0 {
 			break
 		}
-		select {
-		case <-ctx.Done():
+		if !a.sleep(ctx, time.Second) {
 			return
-		case <-ticker.C:
 		}
 	}
 	fmt.Printf("\n\n")
+}
+
+func (a *App) backoffTimer(ctx context.Context, attempts int) {
+	if a.inputs.Empty() {
+		return
+	}
+
+	delay := a.backoff(attempts)
+	if delay <= 0 {
+		return
+	}
+	slog.Warn("backing off after lyrics fetch failure", "attempts", attempts, "delay", delay)
+	_ = a.sleep(ctx, delay)
+}
+
+func (a *App) backoff(attempts int) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	if a.baseBackoff <= 0 || a.maxBackoff <= 0 {
+		return 0
+	}
+	delay := a.baseBackoff
+	for i := 1; i < attempts; i++ {
+		if delay >= a.maxBackoff || delay > a.maxBackoff/2 {
+			return a.maxBackoff
+		}
+		delay *= 2
+	}
+	if delay > a.maxBackoff {
+		return a.maxBackoff
+	}
+	return delay
+}
+
+func sleep(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // handleFailed processes remaining and failed items after the loop exits.

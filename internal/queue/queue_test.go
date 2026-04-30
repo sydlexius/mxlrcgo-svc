@@ -182,6 +182,56 @@ func TestDBQueue_EnqueueDuplicateDoesNotRequeueProcessingItem(t *testing.T) {
 	}
 }
 
+func TestDBQueue_EnqueueDuplicatePreservesFailedBackoff(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Outdir:   "failed-out",
+		Filename: "failed.lrc",
+	}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	failed, err := q.Fail(ctx, claimed.ID, errors.New("rate limited"))
+	if err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	dup, err := q.Enqueue(ctx, models.Inputs{
+		Track:    models.Track{ArtistName: " artist ", TrackName: "title"},
+		Outdir:   "duplicate-out",
+		Filename: "duplicate.lrc",
+	}, 10)
+	if err != nil {
+		t.Fatalf("Enqueue duplicate: %v", err)
+	}
+	if dup.ID != failed.ID {
+		t.Fatalf("duplicate ID = %d; want %d", dup.ID, failed.ID)
+	}
+	if dup.Status != StatusFailed {
+		t.Fatalf("duplicate status = %q; want %q", dup.Status, StatusFailed)
+	}
+	if dup.Attempts != failed.Attempts {
+		t.Fatalf("duplicate attempts = %d; want %d", dup.Attempts, failed.Attempts)
+	}
+	if !dup.NextAttemptAt.Equal(failed.NextAttemptAt) {
+		t.Fatalf("duplicate next attempt = %s; want %s", dup.NextAttemptAt, failed.NextAttemptAt)
+	}
+	if dup.LastError != failed.LastError {
+		t.Fatalf("duplicate last error = %q; want %q", dup.LastError, failed.LastError)
+	}
+	if _, err := q.Dequeue(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Dequeue during preserved backoff error = %v; want sql.ErrNoRows", err)
+	}
+}
+
 func TestDBQueue_EnqueuePersistsOutputPaths(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

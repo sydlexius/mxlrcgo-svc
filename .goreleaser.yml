@@ -131,7 +131,7 @@ release:
     owner: sydlexius
     name: mxlrcgo-svc
   prerelease: auto
-  make_latest: auto
+  make_latest: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
   header: |
     ## mxlrcgo-svc {{ .Tag }}
 

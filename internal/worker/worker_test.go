@@ -448,7 +448,7 @@ func TestRunReturnsCompleteErrNoRows(t *testing.T) {
 	}
 }
 
-func TestRunDrainsReadyItemsUntilQueueEmpty(t *testing.T) {
+func TestRunProcessesOneReadyItem(t *testing.T) {
 	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
 	q := &fakeQueue{items: []queue.WorkItem{
 		{
@@ -472,17 +472,17 @@ func TestRunDrainsReadyItemsUntilQueueEmpty(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if len(q.completed) != 2 || q.completed[0] != 4 || q.completed[1] != 5 {
-		t.Fatalf("completed = %v; want [4 5]", q.completed)
+	if len(q.completed) != 1 || q.completed[0] != 4 {
+		t.Fatalf("completed = %v; want [4]", q.completed)
 	}
-	if len(writer.writes) != 2 {
-		t.Fatalf("writes = %d; want 2", len(writer.writes))
+	if len(writer.writes) != 1 {
+		t.Fatalf("writes = %d; want 1", len(writer.writes))
 	}
 	if writer.writes[0].Outdir != "out-a" || writer.writes[0].Filename != "a.lrc" {
 		t.Fatalf("writes[0] = %+v; want out-a/a.lrc", writer.writes[0])
 	}
-	if writer.writes[1].Outdir != "out-b" || writer.writes[1].Filename != "b.lrc" {
-		t.Fatalf("writes[1] = %+v; want out-b/b.lrc", writer.writes[1])
+	if len(q.items) != 1 || q.items[0].ID != 5 {
+		t.Fatalf("remaining items = %+v; want item 5 still queued", q.items)
 	}
 }
 

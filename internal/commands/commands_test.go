@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/config"
 	"github.com/sydlexius/mxlrcgo-svc/internal/db"
@@ -72,6 +73,26 @@ func TestNewVerifierDisabledDoesNotRequireFFmpeg(t *testing.T) {
 func TestConfigureWorkerVerificationAcceptsNilVerifier(t *testing.T) {
 	w := worker.New(nil, nil, fakeFetcher{}, fakeWriter{})
 	configureWorkerVerification(w, config.Config{}, nil)
+}
+
+func TestNormalizeWorkerInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{name: "zero", interval: 0, want: 15 * time.Second},
+		{name: "below minimum", interval: 5 * time.Second, want: 15 * time.Second},
+		{name: "minimum", interval: 15 * time.Second, want: 15 * time.Second},
+		{name: "above minimum", interval: 30 * time.Second, want: 30 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeWorkerInterval(tc.interval); got != tc.want {
+				t.Fatalf("normalizeWorkerInterval(%s) = %s; want %s", tc.interval, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestSchedulerBuildsScanEnqueuer(t *testing.T) {

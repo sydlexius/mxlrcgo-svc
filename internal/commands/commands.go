@@ -87,7 +87,7 @@ type ServeCmd struct {
 	Upgrade      bool    `arg:"--upgrade" help:"scheduler re-fetches .txt lyrics to promote them"`
 	BFS          bool    `arg:"--bfs" help:"scheduler uses breadth-first traversal"`
 	ScanInterval int     `arg:"--scan-interval" help:"scheduler interval in seconds (default: 900; 0 disables repeat)" default:"900"`
-	WorkInterval int     `arg:"--work-interval" help:"worker poll interval in seconds" default:"5"`
+	WorkInterval int     `arg:"--work-interval" help:"worker poll interval in seconds (minimum 15)" default:"15"`
 }
 
 // ScanCmd scans libraries once and enqueues cache misses.
@@ -458,9 +458,7 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 }
 
 func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration) {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
+	interval = normalizeWorkerInterval(interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -473,6 +471,13 @@ func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration
 		case <-ticker.C:
 		}
 	}
+}
+
+func normalizeWorkerInterval(interval time.Duration) time.Duration {
+	if interval < 15*time.Second {
+		return 15 * time.Second
+	}
+	return interval
 }
 
 func selectedProvider(cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) (providers.LyricsProvider, error) {

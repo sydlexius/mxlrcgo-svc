@@ -98,6 +98,21 @@ func TestNormalizeWorkerInterval(t *testing.T) {
 	}
 }
 
+func TestServeWorkerIntervalUsesConfigUnlessFlagProvided(t *testing.T) {
+	cfg := config.Config{
+		API: config.APIConfig{Cooldown: 45},
+	}
+
+	if got := serveWorkerInterval(cfg, ServeCmd{}); got != 45*time.Second {
+		t.Fatalf("serveWorkerInterval without flag = %s; want 45s", got)
+	}
+
+	flag := 30
+	if got := serveWorkerInterval(cfg, ServeCmd{WorkInterval: &flag}); got != 30*time.Second {
+		t.Fatalf("serveWorkerInterval with flag = %s; want 30s", got)
+	}
+}
+
 func TestSchedulerBuildsScanEnqueuer(t *testing.T) {
 	sqlDB, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

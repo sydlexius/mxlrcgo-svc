@@ -489,6 +489,40 @@ func TestRunProcessesReadyItemsUntilQueueEmpty(t *testing.T) {
 	}
 }
 
+func TestRunPacedPausesAfterEachProcessedItem(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{items: []queue.WorkItem{
+		{
+			ID:     4,
+			Inputs: models.Inputs{Track: track, Outdir: "out-a", Filename: "a.lrc"},
+		},
+		{
+			ID:     5,
+			Inputs: models.Inputs{Track: track, Outdir: "out-b", Filename: "b.lrc"},
+		},
+	}}
+	fetcher := &fakeFetcher{song: models.Song{
+		Track:  track,
+		Lyrics: models.Lyrics{LyricsBody: "fresh lyrics"},
+	}}
+	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+	var completedAtPause []int
+
+	err := w.run(context.Background(), func(context.Context) error {
+		completedAtPause = append(completedAtPause, len(q.completed))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(q.completed) != 2 {
+		t.Fatalf("completed = %v; want two completed items", q.completed)
+	}
+	if len(completedAtPause) < 2 || completedAtPause[0] != 1 || completedAtPause[1] != 2 {
+		t.Fatalf("completed at pause = %v; want pauses after each processed item", completedAtPause)
+	}
+}
+
 func TestConfidence(t *testing.T) {
 	want := models.Track{ArtistName: "  Héllo ", TrackName: "World"}
 	got := models.Track{ArtistName: "hello", TrackName: " world "}

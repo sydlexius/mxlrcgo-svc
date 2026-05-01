@@ -87,7 +87,7 @@ type ServeCmd struct {
 	Upgrade      bool    `arg:"--upgrade" help:"scheduler re-fetches .txt lyrics to promote them"`
 	BFS          bool    `arg:"--bfs" help:"scheduler uses breadth-first traversal"`
 	ScanInterval int     `arg:"--scan-interval" help:"scheduler interval in seconds (default: 900; 0 disables repeat)" default:"900"`
-	WorkInterval int     `arg:"--work-interval" help:"worker poll interval in seconds (minimum 15)" default:"15"`
+	WorkInterval *int    `arg:"--work-interval" help:"worker cooldown interval in seconds (default: api.cooldown; minimum 15)"`
 }
 
 // ScanCmd scans libraries once and enqueues cache misses.
@@ -416,7 +416,7 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		runWorkerLoop(runCtx, w, time.Duration(args.WorkInterval)*time.Second)
+		runWorkerLoop(runCtx, w, serveWorkerInterval(cfg, args))
 	}()
 	go func() {
 		defer wg.Done()
@@ -462,7 +462,7 @@ func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := w.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := w.RunPaced(ctx, interval); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("worker run failed", "error", err)
 		}
 		select {
@@ -471,6 +471,14 @@ func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration
 		case <-ticker.C:
 		}
 	}
+}
+
+func serveWorkerInterval(cfg config.Config, args ServeCmd) time.Duration {
+	interval := cfg.API.Cooldown
+	if args.WorkInterval != nil {
+		interval = *args.WorkInterval
+	}
+	return time.Duration(interval) * time.Second
 }
 
 func normalizeWorkerInterval(interval time.Duration) time.Duration {

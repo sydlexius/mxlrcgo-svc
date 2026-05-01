@@ -9,7 +9,7 @@
     <TagDescription>Latest stable release</TagDescription>
   </Branch>
   <Network>bridge</Network>
-  <Shell>sh</Shell>
+  <Shell>bash</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/sydlexius/mxlrcgo-svc/issues</Support>
   <Project>https://github.com/sydlexius/mxlrcgo-svc</Project>

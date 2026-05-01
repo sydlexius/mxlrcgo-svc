@@ -223,13 +223,13 @@ func Run(ctx context.Context, rawArgs []string, out io.Writer, deps Deps) int {
 	}
 	if err := parser.Parse(rawArgs); err != nil {
 		if err == arg.ErrHelp {
-			if err := parser.WriteHelpForSubcommand(out); err != nil {
+			if err := parser.WriteHelpForSubcommand(out, parser.SubcommandNames()...); err != nil {
 				_, _ = fmt.Fprintln(out, err)
 				return 2
 			}
 			return 0
 		}
-		if usageErr := parser.WriteUsageForSubcommand(out); usageErr != nil {
+		if usageErr := parser.WriteUsageForSubcommand(out, parser.SubcommandNames()...); usageErr != nil {
 			_, _ = fmt.Fprintln(out, usageErr)
 			return 2
 		}

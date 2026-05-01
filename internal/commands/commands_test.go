@@ -220,6 +220,9 @@ func TestRunLibraryUpdateFailures(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("library update missing exit code = %d; want 1", code)
 	}
+	if !strings.Contains(out.String(), "library 99 not found") {
+		t.Fatalf("library update missing output = %q; want not-found message", out.String())
+	}
 
 	libPath := filepath.Join(dir, "music")
 	if err := os.Mkdir(libPath, 0o750); err != nil {

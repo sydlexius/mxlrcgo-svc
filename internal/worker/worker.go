@@ -61,18 +61,22 @@ func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfide
 	}
 }
 
-// Run processes one ready work item, or returns nil when no work is ready.
+// Run processes ready work items until the queue is empty or the context ends.
 func (w *Worker) Run(ctx context.Context) error {
-	if err := w.RunOnce(ctx); err != nil {
-		if errors.Is(err, errQueueEmpty) {
+	for {
+		if err := w.RunOnce(ctx); err != nil {
+			if errors.Is(err, errQueueEmpty) {
+				return nil
+			}
+			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				return nil
+			}
+			return err
+		}
+		if ctx.Err() != nil {
 			return nil
 		}
-		if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			return nil
-		}
-		return err
 	}
-	return nil
 }
 
 // RunOnce claims and processes one ready queue item.

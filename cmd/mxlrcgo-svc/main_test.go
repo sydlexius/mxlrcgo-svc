@@ -477,12 +477,17 @@ func TestRunWithOptions_LibraryUpdateMissingLibraryFails(t *testing.T) {
 	dir := t.TempDir()
 	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
 
+	var out bytes.Buffer
 	code := runWithOptions(runOptions{
 		args:       []string{"library", "update", "99", "--name", "Missing", "--config", cfg},
+		out:        &out,
 		loadDotenv: func() error { return nil },
 	})
 	if code == 0 {
 		t.Fatal("library update missing exit code = 0; want failure")
+	}
+	if !strings.Contains(out.String(), "library 99 not found") {
+		t.Fatalf("library update missing output = %q; want not-found message", out.String())
 	}
 }
 

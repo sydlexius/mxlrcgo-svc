@@ -618,6 +618,11 @@ func runLibrary(ctx context.Context, out io.Writer, args LibraryCmd) int {
 		}
 		lib, err := repo.Get(ctx, args.Update.ID)
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				slog.Error("failed to find library", "library_id", args.Update.ID, "error", err)
+				_, _ = fmt.Fprintf(out, "library %d not found\n", args.Update.ID)
+				return 1
+			}
 			slog.Error("failed to find library", "error", err)
 			return 1
 		}

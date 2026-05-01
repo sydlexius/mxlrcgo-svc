@@ -172,8 +172,9 @@ func TestRunLibraryUpdate(t *testing.T) {
 		t.Fatalf("library update exit code = %d; want 0", code)
 	}
 	gotOut := strings.TrimSpace(out.String())
-	if !strings.HasPrefix(gotOut, "1\t") || !strings.Contains(gotOut, "\tRenamed\t"+renamedPath) {
-		t.Fatalf("library update output = %q; want updated name and path", out.String())
+	wantOut := "1\tRenamed\t" + renamedPath
+	if gotOut != wantOut {
+		t.Fatalf("library update output = %q; want %q", gotOut, wantOut)
 	}
 
 	out.Reset()
@@ -186,8 +187,9 @@ func TestRunLibraryUpdate(t *testing.T) {
 		t.Fatalf("library update name exit code = %d; want 0", code)
 	}
 	gotOut = strings.TrimSpace(out.String())
-	if !strings.HasPrefix(gotOut, "1\t") || !strings.Contains(gotOut, "\tDisplay\t"+renamedPath) {
-		t.Fatalf("library update name output = %q; want new name and existing path", out.String())
+	wantOut = "1\tDisplay\t" + renamedPath
+	if gotOut != wantOut {
+		t.Fatalf("library update name output = %q; want %q", gotOut, wantOut)
 	}
 }
 

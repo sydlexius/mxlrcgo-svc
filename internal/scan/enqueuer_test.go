@@ -53,12 +53,13 @@ func (f fakeLyricsCache) LookupFallback(_ context.Context, artist string, title 
 }
 
 type fakeWorkQueue struct {
-	inputs []models.Inputs
-	before func()
-	err    error
+	inputs     []models.Inputs
+	priorities []int
+	before     func()
+	err        error
 }
 
-func (f *fakeWorkQueue) Enqueue(_ context.Context, inputs models.Inputs, _ int) (queue.WorkItem, error) {
+func (f *fakeWorkQueue) Enqueue(_ context.Context, inputs models.Inputs, priority int) (queue.WorkItem, error) {
 	if f.before != nil {
 		f.before()
 	}
@@ -66,7 +67,8 @@ func (f *fakeWorkQueue) Enqueue(_ context.Context, inputs models.Inputs, _ int) 
 		return queue.WorkItem{}, f.err
 	}
 	f.inputs = append(f.inputs, inputs)
-	return queue.WorkItem{ID: int64(len(f.inputs)), Inputs: inputs}, nil
+	f.priorities = append(f.priorities, priority)
+	return queue.WorkItem{ID: int64(len(f.inputs)), Inputs: inputs, Priority: priority}, nil
 }
 
 func TestEnqueuer_EnqueuePendingSkipsCacheHitsAndEnqueuesMisses(t *testing.T) {
@@ -106,6 +108,9 @@ func TestEnqueuer_EnqueuePendingSkipsCacheHitsAndEnqueuesMisses(t *testing.T) {
 	}
 	if got.SourcePath != "/music/missing.mp3" {
 		t.Fatalf("source path = %q; want scan result file path", got.SourcePath)
+	}
+	if len(work.priorities) != 1 || work.priorities[0] != 5 {
+		t.Fatalf("enqueued priorities = %+v; want [5]", work.priorities)
 	}
 	if len(store.status) != 2 {
 		t.Fatalf("status calls = %+v; want done and processing calls", store.status)

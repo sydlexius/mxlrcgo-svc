@@ -40,10 +40,11 @@ type Handler struct {
 // NewHandler creates an HTTP API handler.
 func NewHandler(a Authenticator, q WorkQueue, outdir string) *Handler {
 	h := &Handler{
-		auth:   a,
-		queue:  q,
-		outdir: outdir,
-		mux:    http.NewServeMux(),
+		auth:     a,
+		queue:    q,
+		outdir:   outdir,
+		priority: queue.PriorityWebhook,
+		mux:      http.NewServeMux(),
 	}
 	h.mux.HandleFunc("POST /api/v1/webhooks/lidarr", h.handleLidarr)
 	return h

@@ -104,6 +104,7 @@ type LibraryCmd struct {
 	Add    *LibraryAddCmd    `arg:"subcommand:add" help:"add a library root"`
 	List   *LibraryListCmd   `arg:"subcommand:list" help:"list library roots"`
 	Remove *LibraryRemoveCmd `arg:"subcommand:remove" help:"remove a library root"`
+	Update *LibraryUpdateCmd `arg:"subcommand:update" help:"update a library root"`
 }
 
 // LibraryAddCmd adds a library root.
@@ -121,6 +122,14 @@ type LibraryListCmd struct {
 // LibraryRemoveCmd removes a library root.
 type LibraryRemoveCmd struct {
 	ID         int64  `arg:"positional,required" help:"library id"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// LibraryUpdateCmd updates a library root.
+type LibraryUpdateCmd struct {
+	ID         int64  `arg:"positional,required" help:"library id"`
+	Path       string `arg:"--path" help:"new library root path" default:""`
+	Name       string `arg:"--name" help:"new display name" default:""`
 	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
 }
 
@@ -539,9 +548,10 @@ func runScan(ctx context.Context, args ScanCmd) int {
 func scheduler(sqlDB *sql.DB, opts scanner.ScanOptions) scan.Scheduler {
 	results := scan.New(sqlDB)
 	enq := scan.Enqueuer{
-		Results: results,
-		Cache:   cache.New(sqlDB),
-		Queue:   queue.NewDBQueue(sqlDB),
+		Results:  results,
+		Cache:    cache.New(sqlDB),
+		Queue:    queue.NewDBQueue(sqlDB),
+		Priority: queue.PriorityScan,
 	}
 	return scan.Scheduler{
 		Libraries: library.New(sqlDB),
@@ -596,6 +606,30 @@ func runLibrary(ctx context.Context, out io.Writer, args LibraryCmd) int {
 			return 1
 		}
 		_, _ = fmt.Fprintf(out, "removed library %d\n", args.Remove.ID)
+	case args.Update != nil:
+		if args.Update.Path == "" && args.Update.Name == "" {
+			_, _ = fmt.Fprintln(out, "library update requires --path, --name, or both")
+			return 2
+		}
+		lib, err := repo.Get(ctx, args.Update.ID)
+		if err != nil {
+			slog.Error("failed to find library", "error", err)
+			return 1
+		}
+		path := lib.Path
+		if args.Update.Path != "" {
+			path = args.Update.Path
+		}
+		name := lib.Name
+		if args.Update.Name != "" {
+			name = args.Update.Name
+		}
+		lib, err = repo.Update(ctx, args.Update.ID, path, name)
+		if err != nil {
+			slog.Error("failed to update library", "error", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(out, "%d\t%s\t%s\n", lib.ID, lib.Name, lib.Path)
 	default:
 		_, _ = fmt.Fprintln(out, "missing library subcommand")
 		return 2
@@ -611,6 +645,8 @@ func libraryConfigPath(args LibraryCmd) string {
 		return args.List.ConfigPath
 	case args.Remove != nil:
 		return args.Remove.ConfigPath
+	case args.Update != nil:
+		return args.Update.ConfigPath
 	default:
 		return ""
 	}

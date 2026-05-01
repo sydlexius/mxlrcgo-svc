@@ -29,9 +29,10 @@ func (f *fakeAuth) ValidateKey(_ context.Context, raw string, required auth.Scop
 }
 
 type fakeQueue struct {
-	items    []models.Inputs
-	cleanups []models.Inputs
-	err      error
+	items      []models.Inputs
+	priorities []int
+	cleanups   []models.Inputs
+	err        error
 }
 
 func (f *fakeQueue) Enqueue(_ context.Context, inputs models.Inputs, priority int) (queue.WorkItem, error) {
@@ -39,6 +40,7 @@ func (f *fakeQueue) Enqueue(_ context.Context, inputs models.Inputs, priority in
 		return queue.WorkItem{}, f.err
 	}
 	f.items = append(f.items, inputs)
+	f.priorities = append(f.priorities, priority)
 	return queue.WorkItem{ID: int64(len(f.items)), Inputs: inputs, Priority: priority}, nil
 }
 
@@ -80,6 +82,11 @@ func TestLidarrWebhookDownloadEnqueuesBeforeOK(t *testing.T) {
 	}
 	if q.items[0].Outdir != "lyrics" || len(q.items[0].OutputPaths) != 1 || q.items[0].OutputPaths[0].Outdir != "lyrics" {
 		t.Fatalf("output destination = %+v; want lyrics outdir", q.items[0])
+	}
+	for i, v := range q.priorities {
+		if v != queue.PriorityWebhook {
+			t.Fatalf("queued priority[%d] = %d; want %d", i, v, queue.PriorityWebhook)
+		}
 	}
 }
 

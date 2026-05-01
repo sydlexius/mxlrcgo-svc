@@ -11,9 +11,12 @@ import (
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/config"
 	"github.com/sydlexius/mxlrcgo-svc/internal/db"
+	"github.com/sydlexius/mxlrcgo-svc/internal/library"
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scanner"
 	"github.com/sydlexius/mxlrcgo-svc/internal/worker"
 )
@@ -102,12 +105,35 @@ func TestSchedulerBuildsScanEnqueuer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(context.Background(), "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	if err := scanRepo.Upsert(context.Background(), lib.ID, []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Outdir:   "/music",
+		Filename: "a.lrc",
+		Status:   scan.StatusPending,
+	}}); err != nil {
+		t.Fatalf("Upsert scan result: %v", err)
+	}
+
 	got := scheduler(sqlDB, scanner.ScanOptions{MaxDepth: 7})
 	if got.OnScanComplete == nil {
 		t.Fatal("scheduler OnScanComplete = nil; want enqueue callback")
 	}
-	if err := got.OnScanComplete(context.Background(), models.Library{ID: 123}, nil); err != nil {
+	if err := got.OnScanComplete(context.Background(), models.Library{ID: lib.ID}, nil); err != nil {
 		t.Fatalf("OnScanComplete: %v", err)
+	}
+	item, err := queue.NewDBQueue(sqlDB).Dequeue(context.Background())
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if item.Priority != queue.PriorityScan {
+		t.Fatalf("Dequeue priority = %d; want scan priority %d", item.Priority, queue.PriorityScan)
 	}
 }
 
@@ -145,7 +171,8 @@ func TestRunLibraryUpdate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("library update exit code = %d; want 0", code)
 	}
-	if !strings.Contains(out.String(), "Renamed") || !strings.Contains(out.String(), renamedPath) {
+	gotOut := strings.TrimSpace(out.String())
+	if !strings.HasPrefix(gotOut, "1\t") || !strings.Contains(gotOut, "\tRenamed\t"+renamedPath) {
 		t.Fatalf("library update output = %q; want updated name and path", out.String())
 	}
 
@@ -158,7 +185,8 @@ func TestRunLibraryUpdate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("library update name exit code = %d; want 0", code)
 	}
-	if !strings.Contains(out.String(), "Display") || !strings.Contains(out.String(), renamedPath) {
+	gotOut = strings.TrimSpace(out.String())
+	if !strings.HasPrefix(gotOut, "1\t") || !strings.Contains(gotOut, "\tDisplay\t"+renamedPath) {
 		t.Fatalf("library update name output = %q; want new name and existing path", out.String())
 	}
 }

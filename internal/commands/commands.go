@@ -409,6 +409,7 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	}
 	workQ := queue.NewDBQueue(sqlDB)
 	w := worker.New(workQ, cache.New(sqlDB), fetcher, newWriter())
+	w.SetScanResults(scan.New(sqlDB))
 	configureWorkerVerification(w, cfg, verifier)
 
 	runCtx, cancel := context.WithCancel(ctx)

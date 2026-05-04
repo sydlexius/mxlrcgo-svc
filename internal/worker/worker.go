@@ -15,6 +15,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
+	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
 	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 )
 
@@ -32,12 +33,20 @@ type Cache interface {
 	Store(ctx context.Context, artist, title, album, lyrics string) error
 }
 
+// ScanResults updates the persistent discovery ledger as queue items reach
+// terminal states. Optional: workers handling items that did not originate from
+// a library scan can leave it nil.
+type ScanResults interface {
+	SetStatus(ctx context.Context, ids []int64, status string) error
+}
+
 // Worker consumes queued lyrics work one item at a time.
 type Worker struct {
 	queue                 Queue
 	cache                 Cache
 	fetcher               musixmatch.Fetcher
 	writer                lyrics.Writer
+	scanResults           ScanResults
 	verifier              verification.Verifier
 	verifyBelowConfidence float64
 	consecutiveFailures   int
@@ -79,6 +88,24 @@ func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfide
 	w.verifier = verifier
 	if belowConfidence > 0 && belowConfidence <= 1 {
 		w.verifyBelowConfidence = belowConfidence
+	}
+}
+
+// SetScanResults wires the discovery ledger so terminal queue outcomes flow
+// back to scan_results. Pass nil to disable writeback.
+func (w *Worker) SetScanResults(s ScanResults) {
+	w.scanResults = s
+}
+
+// markScanResult forwards a terminal queue outcome to the scan_results ledger.
+// Failures here are logged but never propagated, since the queue's own state is
+// already authoritative for retry behavior.
+func (w *Worker) markScanResult(ctx context.Context, id int64, status string) {
+	if w.scanResults == nil || id <= 0 {
+		return
+	}
+	if err := w.scanResults.SetStatus(ctx, []int64{id}, status); err != nil {
+		slog.Warn("worker scan_results writeback failed", "scan_result_id", id, "status", status, "error", err)
 	}
 }
 
@@ -156,18 +183,18 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	song, cacheHit, err := w.song(ctx, item.Inputs.Track)
 	if err != nil {
 		slog.Warn("worker song resolution failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
-		return w.fail(ctx, item.ID, err)
+		return w.fail(ctx, item, err)
 	}
 	confidence := Confidence(item.Inputs.Track, song.Track)
 	slog.Info("worker lyrics match", "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "cache_hit", cacheHit)
 	if !cacheHit {
 		if err := w.verify(ctx, item, song, confidence); err != nil {
 			slog.Warn("worker verification failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "error", err)
-			return w.fail(ctx, item.ID, err)
+			return w.fail(ctx, item, err)
 		}
 		if err := w.store(ctx, item.Inputs.Track, song); err != nil {
 			slog.Warn("worker cache store failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
-			return w.fail(ctx, item.ID, err)
+			return w.fail(ctx, item, err)
 		}
 	}
 
@@ -175,7 +202,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if err := w.writer.WriteLRC(song, p.Filename, p.Outdir); err != nil {
 			err = fmt.Errorf("worker: write item %d output %s/%s: %w", item.ID, p.Outdir, p.Filename, err)
 			slog.Warn("worker write failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "outdir", p.Outdir, "filename", p.Filename, "error", err)
-			return w.fail(ctx, item.ID, err)
+			return w.fail(ctx, item, err)
 		}
 	}
 
@@ -186,8 +213,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
 			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(cause, err))
 		}
+		w.markScanResult(ctxNoCancel, item.Inputs.ScanResultID, scan.StatusFailed)
 		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
 	}
+	w.markScanResult(ctxNoCancel, item.Inputs.ScanResultID, scan.StatusDone)
 	w.consecutiveFailures = 0
 	return nil
 }
@@ -242,11 +271,13 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 	return nil
 }
 
-func (w *Worker) fail(ctx context.Context, id int64, cause error) error {
+func (w *Worker) fail(ctx context.Context, item queue.WorkItem, cause error) error {
 	w.consecutiveFailures++
-	if _, err := w.queue.Fail(context.WithoutCancel(ctx), id, cause); err != nil {
-		return fmt.Errorf("worker: fail item %d after %v: %w", id, cause, err)
+	ctxNoCancel := context.WithoutCancel(ctx)
+	if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
+		return fmt.Errorf("worker: fail item %d after %v: %w", item.ID, cause, err)
 	}
+	w.markScanResult(ctxNoCancel, item.Inputs.ScanResultID, scan.StatusFailed)
 	return nil
 }
 

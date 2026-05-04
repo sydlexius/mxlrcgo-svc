@@ -49,11 +49,7 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
                  artist = excluded.artist,
                  title = excluded.title,
                  outdir = excluded.outdir,
-                 filename = excluded.filename,
-                 status = CASE
-                     WHEN ? = '' THEN scan_results.status
-                     ELSE ?
-                 END`,
+                 filename = excluded.filename`,
 			libraryID,
 			res.FilePath,
 			res.Track.ArtistName,
@@ -61,8 +57,6 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 			res.Outdir,
 			res.Filename,
 			insertStatus,
-			res.Status,
-			res.Status,
 		)
 		if err != nil {
 			return fmt.Errorf("scan: upsert %s: %w", res.FilePath, err)

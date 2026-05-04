@@ -112,9 +112,9 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 	}
 	row := q.db.QueryRowContext(ctx,
 		`INSERT INTO work_queue (
-             artist, title, artist_key, title_key, outdir, filename, source_path, output_paths, status, priority, next_attempt_at
+             artist, title, artist_key, title_key, outdir, filename, source_path, output_paths, scan_result_id, status, priority, next_attempt_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(artist_key, title_key) DO UPDATE SET
              artist = CASE
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.artist
@@ -140,6 +140,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.output_paths
                  ELSE excluded.output_paths
              END,
+             scan_result_id = COALESCE(work_queue.scan_result_id, excluded.scan_result_id),
              priority = max(work_queue.priority, excluded.priority),
              status = CASE
                  WHEN work_queue.status IN ('done', 'processing', 'failed') THEN work_queue.status
@@ -158,7 +159,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
                  ELSE NULL
              END
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
-                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		inputs.Track.ArtistName,
 		inputs.Track.TrackName,
 		normalize.NormalizeKey(inputs.Track.ArtistName),
@@ -167,6 +168,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 		inputs.Filename,
 		inputs.SourcePath,
 		outputPaths,
+		nullableID(inputs.ScanResultID),
 		StatusPending,
 		priority,
 		now,
@@ -193,7 +195,7 @@ func (q *DBQueue) Dequeue(ctx context.Context) (WorkItem, error) {
              LIMIT 1
          )
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
-                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		now,
 	)
 	item, err := scanWorkItem(row)
@@ -281,7 +283,7 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
          WHERE id = ?
            AND status = 'processing'
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
-                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		nextAttempts,
 		nextAttemptAt,
 		lastError,
@@ -305,6 +307,7 @@ func scanWorkItem(row rowScanner) (WorkItem, error) {
 	var item WorkItem
 	var nextAttemptAt, createdAt, updatedAt, outputPaths string
 	var completedAt sql.NullString
+	var scanResultID sql.NullInt64
 	err := row.Scan(
 		&item.ID,
 		&item.Inputs.Track.ArtistName,
@@ -321,9 +324,13 @@ func scanWorkItem(row rowScanner) (WorkItem, error) {
 		&updatedAt,
 		&completedAt,
 		&outputPaths,
+		&scanResultID,
 	)
 	if err != nil {
 		return WorkItem{}, err
+	}
+	if scanResultID.Valid {
+		item.Inputs.ScanResultID = scanResultID.Int64
 	}
 	item.NextAttemptAt, err = parseTime(nextAttemptAt)
 	if err != nil {
@@ -393,6 +400,13 @@ func parseTime(s string) (time.Time, error) {
 
 func formatTime(t time.Time) string {
 	return t.UTC().Format(timeFormat)
+}
+
+func nullableID(id int64) any {
+	if id <= 0 {
+		return nil
+	}
+	return id
 }
 
 func requireAffected(res sql.Result, op string) error {

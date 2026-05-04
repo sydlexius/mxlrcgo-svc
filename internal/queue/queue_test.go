@@ -365,6 +365,86 @@ func TestDBQueue_EnqueuePersistsSourcePath(t *testing.T) {
 	}
 }
 
+func insertScanResult(t *testing.T, sqlDB *sql.DB, filePath string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	res, err := sqlDB.ExecContext(ctx,
+		`INSERT INTO libraries (path, name) VALUES (?, ?)`,
+		filepath.Dir(filePath), "test")
+	if err != nil {
+		t.Fatalf("insert library: %v", err)
+	}
+	libID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("library id: %v", err)
+	}
+	res, err = sqlDB.ExecContext(ctx,
+		`INSERT INTO scan_results (library_id, file_path, status) VALUES (?, ?, 'processing')`,
+		libID, filePath)
+	if err != nil {
+		t.Fatalf("insert scan_result: %v", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("scan_result id: %v", err)
+	}
+	return id
+}
+
+func TestDBQueue_EnqueuePersistsScanResultID(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID := insertScanResult(t, sqlDB, "/music/a.mp3")
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	enq, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Title"},
+		ScanResultID: scanID,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if enq.Inputs.ScanResultID != scanID {
+		t.Fatalf("enqueued ScanResultID = %d; want %d", enq.Inputs.ScanResultID, scanID)
+	}
+
+	got, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if got.Inputs.ScanResultID != scanID {
+		t.Fatalf("dequeued ScanResultID = %d; want %d", got.Inputs.ScanResultID, scanID)
+	}
+}
+
+func TestDBQueue_EnqueuePreservesScanResultIDOnDuplicate(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID := insertScanResult(t, sqlDB, "/music/a.mp3")
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Title"},
+		ScanResultID: scanID,
+	}, 1); err != nil {
+		t.Fatalf("Enqueue initial: %v", err)
+	}
+	// Webhook re-enqueue without an originating scan_result must not erase the link.
+	dup, err := q.Enqueue(ctx, models.Inputs{
+		Track: models.Track{ArtistName: "Artist", TrackName: "Title"},
+	}, 5)
+	if err != nil {
+		t.Fatalf("Enqueue duplicate: %v", err)
+	}
+	if dup.Inputs.ScanResultID != scanID {
+		t.Fatalf("duplicate ScanResultID = %d; want %d preserved", dup.Inputs.ScanResultID, scanID)
+	}
+}
+
 func TestDBQueue_CleanupRemovesRetryableDuplicate(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

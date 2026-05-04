@@ -65,8 +65,10 @@ func TestRepo_UpsertAndListByLibrary(t *testing.T) {
 	if got[0].Outdir != "/music" || got[0].Filename != "a.lrc" {
 		t.Errorf("output = %q/%q; want /music/a.lrc", got[0].Outdir, got[0].Filename)
 	}
-	if got[0].Status != scan.StatusDone {
-		t.Errorf("Status = %q; want %q", got[0].Status, scan.StatusDone)
+	// Upsert is write-once for status; transitions are owned by SetStatus so
+	// re-scans cannot clobber terminal states recorded by the worker.
+	if got[0].Status != scan.StatusPending {
+		t.Errorf("Status = %q; want %q (Upsert must not touch status on update)", got[0].Status, scan.StatusPending)
 	}
 }
 

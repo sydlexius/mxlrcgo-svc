@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
@@ -61,8 +62,29 @@ func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfide
 	}
 }
 
-// Run consumes ready work until the queue is empty or ctx is canceled.
+// Run processes ready work items until the queue is empty or the context ends.
 func (w *Worker) Run(ctx context.Context) error {
+	return w.run(ctx, nil)
+}
+
+// RunPaced processes ready work items, waiting interval after each processed item.
+func (w *Worker) RunPaced(ctx context.Context, interval time.Duration) error {
+	return w.run(ctx, func(ctx context.Context) error {
+		if interval <= 0 {
+			return nil
+		}
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	})
+}
+
+func (w *Worker) run(ctx context.Context, pause func(context.Context) error) error {
 	for {
 		if err := w.RunOnce(ctx); err != nil {
 			if errors.Is(err, errQueueEmpty) {
@@ -72,6 +94,17 @@ func (w *Worker) Run(ctx context.Context) error {
 				return nil
 			}
 			return err
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if pause != nil {
+			if err := pause(ctx); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return nil
+				}
+				return err
+			}
 		}
 	}
 }

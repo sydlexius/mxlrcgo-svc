@@ -87,7 +87,7 @@ type ServeCmd struct {
 	Upgrade      bool    `arg:"--upgrade" help:"scheduler re-fetches .txt lyrics to promote them"`
 	BFS          bool    `arg:"--bfs" help:"scheduler uses breadth-first traversal"`
 	ScanInterval int     `arg:"--scan-interval" help:"scheduler interval in seconds (default: 900; 0 disables repeat)" default:"900"`
-	WorkInterval int     `arg:"--work-interval" help:"worker poll interval in seconds" default:"5"`
+	WorkInterval *int    `arg:"--work-interval" help:"worker cooldown interval in seconds (default: api.cooldown; minimum 15)"`
 }
 
 // ScanCmd scans libraries once and enqueues cache misses.
@@ -104,6 +104,7 @@ type LibraryCmd struct {
 	Add    *LibraryAddCmd    `arg:"subcommand:add" help:"add a library root"`
 	List   *LibraryListCmd   `arg:"subcommand:list" help:"list library roots"`
 	Remove *LibraryRemoveCmd `arg:"subcommand:remove" help:"remove a library root"`
+	Update *LibraryUpdateCmd `arg:"subcommand:update" help:"update a library root"`
 }
 
 // LibraryAddCmd adds a library root.
@@ -121,6 +122,14 @@ type LibraryListCmd struct {
 // LibraryRemoveCmd removes a library root.
 type LibraryRemoveCmd struct {
 	ID         int64  `arg:"positional,required" help:"library id"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// LibraryUpdateCmd updates a library root.
+type LibraryUpdateCmd struct {
+	ID         int64  `arg:"positional,required" help:"library id"`
+	Path       string `arg:"--path" help:"new library root path" default:""`
+	Name       string `arg:"--name" help:"new display name" default:""`
 	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
 }
 
@@ -407,7 +416,7 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		runWorkerLoop(runCtx, w, time.Duration(args.WorkInterval)*time.Second)
+		runWorkerLoop(runCtx, w, serveWorkerInterval(cfg, args))
 	}()
 	go func() {
 		defer wg.Done()
@@ -449,13 +458,11 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 }
 
 func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration) {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
+	interval = normalizeWorkerInterval(interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := w.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := w.RunPaced(ctx, interval); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("worker run failed", "error", err)
 		}
 		select {
@@ -464,6 +471,21 @@ func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration
 		case <-ticker.C:
 		}
 	}
+}
+
+func serveWorkerInterval(cfg config.Config, args ServeCmd) time.Duration {
+	interval := cfg.API.Cooldown
+	if args.WorkInterval != nil {
+		interval = *args.WorkInterval
+	}
+	return time.Duration(interval) * time.Second
+}
+
+func normalizeWorkerInterval(interval time.Duration) time.Duration {
+	if interval < 15*time.Second {
+		return 15 * time.Second
+	}
+	return interval
 }
 
 func selectedProvider(cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) (providers.LyricsProvider, error) {
@@ -539,9 +561,10 @@ func runScan(ctx context.Context, args ScanCmd) int {
 func scheduler(sqlDB *sql.DB, opts scanner.ScanOptions) scan.Scheduler {
 	results := scan.New(sqlDB)
 	enq := scan.Enqueuer{
-		Results: results,
-		Cache:   cache.New(sqlDB),
-		Queue:   queue.NewDBQueue(sqlDB),
+		Results:  results,
+		Cache:    cache.New(sqlDB),
+		Queue:    queue.NewDBQueue(sqlDB),
+		Priority: queue.PriorityScan,
 	}
 	return scan.Scheduler{
 		Libraries: library.New(sqlDB),
@@ -596,6 +619,35 @@ func runLibrary(ctx context.Context, out io.Writer, args LibraryCmd) int {
 			return 1
 		}
 		_, _ = fmt.Fprintf(out, "removed library %d\n", args.Remove.ID)
+	case args.Update != nil:
+		if args.Update.Path == "" && args.Update.Name == "" {
+			_, _ = fmt.Fprintln(out, "library update requires --path, --name, or both")
+			return 2
+		}
+		lib, err := repo.Get(ctx, args.Update.ID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				slog.Error("failed to find library", "library_id", args.Update.ID, "error", err)
+				_, _ = fmt.Fprintf(out, "library %d not found\n", args.Update.ID)
+				return 1
+			}
+			slog.Error("failed to find library", "error", err)
+			return 1
+		}
+		path := lib.Path
+		if args.Update.Path != "" {
+			path = args.Update.Path
+		}
+		name := lib.Name
+		if args.Update.Name != "" {
+			name = args.Update.Name
+		}
+		lib, err = repo.Update(ctx, args.Update.ID, path, name)
+		if err != nil {
+			slog.Error("failed to update library", "error", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(out, "%d\t%s\t%s\n", lib.ID, lib.Name, lib.Path)
 	default:
 		_, _ = fmt.Fprintln(out, "missing library subcommand")
 		return 2
@@ -611,6 +663,8 @@ func libraryConfigPath(args LibraryCmd) string {
 		return args.List.ConfigPath
 	case args.Remove != nil:
 		return args.Remove.ConfigPath
+	case args.Update != nil:
+		return args.Update.ConfigPath
 	default:
 		return ""
 	}

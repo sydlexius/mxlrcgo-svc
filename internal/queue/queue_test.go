@@ -142,6 +142,79 @@ func TestDBQueue_DequeueClaimsHighestPriorityReadyItem(t *testing.T) {
 	}
 }
 
+func TestDBQueue_DequeueKeepsFIFOWithinSamePriority(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	inputs := []models.Inputs{
+		{Track: models.Track{ArtistName: "Artist", TrackName: "One"}},
+		{Track: models.Track{ArtistName: "Artist", TrackName: "Two"}},
+		{Track: models.Track{ArtistName: "Artist", TrackName: "Three"}},
+	}
+	for _, v := range inputs {
+		if _, err := q.Enqueue(ctx, v, PriorityScan); err != nil {
+			t.Fatalf("Enqueue %q: %v", v.Track.TrackName, err)
+		}
+	}
+
+	first, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue first: %v", err)
+	}
+	second, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue second: %v", err)
+	}
+	third, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue third: %v", err)
+	}
+
+	if first.Inputs.Track.TrackName != "One" || second.Inputs.Track.TrackName != "Two" || third.Inputs.Track.TrackName != "Three" {
+		t.Fatalf("dequeue order = %q, %q, %q; want One, Two, Three",
+			first.Inputs.Track.TrackName, second.Inputs.Track.TrackName, third.Inputs.Track.TrackName)
+	}
+}
+
+func TestDBQueue_DequeuePrioritizesWebhookAheadOfScanBacklog(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Scan", TrackName: "One"}}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue scan one: %v", err)
+	}
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Scan", TrackName: "Two"}}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue scan two: %v", err)
+	}
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Webhook", TrackName: "Now"}}, PriorityWebhook); err != nil {
+		t.Fatalf("Enqueue webhook: %v", err)
+	}
+
+	first, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue first: %v", err)
+	}
+	second, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue second: %v", err)
+	}
+	third, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue third: %v", err)
+	}
+
+	if first.Inputs.Track.ArtistName != "Webhook" {
+		t.Fatalf("first dequeue artist = %q; want Webhook", first.Inputs.Track.ArtistName)
+	}
+	if second.Inputs.Track.TrackName != "One" || third.Inputs.Track.TrackName != "Two" {
+		t.Fatalf("scan dequeue order = %q, %q; want One, Two", second.Inputs.Track.TrackName, third.Inputs.Track.TrackName)
+	}
+}
+
 func TestDBQueue_EnqueueDuplicateDoesNotRequeueProcessingItem(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

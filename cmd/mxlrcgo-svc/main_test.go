@@ -495,6 +495,36 @@ func TestRunWithOptions_LibrarySubcommands(t *testing.T) {
 		t.Fatalf("library list output = %q; want Music", out.String())
 	}
 
+	renamedPath := filepath.Join(dir, "renamed")
+	if err := os.Mkdir(renamedPath, 0o750); err != nil {
+		t.Fatalf("mkdir renamed library: %v", err)
+	}
+	out.Reset()
+	code = runWithOptions(runOptions{
+		args:       []string{"library", "update", "1", "--path", renamedPath, "--name", "Renamed", "--config", cfg},
+		out:        &out,
+		loadDotenv: func() error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("library update exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "Renamed") || !strings.Contains(out.String(), renamedPath) {
+		t.Fatalf("library update output = %q; want updated name and path", out.String())
+	}
+
+	out.Reset()
+	code = runWithOptions(runOptions{
+		args:       []string{"library", "update", "1", "--name", "Display", "--config", cfg},
+		out:        &out,
+		loadDotenv: func() error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("library update name exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "Display") || !strings.Contains(out.String(), renamedPath) {
+		t.Fatalf("library update name output = %q; want new name and existing path", out.String())
+	}
+
 	out.Reset()
 	code = runWithOptions(runOptions{args: []string{"library", "remove", "1", "--config", cfg}, out: &out, loadDotenv: func() error { return nil }})
 	if code != 0 {
@@ -502,6 +532,25 @@ func TestRunWithOptions_LibrarySubcommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "removed library 1") {
 		t.Fatalf("library remove output = %q; want removed message", out.String())
+	}
+}
+
+func TestRunWithOptions_LibraryUpdateMissingLibraryFails(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cfg := writeConfig(t, "config-token", 1, filepath.Join(dir, "out"), filepath.Join(dir, "state", "test.db"))
+
+	var out bytes.Buffer
+	code := runWithOptions(runOptions{
+		args:       []string{"library", "update", "99", "--name", "Missing", "--config", cfg},
+		out:        &out,
+		loadDotenv: func() error { return nil },
+	})
+	if code == 0 {
+		t.Fatal("library update missing exit code = 0; want failure")
+	}
+	if !strings.Contains(out.String(), "library 99 not found") {
+		t.Fatalf("library update missing output = %q; want not-found message", out.String())
 	}
 }
 

@@ -10,7 +10,11 @@ RUN apk add --no-cache bash ca-certificates su-exec tzdata && \
     mkdir -p /config /music && \
     chown mxlrcgo:mxlrcgo /config /music
 
-COPY mxlrcgo-svc /usr/local/bin/mxlrcgo-svc
+# dockers_v2 runs a single buildx that fans out across platforms and stages
+# each platform's binary under $TARGETPLATFORM/ in the build context.
+# extra_files (entrypoint.sh) keep their original relative path.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/mxlrcgo-svc /usr/local/bin/mxlrcgo-svc
 COPY build/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

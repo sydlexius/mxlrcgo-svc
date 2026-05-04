@@ -435,7 +435,13 @@ func (q *DBQueue) List(ctx context.Context, filter ListFilter) (items []WorkItem
 // processing rows or undoing a successful completion.
 func (q *DBQueue) Retry(ctx context.Context, id int64) (WorkItem, error) {
 	now := formatTime(q.now())
-	row := q.db.QueryRowContext(ctx,
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("queue: begin retry tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx,
 		`UPDATE work_queue
          SET status = 'pending',
              attempts = 0,
@@ -454,7 +460,7 @@ func (q *DBQueue) Retry(ctx context.Context, id int64) (WorkItem, error) {
 		// caller cannot tell those apart here; existence is checked separately
 		// so the user gets a clear error message either way.
 		var exists int
-		if err := q.db.QueryRowContext(ctx,
+		if err := tx.QueryRowContext(ctx,
 			`SELECT 1 FROM work_queue WHERE id = ?`, id,
 		).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -466,6 +472,21 @@ func (q *DBQueue) Retry(ctx context.Context, id int64) (WorkItem, error) {
 	}
 	if err != nil {
 		return WorkItem{}, fmt.Errorf("queue: retry: %w", err)
+	}
+	// Reset every linked scan_results row so `scan results` reflects the
+	// retried state. Skip rows already in 'pending' or 'done' so we never
+	// overwrite a terminal outcome.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE scan_results
+         SET status = 'pending'
+         WHERE id IN (SELECT scan_result_id FROM work_queue_scan_results WHERE work_queue_id = ?)
+           AND status = 'processing'`,
+		id,
+	); err != nil {
+		return WorkItem{}, fmt.Errorf("queue: retry scan_results reset: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkItem{}, fmt.Errorf("queue: commit retry tx: %w", err)
 	}
 	return item, nil
 }

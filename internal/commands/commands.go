@@ -109,7 +109,7 @@ type ScanCmd struct {
 // ScanResultsCmd lists persisted scan results, optionally filtered.
 type ScanResultsCmd struct {
 	Library    string `arg:"--library" help:"library name or numeric id" default:""`
-	Status     string `arg:"--status" help:"filter by status (pending, processing, done, failed)" default:""`
+	Status     string `arg:"--status" help:"filter by status (pending, processing, done)" default:""`
 	Limit      int    `arg:"--limit" help:"maximum number of rows to return (0 = unlimited)" default:"0"`
 	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
 }
@@ -1135,16 +1135,19 @@ func validateQueueStatus(s string) error {
 	}
 }
 
-// validateScanStatus checks --status for scan results commands.
+// validateScanStatus checks --status for scan results commands. scan_results
+// rows only transition pending -> processing -> done; no code path writes
+// "failed" to a scan_results row, so we deliberately reject it here even
+// though the constant exists in the scan package.
 func validateScanStatus(s string) error {
 	if s == "" {
 		return nil
 	}
 	switch s {
-	case scan.StatusPending, scan.StatusProcessing, scan.StatusDone, scan.StatusFailed:
+	case scan.StatusPending, scan.StatusProcessing, scan.StatusDone:
 		return nil
 	default:
-		return fmt.Errorf("invalid status %q (want pending, processing, done, or failed)", s)
+		return fmt.Errorf("invalid status %q (want pending, processing, or done)", s)
 	}
 }
 

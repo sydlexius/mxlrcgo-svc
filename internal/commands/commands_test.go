@@ -731,12 +731,15 @@ func TestValidateQueueStatus(t *testing.T) {
 }
 
 func TestValidateScanStatus(t *testing.T) {
-	for _, ok := range []string{"", "pending", "processing", "done", "failed"} {
+	for _, ok := range []string{"", "pending", "processing", "done"} {
 		if err := validateScanStatus(ok); err != nil {
 			t.Errorf("validateScanStatus(%q) = %v; want nil", ok, err)
 		}
 	}
-	for _, bad := range []string{"queued", "DONE", "?"} {
+	// scan_results never transitions to "failed" anywhere in the codebase, so
+	// validateScanStatus deliberately rejects it to avoid surfacing an
+	// always-empty filter.
+	for _, bad := range []string{"failed", "queued", "DONE", "?"} {
 		if err := validateScanStatus(bad); err == nil {
 			t.Errorf("validateScanStatus(%q) = nil; want error", bad)
 		}
@@ -1040,4 +1043,147 @@ func TestResolveLibrary_NumericRefAmbiguousIDvsName(t *testing.T) {
 		t.Fatalf("err = %v; want substring 'ambiguous'", err)
 	}
 	_ = cfg
+}
+
+func TestRunScanResults_FilterByStatus(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(ctx, "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	rows := []models.ScanResult{
+		{FilePath: "/music/a.mp3", Track: models.Track{ArtistName: "A", TrackName: "Pending"}, Outdir: "/music", Filename: "a.lrc", Status: scan.StatusPending},
+		{FilePath: "/music/b.mp3", Track: models.Track{ArtistName: "B", TrackName: "Done"}, Outdir: "/music", Filename: "b.lrc", Status: scan.StatusPending},
+	}
+	if err := scanRepo.Upsert(ctx, lib.ID, rows, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE scan_results SET status = 'done' WHERE artist = 'B'`); err != nil {
+		t.Fatalf("set status done: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := runScanResults(ctx, &out, ScanResultsCmd{ConfigPath: cfg, Status: "done"})
+	if code != 0 {
+		t.Fatalf("scan results --status done: %d. out=%s", code, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "/music/b.mp3") {
+		t.Fatalf("want done row in output: %q", got)
+	}
+	if strings.Contains(got, "/music/a.mp3") {
+		t.Fatalf("filter leaked pending row: %q", got)
+	}
+}
+
+func TestRunScanResults_LimitTrimsResults(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(ctx, "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	var rows []models.ScanResult
+	for i := 0; i < 5; i++ {
+		rows = append(rows, models.ScanResult{
+			FilePath: "/music/" + strconv.Itoa(i) + ".mp3",
+			Track:    models.Track{ArtistName: "A", TrackName: strconv.Itoa(i)},
+			Outdir:   "/music",
+			Filename: strconv.Itoa(i) + ".lrc",
+			Status:   scan.StatusPending,
+		})
+	}
+	if err := scanRepo.Upsert(ctx, lib.ID, rows, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := runScanResults(ctx, &out, ScanResultsCmd{ConfigPath: cfg, Limit: 2})
+	if code != 0 {
+		t.Fatalf("scan results --limit 2: %d. out=%s", code, out.String())
+	}
+	count := strings.Count(out.String(), "/music/")
+	if count != 2 {
+		t.Fatalf("limit 2 returned %d data rows; want 2. out=%s", count, out.String())
+	}
+}
+
+func TestRunQueueRetry_ResetsLinkedScanResults(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(ctx, "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	if err := scanRepo.Upsert(ctx, lib.ID, []models.ScanResult{{
+		FilePath: "/music/song.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Song"},
+		Outdir:   "/music",
+		Filename: "song.lrc",
+		Status:   scan.StatusPending,
+	}}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	var scanID int64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT id FROM scan_results LIMIT 1`).Scan(&scanID); err != nil {
+		t.Fatalf("scan id: %v", err)
+	}
+	q := queue.NewDBQueue(sqlDB)
+	item, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Song"},
+		ScanResultID: scanID,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Fail(ctx, item.ID, errors.New("rate limited")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE scan_results SET status = 'processing' WHERE id = ?`, scanID); err != nil {
+		t.Fatalf("seed processing: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"queue", "retry", "--config", cfg, strconv.FormatInt(item.ID, 10)}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("queue retry: %d. out=%s", code, out.String())
+	}
+
+	sqlDB, err = db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	var scanStatus string
+	if err := sqlDB.QueryRowContext(ctx, `SELECT status FROM scan_results WHERE id = ?`, scanID).Scan(&scanStatus); err != nil {
+		t.Fatalf("read scan_results status: %v", err)
+	}
+	if scanStatus != "pending" {
+		t.Fatalf("scan_results status = %q after retry; want pending", scanStatus)
+	}
 }

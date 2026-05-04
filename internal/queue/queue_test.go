@@ -1044,3 +1044,60 @@ func TestDBQueue_CompleteMarksDone(t *testing.T) {
 		t.Fatalf("completed_at = %q; want %q", completedAt, formatTime(now))
 	}
 }
+
+func TestDBQueue_RetryResetsLinkedScanResults(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID1 := insertScanResult(t, sqlDB, "/music/lib-a/song.mp3")
+	scanID2 := insertScanResult(t, sqlDB, "/music/lib-b/song.mp3")
+
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	// Two scan_results with the same normalized key collapse into one queue row.
+	first, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Song"},
+		ScanResultID: scanID1,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue first: %v", err)
+	}
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Song"},
+		ScanResultID: scanID2,
+	}, 1); err != nil {
+		t.Fatalf("Enqueue second: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Fail(ctx, first.ID, errors.New("rate limited")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	// EnqueuePending in scan flips both scan_results to 'processing' on enqueue.
+	// Verify that's the starting state we're testing the reset against.
+	for _, id := range []int64{scanID1, scanID2} {
+		if _, err := sqlDB.ExecContext(ctx,
+			`UPDATE scan_results SET status = 'processing' WHERE id = ?`, id,
+		); err != nil {
+			t.Fatalf("seed processing on scan %d: %v", id, err)
+		}
+	}
+
+	if _, err := q.Retry(ctx, first.ID); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	for _, id := range []int64{scanID1, scanID2} {
+		var status string
+		if err := sqlDB.QueryRowContext(ctx,
+			`SELECT status FROM scan_results WHERE id = ?`, id,
+		).Scan(&status); err != nil {
+			t.Fatalf("read scan_results %d: %v", id, err)
+		}
+		if status != StatusPending {
+			t.Fatalf("scan_results %d status = %q; want %q (Retry must reset every linked processing row)", id, status, StatusPending)
+		}
+	}
+}

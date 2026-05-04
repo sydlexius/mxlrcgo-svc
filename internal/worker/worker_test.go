@@ -772,6 +772,39 @@ func TestRunOnceWithOpenCircuitDoesNotIncrementBackoff(t *testing.T) {
 	}
 }
 
+func TestRunOnceSurfacesReleaseFailureAfterCircuitTrip(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{
+		items: []queue.WorkItem{
+			{ID: 950, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+		},
+		releaseErr: errors.New("db down"),
+	}
+	fetcher := &fakeFetcher{err: fmt.Errorf("upstream: %w", musixmatch.ErrRateLimited)}
+	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+	w.SetCircuitOpenDuration(30 * time.Minute)
+
+	err := w.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce returned nil; want release-failure error to be surfaced")
+	}
+	if errors.Is(err, errQueueEmpty) {
+		t.Fatalf("RunOnce returned errQueueEmpty; want a real error so the outer loop can react. got %v", err)
+	}
+	if !errors.Is(err, q.releaseErr) {
+		t.Fatalf("RunOnce error %v; want errors.Is(_, releaseErr) so the cause is preserved", err)
+	}
+	// Circuit must still be opened even though release failed; we want the
+	// quiet window applied to upstream while operators investigate the
+	// orphaned row.
+	if w.circuitOpenUntil.IsZero() {
+		t.Fatal("circuitOpenUntil = zero; want circuit opened despite release failure")
+	}
+	if len(q.failed) != 0 {
+		t.Fatalf("failed = %v; want none on circuit-open trip even when release fails", q.failed)
+	}
+}
+
 type fakeCacheToggle struct {
 	hits    []bool
 	payload string

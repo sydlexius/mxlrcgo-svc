@@ -465,6 +465,54 @@ func TestDBQueue_CompleteWithoutScanResultIDLeavesLedgerUntouched(t *testing.T) 
 	}
 }
 
+func TestDBQueue_CompleteWritesBackAllLinkedScanResults(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID1 := insertScanResult(t, sqlDB, "/music/lib-a/dup.mp3")
+	scanID2 := insertScanResult(t, sqlDB, "/music/lib-b/dup.mp3")
+	q := NewDBQueue(sqlDB)
+	q.now = func() time.Time { return time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC) }
+
+	// Two scan_results with identical normalized artist/title collapse into one
+	// work_queue row. Both links must survive so Complete can flip both rows.
+	first, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Dup"},
+		ScanResultID: scanID1,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue first: %v", err)
+	}
+	second, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: " artist ", TrackName: "dup"},
+		ScanResultID: scanID2,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue second: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected dedupe to single work_queue row; got ids %d and %d", first.ID, second.ID)
+	}
+
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, first.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	for _, id := range []int64{scanID1, scanID2} {
+		var status string
+		if err := sqlDB.QueryRowContext(ctx,
+			`SELECT status FROM scan_results WHERE id = ?`, id,
+		).Scan(&status); err != nil {
+			t.Fatalf("read scan_results %d: %v", id, err)
+		}
+		if status != "done" {
+			t.Fatalf("scan_results %d status = %q; want done (Complete must flip every linked row)", id, status)
+		}
+	}
+}
+
 func TestDBQueue_EnqueuePersistsScanResultID(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := openQueueTestDB(t)

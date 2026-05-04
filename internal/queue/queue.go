@@ -103,14 +103,23 @@ func NewDBQueue(db *sql.DB) *DBQueue {
 }
 
 // Enqueue atomically inserts a new work item or refreshes an existing retryable
-// item with the same normalized artist/title key.
+// item with the same normalized artist/title key. When the item carries a
+// scan_result_id, the link is also recorded in work_queue_scan_results so a
+// later Complete writeback can flip every collapsed scan_results row, not just
+// the first one observed.
 func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority int) (WorkItem, error) {
 	now := formatTime(q.now())
 	outputPaths, err := marshalOutputPaths(inputs)
 	if err != nil {
 		return WorkItem{}, err
 	}
-	row := q.db.QueryRowContext(ctx,
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("queue: begin enqueue tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx,
 		`INSERT INTO work_queue (
              artist, title, artist_key, title_key, outdir, filename, source_path, output_paths, scan_result_id, status, priority, next_attempt_at
          )
@@ -177,6 +186,18 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 	if err != nil {
 		return WorkItem{}, fmt.Errorf("queue: enqueue: %w", err)
 	}
+	if inputs.ScanResultID > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO work_queue_scan_results (work_queue_id, scan_result_id)
+             VALUES (?, ?)`,
+			item.ID, inputs.ScanResultID,
+		); err != nil {
+			return WorkItem{}, fmt.Errorf("queue: link scan_result %d: %w", inputs.ScanResultID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkItem{}, fmt.Errorf("queue: commit enqueue tx: %w", err)
+	}
 	return item, nil
 }
 
@@ -208,11 +229,11 @@ func (q *DBQueue) Dequeue(ctx context.Context) (WorkItem, error) {
 	return item, nil
 }
 
-// Complete marks a processing item done. If the work_queue row carries a
-// scan_result_id, the linked scan_results row is flipped to 'done' inside the
-// same transaction, so a successful Complete guarantees both ledgers agree.
-// Crash or partial-write between the two updates is impossible: SQLite either
-// commits the whole transaction or rolls back.
+// Complete marks a processing item done. Every scan_results row linked through
+// work_queue_scan_results is flipped to 'done' inside the same transaction, so
+// a successful Complete guarantees the work_queue row and all originating
+// scan_results agree. Crash or partial-write between the updates is impossible:
+// SQLite either commits the whole transaction or rolls back.
 func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	now := formatTime(q.now())
 	tx, err := q.db.BeginTx(ctx, nil)
@@ -241,7 +262,7 @@ func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE scan_results
          SET status = 'done'
-         WHERE id = (SELECT scan_result_id FROM work_queue WHERE id = ?)
+         WHERE id IN (SELECT scan_result_id FROM work_queue_scan_results WHERE work_queue_id = ?)
            AND status != 'done'`,
 		id,
 	); err != nil {

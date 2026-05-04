@@ -22,7 +22,7 @@ if [ "$(id -u)" = "0" ]; then
 
     if [ "${CURRENT_UID}" != "${PUID}" ] || [ "${CURRENT_GID}" != "${PGID}" ]; then
         deluser mxlrcgo 2>/dev/null || true
-        adduser -u "${PUID}" -G "${PGID_GROUP:-mxlrcgo}" -s /bin/sh -D mxlrcgo
+        adduser -u "${PUID}" -G "${PGID_GROUP:-mxlrcgo}" -s /bin/bash -D mxlrcgo
     fi
 
     chown -R mxlrcgo:"${PGID_GROUP:-mxlrcgo}" /config /music 2>/dev/null || true

@@ -151,6 +151,69 @@ func TestRunWithOptions_HelpDoesNotStartApplication(t *testing.T) {
 	}
 }
 
+func TestRunWithOptions_SubcommandHelpShowsSelectedCommand(t *testing.T) {
+	isolateCLIEnv(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "serve",
+			args: []string{"serve", "--help"},
+			want: []string{"Usage: mxlrcgo-svc serve", "--scan-interval", "--work-interval"},
+		},
+		{
+			name: "scan",
+			args: []string{"scan", "--help"},
+			want: []string{"Usage: mxlrcgo-svc scan", "--upgrade", "--bfs"},
+		},
+		{
+			name: "library",
+			args: []string{"library", "--help"},
+			want: []string{"Usage: mxlrcgo-svc library", "add", "list"},
+		},
+		{
+			name: "library add",
+			args: []string{"library", "add", "--help"},
+			want: []string{"Usage: mxlrcgo-svc library add", "--name", "--config"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			rec := &runRecord{}
+			code := runWithOptions(runOptions{
+				args:       tc.args,
+				out:        &out,
+				loadDotenv: func() error { return nil },
+				newFetcher: func(token string) musixmatch.Fetcher {
+					rec.token = token
+					return &fakeFetcher{rec: rec}
+				},
+				newWriter: func() lyrics.Writer { return fakeWriter{} },
+				newApp: func(musixmatch.Fetcher, lyrics.Writer, *queue.InputsQueue, int, string) appRunner {
+					rec.appCreated = true
+					return fakeRunner{rec: rec}
+				},
+			})
+			if code != 0 {
+				t.Fatalf("run exit code = %d; want 0", code)
+			}
+			if rec.appCreated {
+				t.Fatal("app was created; want help to stop before startup")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("help output = %q; want %q", out.String(), want)
+				}
+			}
+		})
+	}
+}
+
 func TestRunWithOptions_CLIPrecedenceAndPairInput(t *testing.T) {
 	isolateCLIEnv(t)
 	dir := t.TempDir()

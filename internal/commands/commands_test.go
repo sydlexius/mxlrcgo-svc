@@ -78,6 +78,64 @@ func TestConfigureWorkerVerificationAcceptsNilVerifier(t *testing.T) {
 	configureWorkerVerification(w, config.Config{}, nil)
 }
 
+func TestRunSubcommandHelpShowsSelectedCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "serve",
+			args: []string{"serve", "--help"},
+			want: []string{"Usage: mxlrcgo-svc serve", "--scan-interval", "--work-interval"},
+		},
+		{
+			name: "scan",
+			args: []string{"scan", "--help"},
+			want: []string{"Usage: mxlrcgo-svc scan", "--upgrade", "--bfs"},
+		},
+		{
+			name: "library",
+			args: []string{"library", "--help"},
+			want: []string{"Usage: mxlrcgo-svc library", "add", "list"},
+		},
+		{
+			name: "library add",
+			args: []string{"library", "add", "--help"},
+			want: []string{"Usage: mxlrcgo-svc library add", "--name", "--config"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			code := Run(context.Background(), tc.args, &out, Deps{})
+			if code != 0 {
+				t.Fatalf("Run exit code = %d; want 0", code)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("help output = %q; want %q", out.String(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestRunSubcommandParseErrorShowsSelectedUsage(t *testing.T) {
+	var out bytes.Buffer
+	code := Run(context.Background(), []string{"serve", "--not-a-real-flag"}, &out, Deps{})
+	if code != 2 {
+		t.Fatalf("Run exit code = %d; want 2", code)
+	}
+	if !strings.Contains(out.String(), "Usage: mxlrcgo-svc serve") {
+		t.Fatalf("usage output = %q; want serve usage", out.String())
+	}
+	if strings.Contains(out.String(), "Usage: mxlrcgo-svc <command>") {
+		t.Fatalf("usage output = %q; want selected subcommand usage, not top-level usage", out.String())
+	}
+}
+
 func TestNormalizeWorkerInterval(t *testing.T) {
 	tests := []struct {
 		name     string

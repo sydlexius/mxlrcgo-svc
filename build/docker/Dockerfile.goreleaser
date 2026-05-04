@@ -4,9 +4,9 @@ LABEL org.opencontainers.image.source="https://github.com/sydlexius/mxlrcgo-svc"
       org.opencontainers.image.description="Fetch synced lyrics from Musixmatch and save .lrc files" \
       org.opencontainers.image.licenses="MIT"
 
-RUN apk add --no-cache ca-certificates su-exec tzdata && \
+RUN apk add --no-cache bash ca-certificates su-exec tzdata && \
     { grep -q "^mxlrcgo:" /etc/group || addgroup mxlrcgo; } && \
-    { id -u mxlrcgo >/dev/null 2>&1 || adduser -u 99 -G mxlrcgo -s /bin/sh -D mxlrcgo; } && \
+    { id -u mxlrcgo >/dev/null 2>&1 || adduser -u 99 -G mxlrcgo -s /bin/bash -D mxlrcgo; } && \
     mkdir -p /config /music && \
     chown mxlrcgo:mxlrcgo /config /music
 

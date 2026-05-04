@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -46,6 +47,7 @@ type Args struct {
 	Library *LibraryCmd `arg:"subcommand:library" help:"manage library roots"`
 	Keys    *KeysCmd    `arg:"subcommand:keys" help:"manage API keys"`
 	Config  *ConfigCmd  `arg:"subcommand:config" help:"inspect or update configuration"`
+	Queue   *QueueCmd   `arg:"subcommand:queue" help:"inspect or maintain the durable work queue"`
 }
 
 // LegacyArgs preserves the pre-subcommand CLI surface.
@@ -90,13 +92,67 @@ type ServeCmd struct {
 	WorkInterval *int    `arg:"--work-interval" help:"worker cooldown interval in seconds (default: api.cooldown; minimum 15)"`
 }
 
-// ScanCmd scans libraries once and enqueues cache misses.
+// ScanCmd scans libraries once and enqueues cache misses. It also hosts
+// nested inspection subcommands (results, clear). When neither nested
+// subcommand is set, the legacy run-once scan path is taken.
 type ScanCmd struct {
 	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
 	Depth      int    `arg:"-d,--depth" help:"maximum recursion depth" default:"100"`
 	Update     bool   `arg:"-u,--update" help:"re-fetch and overwrite existing .lrc files"`
 	Upgrade    bool   `arg:"--upgrade" help:"re-fetch .txt lyrics to promote them"`
 	BFS        bool   `arg:"--bfs" help:"use breadth-first traversal"`
+
+	Results *ScanResultsCmd `arg:"subcommand:results" help:"list persisted scan_results rows"`
+	Clear   *ScanClearCmd   `arg:"subcommand:clear" help:"delete persisted scan_results rows for a library"`
+}
+
+// ScanResultsCmd lists persisted scan results, optionally filtered.
+type ScanResultsCmd struct {
+	Library    string `arg:"--library" help:"library name or numeric id" default:""`
+	Status     string `arg:"--status" help:"filter by status (pending, processing, done)" default:""`
+	Limit      int    `arg:"--limit" help:"maximum number of rows to return (0 = unlimited)" default:"0"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// ScanClearCmd deletes scan_results rows for the named library only.
+type ScanClearCmd struct {
+	Library    string `arg:"--library,required" help:"library name or numeric id"`
+	Yes        bool   `arg:"--yes" help:"actually delete (without it, prints what would be deleted)"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// QueueCmd contains nested queue inspection and maintenance subcommands.
+type QueueCmd struct {
+	List   *QueueListCmd   `arg:"subcommand:list" help:"list work_queue rows"`
+	Failed *QueueFailedCmd `arg:"subcommand:failed" help:"list failed work_queue rows"`
+	Retry  *QueueRetryCmd  `arg:"subcommand:retry" help:"reset a failed work item back to pending"`
+	Clear  *QueueClearCmd  `arg:"subcommand:clear" help:"delete completed work_queue rows"`
+}
+
+// QueueListCmd lists work_queue rows.
+type QueueListCmd struct {
+	Status     string `arg:"--status" help:"filter by status (pending, processing, failed, done)" default:""`
+	Limit      int    `arg:"--limit" help:"maximum number of rows to return" default:"50"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// QueueFailedCmd is a convenience for `queue list --status failed`.
+type QueueFailedCmd struct {
+	Limit      int    `arg:"--limit" help:"maximum number of rows to return" default:"50"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// QueueRetryCmd resets a single failed row back to pending.
+type QueueRetryCmd struct {
+	ID         int64  `arg:"positional,required" help:"work_queue row id"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
+}
+
+// QueueClearCmd deletes completed (status=done) work_queue rows.
+type QueueClearCmd struct {
+	Done       bool   `arg:"--done,required" help:"delete rows whose status is done"`
+	Yes        bool   `arg:"--yes" help:"actually delete (without it, prints what would be deleted)"`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
 }
 
 // LibraryCmd contains nested library subcommands.
@@ -259,13 +315,15 @@ func Run(ctx context.Context, rawArgs []string, out io.Writer, deps Deps) int {
 	case args.Serve != nil:
 		return runServe(ctx, *args.Serve, deps.NewFetcher, deps.NewWriter)
 	case args.Scan != nil:
-		return runScan(ctx, *args.Scan)
+		return runScanCmd(ctx, out, *args.Scan)
 	case args.Library != nil:
 		return runLibrary(ctx, out, *args.Library)
 	case args.Keys != nil:
 		return runKeys(ctx, out, *args.Keys)
 	case args.Config != nil:
 		return runConfig(out, *args.Config)
+	case args.Queue != nil:
+		return runQueueCmd(ctx, out, *args.Queue)
 	default:
 		_, _ = fmt.Fprintln(out, "missing subcommand")
 		return 2
@@ -280,7 +338,7 @@ func usesSubcommand(rawArgs []string) bool {
 		return true
 	}
 	commands := map[string]bool{
-		"fetch": true, "serve": true, "scan": true, "library": true, "keys": true, "config": true,
+		"fetch": true, "serve": true, "scan": true, "library": true, "keys": true, "config": true, "queue": true,
 	}
 	return commands[rawArgs[0]]
 }
@@ -530,6 +588,30 @@ func runScheduler(ctx context.Context, sqlDB *sql.DB, args ServeCmd) {
 	s.Interval = interval
 	if err := s.Run(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		slog.Warn("scheduler failed", "error", err)
+	}
+}
+
+// runScanCmd dispatches the scan subcommand. When neither nested subcommand
+// is set, it runs the legacy one-shot scan. Otherwise it routes to the
+// requested inspection or maintenance subcommand. The parent --config flag
+// is forwarded to the nested subcommand when the subcommand did not specify
+// its own --config value.
+func runScanCmd(ctx context.Context, out io.Writer, args ScanCmd) int {
+	switch {
+	case args.Results != nil:
+		sub := *args.Results
+		if sub.ConfigPath == "" {
+			sub.ConfigPath = args.ConfigPath
+		}
+		return runScanResults(ctx, out, sub)
+	case args.Clear != nil:
+		sub := *args.Clear
+		if sub.ConfigPath == "" {
+			sub.ConfigPath = args.ConfigPath
+		}
+		return runScanClear(ctx, out, sub)
+	default:
+		return runScan(ctx, args)
 	}
 }
 
@@ -997,4 +1079,338 @@ func encodeScopes(scopes []auth.Scope) string {
 	}
 	slices.Sort(parts)
 	return strings.Join(parts, ",")
+}
+
+// resolveLibrary looks up a library by either numeric ID or name.
+func resolveLibrary(ctx context.Context, repo *library.Repo, ref string) (models.Library, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return models.Library{}, fmt.Errorf("library reference must not be empty")
+	}
+	id, parseErr := strconv.ParseInt(ref, 10, 64)
+	if parseErr != nil {
+		return repo.GetByName(ctx, ref)
+	}
+	// All-digit ref: query both interpretations so a library literally named
+	// "123" can never silently mask the ID match (and vice versa).
+	byID, idErr := repo.Get(ctx, id)
+	byName, nameErr := repo.GetByName(ctx, ref)
+	idFound := idErr == nil
+	nameFound := nameErr == nil
+	switch {
+	case idFound && nameFound:
+		if byID.ID == byName.ID {
+			return byID, nil
+		}
+		return models.Library{}, fmt.Errorf("library reference %q is ambiguous: matches id %d and name %q (id %d); pass an unambiguous form", ref, byID.ID, byName.Name, byName.ID)
+	case idFound:
+		if !errors.Is(nameErr, sql.ErrNoRows) {
+			return models.Library{}, nameErr
+		}
+		return byID, nil
+	case nameFound:
+		if !errors.Is(idErr, sql.ErrNoRows) {
+			return models.Library{}, idErr
+		}
+		return byName, nil
+	case errors.Is(idErr, sql.ErrNoRows) && errors.Is(nameErr, sql.ErrNoRows):
+		return models.Library{}, fmt.Errorf("library reference %q: %w", ref, sql.ErrNoRows)
+	case !errors.Is(idErr, sql.ErrNoRows):
+		return models.Library{}, idErr
+	default:
+		return models.Library{}, nameErr
+	}
+}
+
+// validateQueueStatus checks --status for queue commands.
+func validateQueueStatus(s string) error {
+	if s == "" {
+		return nil
+	}
+	switch s {
+	case queue.StatusPending, queue.StatusProcessing, queue.StatusFailed, queue.StatusDone:
+		return nil
+	default:
+		return fmt.Errorf("invalid status %q (want pending, processing, failed, or done)", s)
+	}
+}
+
+// validateScanStatus checks --status for scan results commands. scan_results
+// rows only transition pending -> processing -> done; no code path writes
+// "failed" to a scan_results row, so we deliberately reject it here even
+// though the constant exists in the scan package.
+func validateScanStatus(s string) error {
+	if s == "" {
+		return nil
+	}
+	switch s {
+	case scan.StatusPending, scan.StatusProcessing, scan.StatusDone:
+		return nil
+	default:
+		return fmt.Errorf("invalid status %q (want pending, processing, or done)", s)
+	}
+}
+
+func truncate(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}
+
+func runQueueCmd(ctx context.Context, out io.Writer, args QueueCmd) int {
+	switch {
+	case args.List != nil:
+		return runQueueList(ctx, out, *args.List)
+	case args.Failed != nil:
+		return runQueueList(ctx, out, QueueListCmd{
+			Status:     queue.StatusFailed,
+			Limit:      args.Failed.Limit,
+			ConfigPath: args.Failed.ConfigPath,
+		})
+	case args.Retry != nil:
+		return runQueueRetry(ctx, out, *args.Retry)
+	case args.Clear != nil:
+		return runQueueClear(ctx, out, *args.Clear)
+	default:
+		_, _ = fmt.Fprintln(out, "missing queue subcommand")
+		return 2
+	}
+}
+
+func runQueueList(ctx context.Context, out io.Writer, args QueueListCmd) int {
+	if err := validateQueueStatus(args.Status); err != nil {
+		_, _ = fmt.Fprintln(out, err)
+		return 2
+	}
+	cfg, err := config.Load(args.ConfigPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		return 1
+	}
+	sqlDB, err := db.Open(ctx, cfg.DB.Path)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		return 1
+	}
+	defer sqlDB.Close() //nolint:errcheck // best-effort close on shutdown
+
+	q := queue.NewDBQueue(sqlDB)
+	limit := args.Limit
+	if limit < 0 {
+		limit = 0
+	}
+	items, err := q.List(ctx, queue.ListFilter{Status: args.Status, Limit: limit})
+	if err != nil {
+		slog.Error("failed to list queue", "error", err)
+		return 1
+	}
+
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "ID\tStatus\tPriority\tAttempts\tNextAttempt\tArtist\tTitle\tLastError")
+	for _, item := range items {
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
+			item.ID,
+			item.Status,
+			item.Priority,
+			item.Attempts,
+			item.NextAttemptAt.UTC().Format(time.RFC3339),
+			item.Inputs.Track.ArtistName,
+			item.Inputs.Track.TrackName,
+			truncate(item.LastError, 80),
+		)
+	}
+	if err := tw.Flush(); err != nil {
+		slog.Error("failed to write queue list", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func runQueueRetry(ctx context.Context, out io.Writer, args QueueRetryCmd) int {
+	cfg, err := config.Load(args.ConfigPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		return 1
+	}
+	sqlDB, err := db.Open(ctx, cfg.DB.Path)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		return 1
+	}
+	defer sqlDB.Close() //nolint:errcheck // best-effort close on shutdown
+
+	q := queue.NewDBQueue(sqlDB)
+	item, err := q.Retry(ctx, args.ID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		_, _ = fmt.Fprintf(out, "queue: work item %d not found\n", args.ID)
+		return 1
+	case errors.Is(err, queue.ErrNotRetryable):
+		_, _ = fmt.Fprintf(out, "queue: work item %d is not in failed status; refusing to retry\n", args.ID)
+		return 1
+	case err != nil:
+		slog.Error("failed to retry queue item", "error", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(out, "retried %d (status=%s, attempts=%d)\n", item.ID, item.Status, item.Attempts)
+	return 0
+}
+
+func runQueueClear(ctx context.Context, out io.Writer, args QueueClearCmd) int {
+	if !args.Done {
+		_, _ = fmt.Fprintln(out, "queue clear requires --done")
+		return 2
+	}
+	cfg, err := config.Load(args.ConfigPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		return 1
+	}
+	sqlDB, err := db.Open(ctx, cfg.DB.Path)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		return 1
+	}
+	defer sqlDB.Close() //nolint:errcheck // best-effort close on shutdown
+
+	q := queue.NewDBQueue(sqlDB)
+	if !args.Yes {
+		count, err := q.CountDone(ctx)
+		if err != nil {
+			slog.Error("failed to count done queue rows", "error", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(out, "would delete %d completed queue rows; pass --yes to confirm\n", count)
+		return 0
+	}
+	deleted, err := q.ClearDone(ctx)
+	if err != nil {
+		slog.Error("failed to clear done queue rows", "error", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(out, "deleted %d completed queue rows\n", deleted)
+	return 0
+}
+
+func runScanResults(ctx context.Context, out io.Writer, args ScanResultsCmd) int {
+	if err := validateScanStatus(args.Status); err != nil {
+		_, _ = fmt.Fprintln(out, err)
+		return 2
+	}
+	cfg, err := config.Load(args.ConfigPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		return 1
+	}
+	sqlDB, err := db.Open(ctx, cfg.DB.Path)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		return 1
+	}
+	defer sqlDB.Close() //nolint:errcheck // best-effort close on shutdown
+
+	libRepo := library.New(sqlDB)
+	scanRepo := scan.New(sqlDB)
+
+	filter := scan.Filter{Status: args.Status, Limit: args.Limit}
+	libNames := map[int64]string{}
+	if strings.TrimSpace(args.Library) != "" {
+		lib, err := resolveLibrary(ctx, libRepo, args.Library)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				_, _ = fmt.Fprintf(out, "library %q not found\n", args.Library)
+				return 1
+			}
+			slog.Error("failed to resolve library", "error", err)
+			return 1
+		}
+		filter.LibraryID = &lib.ID
+		libNames[lib.ID] = lib.Name
+	} else {
+		libs, err := libRepo.List(ctx)
+		if err != nil {
+			slog.Error("failed to list libraries", "error", err)
+			return 1
+		}
+		for _, v := range libs {
+			libNames[v.ID] = v.Name
+		}
+	}
+
+	results, err := scanRepo.List(ctx, filter)
+	if err != nil {
+		slog.Error("failed to list scan results", "error", err)
+		return 1
+	}
+
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "ID\tLibrary\tStatus\tArtist\tTitle\tFilePath\tOutDir\tFilename")
+	for _, r := range results {
+		name, ok := libNames[r.LibraryID]
+		if !ok {
+			name = strconv.FormatInt(r.LibraryID, 10)
+		}
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.ID,
+			name,
+			r.Status,
+			r.Track.ArtistName,
+			r.Track.TrackName,
+			r.FilePath,
+			r.Outdir,
+			r.Filename,
+		)
+	}
+	if err := tw.Flush(); err != nil {
+		slog.Error("failed to write scan results", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func runScanClear(ctx context.Context, out io.Writer, args ScanClearCmd) int {
+	cfg, err := config.Load(args.ConfigPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		return 1
+	}
+	sqlDB, err := db.Open(ctx, cfg.DB.Path)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		return 1
+	}
+	defer sqlDB.Close() //nolint:errcheck // best-effort close on shutdown
+
+	libRepo := library.New(sqlDB)
+	lib, err := resolveLibrary(ctx, libRepo, args.Library)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, _ = fmt.Fprintf(out, "library %q not found\n", args.Library)
+			return 1
+		}
+		slog.Error("failed to resolve library", "error", err)
+		return 1
+	}
+
+	scanRepo := scan.New(sqlDB)
+	if !args.Yes {
+		count, err := scanRepo.CountByLibrary(ctx, lib.ID)
+		if err != nil {
+			slog.Error("failed to count scan results", "error", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(out, "would delete %d scan_results rows for library %q (id=%d); pass --yes to confirm\n", count, lib.Name, lib.ID)
+		return 0
+	}
+	deleted, err := scanRepo.ClearByLibrary(ctx, lib.ID)
+	if err != nil {
+		slog.Error("failed to clear scan results", "error", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(out, "deleted %d scan_results rows for library %q (id=%d)\n", deleted, lib.Name, lib.ID)
+	return 0
 }

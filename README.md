@@ -99,6 +99,38 @@ mxlrcgo-svc keys list
 mxlrcgo-svc config get db.path
 ```
 
+### Inspection commands
+
+The `queue` and `scan` subcommands expose the durable work queue and persisted
+scan results so you can debug what the service is doing without opening the
+SQLite database by hand.
+
+```sh
+# List the next 50 work_queue rows.
+mxlrcgo-svc queue list
+
+# Filter by status; failed is also exposed as a convenience subcommand.
+mxlrcgo-svc queue list --status pending --limit 100
+mxlrcgo-svc queue failed
+
+# Reset a single failed row back to pending. Refused if the row is not failed.
+mxlrcgo-svc queue retry 42
+
+# Delete completed rows. Without --yes, prints what would be deleted.
+mxlrcgo-svc queue clear --done
+mxlrcgo-svc queue clear --done --yes
+
+# List persisted scan_results, optionally filtered by library (name or id) and status.
+mxlrcgo-svc scan results
+mxlrcgo-svc scan results --library Music --status pending
+mxlrcgo-svc scan results --library 1 --limit 200
+
+# Delete every scan_results row for a single library. Without --yes, prints what would be deleted.
+# The library row itself is left intact.
+mxlrcgo-svc scan clear --library Music
+mxlrcgo-svc scan clear --library Music --yes
+```
+
 ## Docker
 
 The container runs the webhook service on port `50705` and stores its config and SQLite database under `/config`. Mount your music library at `/music`.
@@ -134,6 +166,8 @@ docker compose up -d
 ```
 
 `MXLRC_DOCKER=true` makes default storage paths resolve to `/config/config.toml` and `/config/mxlrcgo.db`.
+
+To inspect or maintain the queue and scan state inside the container, exec the same `mxlrcgo-svc queue` and `mxlrcgo-svc scan results` / `mxlrcgo-svc scan clear` commands documented in the Inspection commands section above (for example `docker exec mxlrcgo-svc mxlrcgo-svc queue failed`).
 
 ## Unraid
 

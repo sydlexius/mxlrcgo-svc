@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -815,6 +816,202 @@ func TestDBQueue_ReleaseRequiresProcessingStatus(t *testing.T) {
 	}
 }
 
+func TestDBQueue_ListFiltersByStatus(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "Pending"}}, 1); err != nil {
+		t.Fatalf("Enqueue pending: %v", err)
+	}
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "B", TrackName: "Failing"}}, 1); err != nil {
+		t.Fatalf("Enqueue failing: %v", err)
+	}
+	claimed, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Fail(ctx, claimed.ID, errors.New("boom")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	items, err := q.List(ctx, ListFilter{Status: StatusFailed})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != claimed.ID {
+		t.Fatalf("List(failed) = %+v; want one row with id %d", items, claimed.ID)
+	}
+
+	items, err = q.List(ctx, ListFilter{Status: StatusPending})
+	if err != nil {
+		t.Fatalf("List pending: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("List(pending) returned %d; want 1", len(items))
+	}
+
+	items, err = q.List(ctx, ListFilter{})
+	if err != nil {
+		t.Fatalf("List no filter: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("List(no filter) = %d rows; want 2", len(items))
+	}
+}
+
+func TestDBQueue_ListHonorsLimit(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.now = func() time.Time { return time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC) }
+
+	for i := 0; i < 5; i++ {
+		if _, err := q.Enqueue(ctx, models.Inputs{
+			Track: models.Track{ArtistName: "Artist", TrackName: fmt.Sprintf("Track%d", i)},
+		}, 1); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+	items, err := q.List(ctx, ListFilter{Limit: 3})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("List(limit=3) returned %d rows; want 3", len(items))
+	}
+}
+
+func TestDBQueue_RetryResetsFailedRow(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	failed, err := q.Fail(ctx, claimed.ID, errors.New("rate limited"))
+	if err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	if failed.Attempts != 1 || failed.LastError == "" {
+		t.Fatalf("pre-retry attempts=%d last_error=%q; want attempts>0, non-empty error", failed.Attempts, failed.LastError)
+	}
+
+	q.now = func() time.Time { return now.Add(time.Hour) }
+	retried, err := q.Retry(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	if retried.Status != StatusPending {
+		t.Fatalf("retried status = %q; want pending", retried.Status)
+	}
+	if retried.Attempts != 0 {
+		t.Fatalf("retried attempts = %d; want 0", retried.Attempts)
+	}
+	if retried.LastError != "" {
+		t.Fatalf("retried last_error = %q; want empty", retried.LastError)
+	}
+	if !retried.NextAttemptAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("retried next_attempt_at = %s; want %s", retried.NextAttemptAt, now.Add(time.Hour))
+	}
+}
+
+func TestDBQueue_RetryRejectsNonFailedStatus(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	pending, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Pending"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Retry(ctx, pending.ID); !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("Retry pending error = %v; want ErrNotRetryable", err)
+	}
+
+	processing, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Retry(ctx, processing.ID); !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("Retry processing error = %v; want ErrNotRetryable", err)
+	}
+
+	if err := q.Complete(ctx, processing.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, err := q.Retry(ctx, processing.ID); !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("Retry done error = %v; want ErrNotRetryable", err)
+	}
+
+	if _, err := q.Retry(ctx, 9999); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Retry missing id error = %v; want sql.ErrNoRows", err)
+	}
+}
+
+func TestDBQueue_ClearDoneRemovesOnlyDoneRows(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.now = func() time.Time { return time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC) }
+
+	// pending (will stay)
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "Pending"}}, 1); err != nil {
+		t.Fatalf("Enqueue pending: %v", err)
+	}
+	// done
+	doneItem, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "B", TrackName: "Done"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue done: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil { // claims pending first by FIFO; need to claim 'Done' instead
+		t.Fatalf("Dequeue: %v", err)
+	}
+	// Above claimed the pending row. Claim again to get the done one.
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue 2: %v", err)
+	}
+	if err := q.Complete(ctx, doneItem.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	count, err := q.CountDone(ctx)
+	if err != nil {
+		t.Fatalf("CountDone: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("CountDone = %d; want 1", count)
+	}
+
+	deleted, err := q.ClearDone(ctx)
+	if err != nil {
+		t.Fatalf("ClearDone: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("ClearDone deleted = %d; want 1", deleted)
+	}
+
+	// The other (non-done) rows must still exist.
+	items, err := q.List(ctx, ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatalf("ClearDone removed non-done rows; remaining = 0")
+	}
+	for _, it := range items {
+		if it.Status == StatusDone {
+			t.Fatalf("ClearDone left a done row: %+v", it)
+		}
+	}
+}
+
 func TestDBQueue_CompleteMarksDone(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))
@@ -845,5 +1042,62 @@ func TestDBQueue_CompleteMarksDone(t *testing.T) {
 	}
 	if completedAt != formatTime(now) {
 		t.Fatalf("completed_at = %q; want %q", completedAt, formatTime(now))
+	}
+}
+
+func TestDBQueue_RetryResetsLinkedScanResults(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID1 := insertScanResult(t, sqlDB, "/music/lib-a/song.mp3")
+	scanID2 := insertScanResult(t, sqlDB, "/music/lib-b/song.mp3")
+
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	// Two scan_results with the same normalized key collapse into one queue row.
+	first, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Song"},
+		ScanResultID: scanID1,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue first: %v", err)
+	}
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Song"},
+		ScanResultID: scanID2,
+	}, 1); err != nil {
+		t.Fatalf("Enqueue second: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Fail(ctx, first.ID, errors.New("rate limited")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	// EnqueuePending in scan flips both scan_results to 'processing' on enqueue.
+	// Verify that's the starting state we're testing the reset against.
+	for _, id := range []int64{scanID1, scanID2} {
+		if _, err := sqlDB.ExecContext(ctx,
+			`UPDATE scan_results SET status = 'processing' WHERE id = ?`, id,
+		); err != nil {
+			t.Fatalf("seed processing on scan %d: %v", id, err)
+		}
+	}
+
+	if _, err := q.Retry(ctx, first.ID); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	for _, id := range []int64{scanID1, scanID2} {
+		var status string
+		if err := sqlDB.QueryRowContext(ctx,
+			`SELECT status FROM scan_results WHERE id = ?`, id,
+		).Scan(&status); err != nil {
+			t.Fatalf("read scan_results %d: %v", id, err)
+		}
+		if status != StatusPending {
+			t.Fatalf("scan_results %d status = %q; want %q (Retry must reset every linked processing row)", id, status, StatusPending)
+		}
 	}
 }

@@ -229,6 +229,132 @@ func TestRepo_ListByLibrary_IsolatedByLibrary(t *testing.T) {
 	}
 }
 
+func TestRepo_ListWithFilters(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openTestDB(t)
+	libRepo := library.New(sqlDB)
+	scanRepo := scan.New(sqlDB)
+
+	libA, err := libRepo.Add(ctx, "/music/a", "A")
+	if err != nil {
+		t.Fatalf("Add library A: %v", err)
+	}
+	libB, err := libRepo.Add(ctx, "/music/b", "B")
+	if err != nil {
+		t.Fatalf("Add library B: %v", err)
+	}
+	if err := scanRepo.Upsert(ctx, libA.ID, []models.ScanResult{
+		{FilePath: "/music/a/1.mp3", Track: models.Track{ArtistName: "A1", TrackName: "T1"}, Status: scan.StatusPending},
+		{FilePath: "/music/a/2.mp3", Track: models.Track{ArtistName: "A2", TrackName: "T2"}, Status: scan.StatusDone},
+	}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert A: %v", err)
+	}
+	if err := scanRepo.Upsert(ctx, libB.ID, []models.ScanResult{
+		{FilePath: "/music/b/1.mp3", Track: models.Track{ArtistName: "B1", TrackName: "T1"}, Status: scan.StatusPending},
+	}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert B: %v", err)
+	}
+
+	// No filter returns all rows.
+	all, err := scanRepo.List(ctx, scan.Filter{})
+	if err != nil {
+		t.Fatalf("List no filter: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("List no filter = %d rows; want 3", len(all))
+	}
+
+	// Filter by library.
+	libAOnly, err := scanRepo.List(ctx, scan.Filter{LibraryID: &libA.ID})
+	if err != nil {
+		t.Fatalf("List by library: %v", err)
+	}
+	if len(libAOnly) != 2 {
+		t.Fatalf("List(libA) = %d rows; want 2", len(libAOnly))
+	}
+
+	// Filter by library + status.
+	pendingA, err := scanRepo.List(ctx, scan.Filter{LibraryID: &libA.ID, Status: scan.StatusPending})
+	if err != nil {
+		t.Fatalf("List pending in A: %v", err)
+	}
+	if len(pendingA) != 1 || pendingA[0].FilePath != "/music/a/1.mp3" {
+		t.Fatalf("List pending in A = %+v; want one row for /music/a/1.mp3", pendingA)
+	}
+
+	// Filter by status only.
+	pending, err := scanRepo.List(ctx, scan.Filter{Status: scan.StatusPending})
+	if err != nil {
+		t.Fatalf("List pending: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("List pending = %d rows; want 2", len(pending))
+	}
+}
+
+func TestRepo_ClearByLibraryOnlyAffectsTargetedLibrary(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openTestDB(t)
+	libRepo := library.New(sqlDB)
+	scanRepo := scan.New(sqlDB)
+
+	libA, err := libRepo.Add(ctx, "/music/a", "A")
+	if err != nil {
+		t.Fatalf("Add library A: %v", err)
+	}
+	libB, err := libRepo.Add(ctx, "/music/b", "B")
+	if err != nil {
+		t.Fatalf("Add library B: %v", err)
+	}
+	if err := scanRepo.Upsert(ctx, libA.ID, []models.ScanResult{
+		{FilePath: "/music/a/1.mp3", Track: models.Track{ArtistName: "A", TrackName: "1"}},
+		{FilePath: "/music/a/2.mp3", Track: models.Track{ArtistName: "A", TrackName: "2"}},
+	}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert A: %v", err)
+	}
+	if err := scanRepo.Upsert(ctx, libB.ID, []models.ScanResult{
+		{FilePath: "/music/b/1.mp3", Track: models.Track{ArtistName: "B", TrackName: "1"}},
+	}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert B: %v", err)
+	}
+
+	count, err := scanRepo.CountByLibrary(ctx, libA.ID)
+	if err != nil {
+		t.Fatalf("CountByLibrary A: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("CountByLibrary A = %d; want 2", count)
+	}
+
+	deleted, err := scanRepo.ClearByLibrary(ctx, libA.ID)
+	if err != nil {
+		t.Fatalf("ClearByLibrary A: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("ClearByLibrary A deleted %d; want 2", deleted)
+	}
+
+	leftA, err := scanRepo.ListByLibrary(ctx, libA.ID)
+	if err != nil {
+		t.Fatalf("ListByLibrary A: %v", err)
+	}
+	if len(leftA) != 0 {
+		t.Fatalf("library A still has %d scan_results; want 0", len(leftA))
+	}
+	leftB, err := scanRepo.ListByLibrary(ctx, libB.ID)
+	if err != nil {
+		t.Fatalf("ListByLibrary B: %v", err)
+	}
+	if len(leftB) != 1 {
+		t.Fatalf("library B = %d scan_results; want 1 (ClearByLibrary leaked across libraries)", len(leftB))
+	}
+
+	// The library row itself is still there.
+	if _, err := libRepo.Get(ctx, libA.ID); err != nil {
+		t.Fatalf("library A row removed by ClearByLibrary: %v", err)
+	}
+}
+
 func TestRepo_ListPendingByLibraryAndSetStatus(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := openTestDB(t)

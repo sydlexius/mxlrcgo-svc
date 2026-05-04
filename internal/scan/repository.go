@@ -162,6 +162,92 @@ func scanResultRows(rows *sql.Rows) ([]models.ScanResult, error) {
 	return results, nil
 }
 
+// Filter narrows the rows returned by List.
+type Filter struct {
+	// LibraryID, when non-nil, restricts results to a specific library row.
+	LibraryID *int64
+	// Status optionally restricts results to a single status value (e.g.
+	// "pending", "processing", "done", "failed"). Empty means no filter.
+	Status string
+	// Limit caps the number of returned rows. Zero or negative means no
+	// limit. Applied as a SQL LIMIT so the database does not materialize
+	// the full result set when the caller only wants a slice.
+	Limit int
+}
+
+// List returns persisted scan results matching filter in stable ID order.
+func (r *Repo) List(ctx context.Context, filter Filter) (results []models.ScanResult, retErr error) {
+	const baseQuery = `SELECT id, library_id, file_path, artist, title, outdir, filename, status, created_at
+                       FROM scan_results`
+	const orderClause = ` ORDER BY id ASC`
+	var args []any
+	var query string
+	switch {
+	case filter.LibraryID != nil && filter.Status != "":
+		query = baseQuery + ` WHERE library_id = ? AND status = ?` + orderClause
+		args = append(args, *filter.LibraryID, filter.Status)
+	case filter.LibraryID != nil:
+		query = baseQuery + ` WHERE library_id = ?` + orderClause
+		args = append(args, *filter.LibraryID)
+	case filter.Status != "":
+		query = baseQuery + ` WHERE status = ?` + orderClause
+		args = append(args, filter.Status)
+	default:
+		query = baseQuery + orderClause
+	}
+	if filter.Limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("scan: list: %w", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("scan: close list rows: %w", err)
+		}
+	}()
+
+	results, err = scanResultRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan: list rows: %w", err)
+	}
+	return results, nil
+}
+
+// ClearByLibrary deletes every scan_results row belonging to libraryID and
+// returns the number of rows deleted. The library row itself is left intact.
+func (r *Repo) ClearByLibrary(ctx context.Context, libraryID int64) (int64, error) {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM scan_results WHERE library_id = ?`,
+		libraryID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("scan: clear by library: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("scan: clear by library rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// CountByLibrary returns the number of scan_results rows belonging to
+// libraryID. It is useful for reporting what ClearByLibrary would delete
+// without actually deleting anything.
+func (r *Repo) CountByLibrary(ctx context.Context, libraryID int64) (int64, error) {
+	var n int64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM scan_results WHERE library_id = ?`,
+		libraryID,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("scan: count by library: %w", err)
+	}
+	return n, nil
+}
+
 // SetStatus updates scan result status for each id.
 func (r *Repo) SetStatus(ctx context.Context, ids []int64, status string) error {
 	if len(ids) == 0 {

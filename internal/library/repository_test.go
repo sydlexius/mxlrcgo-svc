@@ -104,6 +104,39 @@ func TestAdd_ValidatesRequiredFields(t *testing.T) {
 	}
 }
 
+func TestGetByName(t *testing.T) {
+	ctx := context.Background()
+	repo := library.New(openTestDB(t))
+
+	added, err := repo.Add(ctx, "/music/rock", "Rock")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := repo.GetByName(ctx, "Rock")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if got != added {
+		t.Fatalf("GetByName = %+v; want %+v", got, added)
+	}
+
+	if _, err := repo.GetByName(ctx, "  Rock  "); err != nil {
+		t.Fatalf("GetByName trimmed: %v", err)
+	}
+
+	if _, err := repo.GetByName(ctx, ""); err == nil {
+		t.Fatal("GetByName empty name returned nil error")
+	}
+	if _, err := repo.GetByName(ctx, "    "); err == nil {
+		t.Fatal("GetByName whitespace name returned nil error")
+	}
+
+	if _, err := repo.GetByName(ctx, "Missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByName missing = %v; want sql.ErrNoRows", err)
+	}
+}
+
 func TestUpdateRemove_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := library.New(openTestDB(t))
@@ -115,5 +148,25 @@ func TestUpdateRemove_NotFound(t *testing.T) {
 	err = repo.Remove(ctx, 123)
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Remove missing got %v; want sql.ErrNoRows", err)
+	}
+}
+
+func TestGetByName_AmbiguousReturnsError(t *testing.T) {
+	ctx := context.Background()
+	repo := library.New(openTestDB(t))
+
+	if _, err := repo.Add(ctx, "/music/a", "Music"); err != nil {
+		t.Fatalf("Add a: %v", err)
+	}
+	if _, err := repo.Add(ctx, "/music/b", "Music"); err != nil {
+		t.Fatalf("Add b: %v", err)
+	}
+
+	_, err := repo.GetByName(ctx, "Music")
+	if err == nil {
+		t.Fatal("GetByName ambiguous returned nil error")
+	}
+	if !errors.Is(err, library.ErrAmbiguousLibraryName) {
+		t.Fatalf("err = %v; want errors.Is(_, ErrAmbiguousLibraryName)", err)
 	}
 }

@@ -18,6 +18,21 @@ import (
 
 const apiURL = "https://apic-desktop.musixmatch.com/ws/1.1/macro.subtitles.get"
 
+// Sentinel errors returned by the Musixmatch client. Callers should use
+// errors.Is to test for these classes rather than string-matching the message.
+var (
+	// ErrUnauthorized indicates HTTP 401 from the Musixmatch API. The token
+	// may be invalid, expired, or (per observed behavior) the egress IP may
+	// be throttled. Treat as a circuit-breaker signal.
+	ErrUnauthorized = errors.New("musixmatch: unauthorized")
+	// ErrRateLimited indicates HTTP 429 from the Musixmatch API. Treat as a
+	// circuit-breaker signal.
+	ErrRateLimited = errors.New("musixmatch: rate limited")
+	// ErrNotFound indicates HTTP 404 or an inner status_code 404 from the
+	// Musixmatch API meaning no matching track or lyrics were found.
+	ErrNotFound = errors.New("musixmatch: no results found")
+)
+
 // Client communicates with the Musixmatch desktop API.
 type Client struct {
 	Token      string
@@ -79,9 +94,11 @@ func (c *Client) FindLyrics(ctx context.Context, track models.Track) (models.Son
 	if res.StatusCode != http.StatusOK {
 		switch res.StatusCode {
 		case http.StatusUnauthorized:
-			return song, errors.New("too many requests: increase the cooldown time and try again in a few minutes")
+			return song, fmt.Errorf("%w: token may be invalid or expired", ErrUnauthorized)
+		case http.StatusTooManyRequests:
+			return song, fmt.Errorf("%w: increase the cooldown time and try again in a few minutes", ErrRateLimited)
 		case http.StatusNotFound:
-			return song, errors.New("no results found")
+			return song, ErrNotFound
 		default:
 			errBody, _ := io.ReadAll(io.LimitReader(res.Body, 8<<10))
 			return song, fmt.Errorf("musixmatch API error: status %d, body: %s", res.StatusCode, strings.TrimSpace(string(errBody)))
@@ -121,9 +138,9 @@ func (c *Client) FindLyrics(ctx context.Context, track models.Track) (models.Son
 			return song, err
 		}
 	case 401:
-		return song, errors.New("too many requests: increase the cooldown time and try again in a few minutes")
+		return song, fmt.Errorf("%w: token may be invalid or expired", ErrUnauthorized)
 	case 404:
-		return song, errors.New("no results found")
+		return song, ErrNotFound
 	default:
 		return song, errors.New("unknown error")
 	}

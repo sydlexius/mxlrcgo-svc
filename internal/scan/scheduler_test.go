@@ -31,11 +31,12 @@ type fakeResults struct {
 type upsertCall struct {
 	libraryID int64
 	results   []models.ScanResult
+	opts      scan.UpsertOptions
 }
 
-func (f *fakeResults) Upsert(_ context.Context, libraryID int64, results []models.ScanResult) error {
+func (f *fakeResults) Upsert(_ context.Context, libraryID int64, results []models.ScanResult, opts scan.UpsertOptions) error {
 	cp := append([]models.ScanResult(nil), results...)
-	f.calls = append(f.calls, upsertCall{libraryID: libraryID, results: cp})
+	f.calls = append(f.calls, upsertCall{libraryID: libraryID, results: cp, opts: opts})
 	if f.err != nil {
 		return f.err
 	}
@@ -91,6 +92,39 @@ func TestScheduler_RunOncePersistsAndCallsCallback(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("OnScanComplete was not called")
+	}
+}
+
+func TestScheduler_PassesForceStatusOnUpdateOrUpgrade(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		opts scanner.ScanOptions
+		want bool
+	}{
+		{name: "default", opts: scanner.ScanOptions{}, want: false},
+		{name: "update", opts: scanner.ScanOptions{Update: true}, want: true},
+		{name: "upgrade", opts: scanner.ScanOptions{Upgrade: true}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeResults{}
+			s := scan.Scheduler{
+				Libraries: fakeLibraries{libs: []models.Library{{ID: 7, Path: "/music", Name: "Music"}}},
+				Results:   store,
+				Scanner:   fakeScanner{results: []models.ScanResult{{FilePath: "/music/a.mp3"}}},
+				Options:   tc.opts,
+			}
+			if err := s.RunOnce(ctx); err != nil {
+				t.Fatalf("RunOnce: %v", err)
+			}
+			if len(store.calls) != 1 {
+				t.Fatalf("Upsert calls = %d; want 1", len(store.calls))
+			}
+			if got := store.calls[0].opts.ForceStatus; got != tc.want {
+				t.Fatalf("ForceStatus = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
 

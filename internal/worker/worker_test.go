@@ -728,7 +728,7 @@ func TestRunOnceWritesBackScanResultDoneOnSuccess(t *testing.T) {
 	}
 }
 
-func TestRunOnceWritesBackScanResultFailedOnFailure(t *testing.T) {
+func TestRunOnceDoesNotWriteScanResultOnRetryableFailure(t *testing.T) {
 	q := &fakeQueue{items: []queue.WorkItem{{
 		ID: 31,
 		Inputs: models.Inputs{
@@ -743,11 +743,13 @@ func TestRunOnceWritesBackScanResultFailedOnFailure(t *testing.T) {
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if len(scanRepo.calls) != 1 {
-		t.Fatalf("scan_results calls = %d; want 1", len(scanRepo.calls))
+	// queue.Fail schedules a retry, so the scan_results row must stay in
+	// "processing" rather than being prematurely flipped to "failed".
+	if len(scanRepo.calls) != 0 {
+		t.Fatalf("scan_results calls = %v; want none for retryable failure", scanRepo.calls)
 	}
-	if scanRepo.calls[0].status != "failed" || scanRepo.calls[0].ids[0] != 8 {
-		t.Fatalf("scan_results call = %+v; want failed for id 8", scanRepo.calls[0])
+	if len(q.failed) != 1 || q.failed[0] != 31 {
+		t.Fatalf("queue failed = %v; want [31]", q.failed)
 	}
 }
 

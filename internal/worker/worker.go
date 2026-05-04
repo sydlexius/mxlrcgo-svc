@@ -91,21 +91,26 @@ func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfide
 	}
 }
 
-// SetScanResults wires the discovery ledger so terminal queue outcomes flow
+// SetScanResults wires the discovery ledger so successful completions flow
 // back to scan_results. Pass nil to disable writeback.
 func (w *Worker) SetScanResults(s ScanResults) {
 	w.scanResults = s
 }
 
-// markScanResult forwards a terminal queue outcome to the scan_results ledger.
-// Failures here are logged but never propagated, since the queue's own state is
-// already authoritative for retry behavior.
-func (w *Worker) markScanResult(ctx context.Context, id int64, status string) {
+// markScanResultDone records a successful completion in the scan_results
+// ledger. Failures are logged but never propagated, since the queue's own
+// state is already authoritative for retry behavior. Failures are not
+// written back: queue.Fail schedules a retry rather than terminating, so
+// flipping scan_results to "failed" would lie about a row that is still
+// scheduled to retry. Permanent failures stay in "processing" until either
+// the queue eventually succeeds and flips them to "done", or a future
+// max-attempts cap promotes them to "failed".
+func (w *Worker) markScanResultDone(ctx context.Context, id int64) {
 	if w.scanResults == nil || id <= 0 {
 		return
 	}
-	if err := w.scanResults.SetStatus(ctx, []int64{id}, status); err != nil {
-		slog.Warn("worker scan_results writeback failed", "scan_result_id", id, "status", status, "error", err)
+	if err := w.scanResults.SetStatus(ctx, []int64{id}, scan.StatusDone); err != nil {
+		slog.Warn("worker scan_results writeback failed", "scan_result_id", id, "status", scan.StatusDone, "error", err)
 	}
 }
 
@@ -213,10 +218,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
 			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(cause, err))
 		}
-		w.markScanResult(ctxNoCancel, item.Inputs.ScanResultID, scan.StatusFailed)
 		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
 	}
-	w.markScanResult(ctxNoCancel, item.Inputs.ScanResultID, scan.StatusDone)
+	w.markScanResultDone(ctxNoCancel, item.Inputs.ScanResultID)
 	w.consecutiveFailures = 0
 	return nil
 }
@@ -273,11 +277,9 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 
 func (w *Worker) fail(ctx context.Context, item queue.WorkItem, cause error) error {
 	w.consecutiveFailures++
-	ctxNoCancel := context.WithoutCancel(ctx)
-	if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
+	if _, err := w.queue.Fail(context.WithoutCancel(ctx), item.ID, cause); err != nil {
 		return fmt.Errorf("worker: fail item %d after %v: %w", item.ID, cause, err)
 	}
-	w.markScanResult(ctxNoCancel, item.Inputs.ScanResultID, scan.StatusFailed)
 	return nil
 }
 

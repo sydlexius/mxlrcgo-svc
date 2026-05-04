@@ -40,12 +40,12 @@ func TestRepo_UpsertAndListByLibrary(t *testing.T) {
 		Filename: "a.lrc",
 		Status:   scan.StatusPending,
 	}}
-	if err := scanRepo.Upsert(ctx, lib.ID, results); err != nil {
+	if err := scanRepo.Upsert(ctx, lib.ID, results, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert initial: %v", err)
 	}
 	results[0].Track.TrackName = "Updated Title"
 	results[0].Status = scan.StatusDone
-	if err := scanRepo.Upsert(ctx, lib.ID, results); err != nil {
+	if err := scanRepo.Upsert(ctx, lib.ID, results, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert update: %v", err)
 	}
 
@@ -65,8 +65,51 @@ func TestRepo_UpsertAndListByLibrary(t *testing.T) {
 	if got[0].Outdir != "/music" || got[0].Filename != "a.lrc" {
 		t.Errorf("output = %q/%q; want /music/a.lrc", got[0].Outdir, got[0].Filename)
 	}
-	if got[0].Status != scan.StatusDone {
-		t.Errorf("Status = %q; want %q", got[0].Status, scan.StatusDone)
+	// Default Upsert preserves status so periodic scans cannot clobber
+	// terminal states recorded by the worker. Use ForceStatus for refreshes.
+	if got[0].Status != scan.StatusPending {
+		t.Errorf("Status = %q; want %q (default Upsert must not touch status on update)", got[0].Status, scan.StatusPending)
+	}
+}
+
+func TestRepo_UpsertWithForceStatusOverwritesExisting(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openTestDB(t)
+	libRepo := library.New(sqlDB)
+	scanRepo := scan.New(sqlDB)
+
+	lib, err := libRepo.Add(ctx, "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	initial := []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Status:   scan.StatusDone,
+	}}
+	if err := scanRepo.Upsert(ctx, lib.ID, initial, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert initial: %v", err)
+	}
+	// Forced refresh (--update / --upgrade) must re-eligible done rows for
+	// re-fetch by promoting them back to pending.
+	refresh := []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Status:   scan.StatusPending,
+	}}
+	if err := scanRepo.Upsert(ctx, lib.ID, refresh, scan.UpsertOptions{ForceStatus: true}); err != nil {
+		t.Fatalf("Upsert forced refresh: %v", err)
+	}
+
+	got, err := scanRepo.ListByLibrary(ctx, lib.ID)
+	if err != nil {
+		t.Fatalf("ListByLibrary: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListByLibrary returned %d results; want 1", len(got))
+	}
+	if got[0].Status != scan.StatusPending {
+		t.Fatalf("Status = %q; want %q after ForceStatus refresh", got[0].Status, scan.StatusPending)
 	}
 }
 
@@ -83,7 +126,7 @@ func TestRepo_UpsertDefaultsStatus(t *testing.T) {
 	if err := scanRepo.Upsert(ctx, lib.ID, []models.ScanResult{{
 		FilePath: "/music/a.mp3",
 		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
-	}}); err != nil {
+	}}, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -114,7 +157,7 @@ func TestRepo_UpsertPreservesExistingStatusWhenStatusUnspecified(t *testing.T) {
 		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
 		Status:   scan.StatusDone,
 	}}
-	if err := scanRepo.Upsert(ctx, lib.ID, initial); err != nil {
+	if err := scanRepo.Upsert(ctx, lib.ID, initial, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert initial: %v", err)
 	}
 	update := []models.ScanResult{{
@@ -123,7 +166,7 @@ func TestRepo_UpsertPreservesExistingStatusWhenStatusUnspecified(t *testing.T) {
 		Outdir:   "/music",
 		Filename: "a.lrc",
 	}}
-	if err := scanRepo.Upsert(ctx, lib.ID, update); err != nil {
+	if err := scanRepo.Upsert(ctx, lib.ID, update, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert update: %v", err)
 	}
 
@@ -160,13 +203,13 @@ func TestRepo_ListByLibrary_IsolatedByLibrary(t *testing.T) {
 	if err := scanRepo.Upsert(ctx, libA.ID, []models.ScanResult{{
 		FilePath: filePath,
 		Track:    models.Track{ArtistName: "Artist A", TrackName: "Title A"},
-	}}); err != nil {
+	}}, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert library A: %v", err)
 	}
 	if err := scanRepo.Upsert(ctx, libB.ID, []models.ScanResult{{
 		FilePath: filePath,
 		Track:    models.Track{ArtistName: "Artist B", TrackName: "Title B"},
-	}}); err != nil {
+	}}, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert library B: %v", err)
 	}
 
@@ -210,7 +253,7 @@ func TestRepo_ListPendingByLibraryAndSetStatus(t *testing.T) {
 			Status:   scan.StatusDone,
 		},
 	}
-	if err := scanRepo.Upsert(ctx, lib.ID, results); err != nil {
+	if err := scanRepo.Upsert(ctx, lib.ID, results, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 

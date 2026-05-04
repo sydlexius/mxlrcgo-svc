@@ -365,6 +365,208 @@ func TestDBQueue_EnqueuePersistsSourcePath(t *testing.T) {
 	}
 }
 
+func insertScanResult(t *testing.T, sqlDB *sql.DB, filePath string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	res, err := sqlDB.ExecContext(ctx,
+		`INSERT INTO libraries (path, name) VALUES (?, ?)`,
+		filepath.Dir(filePath), "test")
+	if err != nil {
+		t.Fatalf("insert library: %v", err)
+	}
+	libID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("library id: %v", err)
+	}
+	res, err = sqlDB.ExecContext(ctx,
+		`INSERT INTO scan_results (library_id, file_path, status) VALUES (?, ?, 'processing')`,
+		libID, filePath)
+	if err != nil {
+		t.Fatalf("insert scan_result: %v", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("scan_result id: %v", err)
+	}
+	return id
+}
+
+func TestDBQueue_CompleteAtomicallyWritesScanResultsDone(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID := insertScanResult(t, sqlDB, "/music/atomic.mp3")
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Atomic"},
+		ScanResultID: scanID,
+	}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var queueStatus, scanStatus string
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT status FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&queueStatus); err != nil {
+		t.Fatalf("read work_queue: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT status FROM scan_results WHERE id = ?`, scanID,
+	).Scan(&scanStatus); err != nil {
+		t.Fatalf("read scan_results: %v", err)
+	}
+	if queueStatus != "done" {
+		t.Fatalf("work_queue status = %q; want done", queueStatus)
+	}
+	if scanStatus != "done" {
+		t.Fatalf("scan_results status = %q; want done (Complete must atomically flip both ledgers)", scanStatus)
+	}
+}
+
+func TestDBQueue_CompleteWithoutScanResultIDLeavesLedgerUntouched(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	// Webhook-style enqueue with no originating scan_result should still
+	// complete cleanly without touching scan_results.
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track: models.Track{ArtistName: "Artist", TrackName: "Adhoc"},
+	}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var status string
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT status FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&status); err != nil {
+		t.Fatalf("read work_queue: %v", err)
+	}
+	if status != "done" {
+		t.Fatalf("work_queue status = %q; want done", status)
+	}
+}
+
+func TestDBQueue_CompleteWritesBackAllLinkedScanResults(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID1 := insertScanResult(t, sqlDB, "/music/lib-a/dup.mp3")
+	scanID2 := insertScanResult(t, sqlDB, "/music/lib-b/dup.mp3")
+	q := NewDBQueue(sqlDB)
+	q.now = func() time.Time { return time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC) }
+
+	// Two scan_results with identical normalized artist/title collapse into one
+	// work_queue row. Both links must survive so Complete can flip both rows.
+	first, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Dup"},
+		ScanResultID: scanID1,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue first: %v", err)
+	}
+	second, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: " artist ", TrackName: "dup"},
+		ScanResultID: scanID2,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue second: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected dedupe to single work_queue row; got ids %d and %d", first.ID, second.ID)
+	}
+
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, first.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	for _, id := range []int64{scanID1, scanID2} {
+		var status string
+		if err := sqlDB.QueryRowContext(ctx,
+			`SELECT status FROM scan_results WHERE id = ?`, id,
+		).Scan(&status); err != nil {
+			t.Fatalf("read scan_results %d: %v", id, err)
+		}
+		if status != "done" {
+			t.Fatalf("scan_results %d status = %q; want done (Complete must flip every linked row)", id, status)
+		}
+	}
+}
+
+func TestDBQueue_EnqueuePersistsScanResultID(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID := insertScanResult(t, sqlDB, "/music/a.mp3")
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	enq, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Title"},
+		ScanResultID: scanID,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if enq.Inputs.ScanResultID != scanID {
+		t.Fatalf("enqueued ScanResultID = %d; want %d", enq.Inputs.ScanResultID, scanID)
+	}
+
+	got, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if got.Inputs.ScanResultID != scanID {
+		t.Fatalf("dequeued ScanResultID = %d; want %d", got.Inputs.ScanResultID, scanID)
+	}
+}
+
+func TestDBQueue_EnqueuePreservesScanResultIDOnDuplicate(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID := insertScanResult(t, sqlDB, "/music/a.mp3")
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Title"},
+		ScanResultID: scanID,
+	}, 1); err != nil {
+		t.Fatalf("Enqueue initial: %v", err)
+	}
+	// Webhook re-enqueue without an originating scan_result must not erase the link.
+	dup, err := q.Enqueue(ctx, models.Inputs{
+		Track: models.Track{ArtistName: "Artist", TrackName: "Title"},
+	}, 5)
+	if err != nil {
+		t.Fatalf("Enqueue duplicate: %v", err)
+	}
+	if dup.Inputs.ScanResultID != scanID {
+		t.Fatalf("duplicate ScanResultID = %d; want %d preserved", dup.Inputs.ScanResultID, scanID)
+	}
+}
+
 func TestDBQueue_CleanupRemovesRetryableDuplicate(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

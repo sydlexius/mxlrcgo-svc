@@ -49,6 +49,9 @@ type Inputs struct {
 	Filename    string
 	SourcePath  string
 	OutputPaths []OutputPath
+	// ScanResultID links this work item back to its originating scan_results row.
+	// Zero means the item did not originate from a library scan (e.g. ad-hoc fetch).
+	ScanResultID int64
 }
 
 // OutputPath represents one lyrics output destination.

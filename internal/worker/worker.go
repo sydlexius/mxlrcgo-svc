@@ -32,7 +32,9 @@ type Cache interface {
 	Store(ctx context.Context, artist, title, album, lyrics string) error
 }
 
-// Worker consumes queued lyrics work one item at a time.
+// Worker consumes queued lyrics work one item at a time. The scan_results
+// writeback for successful completions is handled atomically inside
+// queue.DBQueue.Complete, so the worker has no separate ledger dependency.
 type Worker struct {
 	queue                 Queue
 	cache                 Cache
@@ -156,18 +158,18 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	song, cacheHit, err := w.song(ctx, item.Inputs.Track)
 	if err != nil {
 		slog.Warn("worker song resolution failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
-		return w.fail(ctx, item.ID, err)
+		return w.fail(ctx, item, err)
 	}
 	confidence := Confidence(item.Inputs.Track, song.Track)
 	slog.Info("worker lyrics match", "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "cache_hit", cacheHit)
 	if !cacheHit {
 		if err := w.verify(ctx, item, song, confidence); err != nil {
 			slog.Warn("worker verification failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "error", err)
-			return w.fail(ctx, item.ID, err)
+			return w.fail(ctx, item, err)
 		}
 		if err := w.store(ctx, item.Inputs.Track, song); err != nil {
 			slog.Warn("worker cache store failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
-			return w.fail(ctx, item.ID, err)
+			return w.fail(ctx, item, err)
 		}
 	}
 
@@ -175,7 +177,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if err := w.writer.WriteLRC(song, p.Filename, p.Outdir); err != nil {
 			err = fmt.Errorf("worker: write item %d output %s/%s: %w", item.ID, p.Outdir, p.Filename, err)
 			slog.Warn("worker write failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "outdir", p.Outdir, "filename", p.Filename, "error", err)
-			return w.fail(ctx, item.ID, err)
+			return w.fail(ctx, item, err)
 		}
 	}
 
@@ -242,10 +244,10 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 	return nil
 }
 
-func (w *Worker) fail(ctx context.Context, id int64, cause error) error {
+func (w *Worker) fail(ctx context.Context, item queue.WorkItem, cause error) error {
 	w.consecutiveFailures++
-	if _, err := w.queue.Fail(context.WithoutCancel(ctx), id, cause); err != nil {
-		return fmt.Errorf("worker: fail item %d after %v: %w", id, cause, err)
+	if _, err := w.queue.Fail(context.WithoutCancel(ctx), item.ID, cause); err != nil {
+		return fmt.Errorf("worker: fail item %d after %v: %w", item.ID, cause, err)
 	}
 	return nil
 }

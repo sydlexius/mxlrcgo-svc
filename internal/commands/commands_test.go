@@ -190,7 +190,7 @@ func TestSchedulerBuildsScanEnqueuer(t *testing.T) {
 		Outdir:   "/music",
 		Filename: "a.lrc",
 		Status:   scan.StatusPending,
-	}}); err != nil {
+	}}, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert scan result: %v", err)
 	}
 

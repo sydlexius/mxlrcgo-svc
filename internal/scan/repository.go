@@ -29,31 +29,44 @@ func New(db *sql.DB) *Repo {
 	return &Repo{db: db}
 }
 
+// UpsertOptions controls how Upsert handles existing rows on conflict.
+type UpsertOptions struct {
+	// ForceStatus, when true, replaces the existing row's status with the
+	// incoming value. Used by forced rescans (--update / --upgrade) to
+	// re-eligible already-completed rows for re-fetching. Default false
+	// preserves the existing status so periodic scans cannot clobber
+	// terminal states recorded by the worker.
+	ForceStatus bool
+}
+
 // Upsert stores scan results for a library, keyed by library_id and file_path.
-func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.ScanResult) error {
+// On conflict, status is preserved by default; pass ForceStatus to overwrite.
+func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.ScanResult, opts UpsertOptions) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("scan: begin upsert tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, res := range results {
-		insertStatus := res.Status
-		if insertStatus == "" {
-			insertStatus = StatusPending
-		}
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO scan_results (library_id, file_path, artist, title, outdir, filename, status)
+	const baseUpsert = `INSERT INTO scan_results (library_id, file_path, artist, title, outdir, filename, status)
              VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(library_id, file_path) DO UPDATE SET
                  artist = excluded.artist,
                  title = excluded.title,
                  outdir = excluded.outdir,
-                 filename = excluded.filename,
-                 status = CASE
-                     WHEN ? = '' THEN scan_results.status
-                     ELSE ?
-                 END`,
+                 filename = excluded.filename`
+	stmt := baseUpsert
+	if opts.ForceStatus {
+		stmt += `,
+                 status = excluded.status`
+	}
+
+	for _, res := range results {
+		insertStatus := res.Status
+		if insertStatus == "" {
+			insertStatus = StatusPending
+		}
+		_, err := tx.ExecContext(ctx, stmt,
 			libraryID,
 			res.FilePath,
 			res.Track.ArtistName,
@@ -61,8 +74,6 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 			res.Outdir,
 			res.Filename,
 			insertStatus,
-			res.Status,
-			res.Status,
 		)
 		if err != nil {
 			return fmt.Errorf("scan: upsert %s: %w", res.FilePath, err)

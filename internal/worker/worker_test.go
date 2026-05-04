@@ -683,6 +683,10 @@ func (c *fakeCacheToggle) Store(context.Context, string, string, string, string)
 	return nil
 }
 
+// scan_results writeback for successful completions is now atomic inside
+// queue.DBQueue.Complete and is covered by queue tests against real SQLite,
+// so worker tests no longer need a fake ScanResults dependency.
+
 func TestConfidence(t *testing.T) {
 	want := models.Track{ArtistName: "  Héllo ", TrackName: "World"}
 	got := models.Track{ArtistName: "hello", TrackName: " world "}

@@ -16,7 +16,7 @@ type LibraryLister interface {
 
 // ResultStore persists scan results.
 type ResultStore interface {
-	Upsert(ctx context.Context, libraryID int64, results []models.ScanResult) error
+	Upsert(ctx context.Context, libraryID int64, results []models.ScanResult, opts UpsertOptions) error
 }
 
 // LibraryScanner scans a library path.
@@ -71,7 +71,8 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 				results[i].Status = StatusPending
 			}
 		}
-		if err := s.Results.Upsert(ctx, v.ID, results); err != nil {
+		upsertOpts := UpsertOptions{ForceStatus: s.Options.Update || s.Options.Upgrade}
+		if err := s.Results.Upsert(ctx, v.ID, results, upsertOpts); err != nil {
 			return fmt.Errorf("scan: persist library %d: %w", v.ID, err)
 		}
 		if s.OnScanComplete != nil {

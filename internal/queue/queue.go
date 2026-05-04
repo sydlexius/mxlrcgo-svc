@@ -103,18 +103,27 @@ func NewDBQueue(db *sql.DB) *DBQueue {
 }
 
 // Enqueue atomically inserts a new work item or refreshes an existing retryable
-// item with the same normalized artist/title key.
+// item with the same normalized artist/title key. When the item carries a
+// scan_result_id, the link is also recorded in work_queue_scan_results so a
+// later Complete writeback can flip every collapsed scan_results row, not just
+// the first one observed.
 func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority int) (WorkItem, error) {
 	now := formatTime(q.now())
 	outputPaths, err := marshalOutputPaths(inputs)
 	if err != nil {
 		return WorkItem{}, err
 	}
-	row := q.db.QueryRowContext(ctx,
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("queue: begin enqueue tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx,
 		`INSERT INTO work_queue (
-             artist, title, artist_key, title_key, outdir, filename, source_path, output_paths, status, priority, next_attempt_at
+             artist, title, artist_key, title_key, outdir, filename, source_path, output_paths, scan_result_id, status, priority, next_attempt_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(artist_key, title_key) DO UPDATE SET
              artist = CASE
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.artist
@@ -140,6 +149,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
                  WHEN work_queue.status IN ('done', 'processing') THEN work_queue.output_paths
                  ELSE excluded.output_paths
              END,
+             scan_result_id = COALESCE(work_queue.scan_result_id, excluded.scan_result_id),
              priority = max(work_queue.priority, excluded.priority),
              status = CASE
                  WHEN work_queue.status IN ('done', 'processing', 'failed') THEN work_queue.status
@@ -158,7 +168,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
                  ELSE NULL
              END
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
-                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		inputs.Track.ArtistName,
 		inputs.Track.TrackName,
 		normalize.NormalizeKey(inputs.Track.ArtistName),
@@ -167,6 +177,7 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 		inputs.Filename,
 		inputs.SourcePath,
 		outputPaths,
+		nullableID(inputs.ScanResultID),
 		StatusPending,
 		priority,
 		now,
@@ -174,6 +185,18 @@ func (q *DBQueue) Enqueue(ctx context.Context, inputs models.Inputs, priority in
 	item, err := scanWorkItem(row)
 	if err != nil {
 		return WorkItem{}, fmt.Errorf("queue: enqueue: %w", err)
+	}
+	if inputs.ScanResultID > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO work_queue_scan_results (work_queue_id, scan_result_id)
+             VALUES (?, ?)`,
+			item.ID, inputs.ScanResultID,
+		); err != nil {
+			return WorkItem{}, fmt.Errorf("queue: link scan_result %d: %w", inputs.ScanResultID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkItem{}, fmt.Errorf("queue: commit enqueue tx: %w", err)
 	}
 	return item, nil
 }
@@ -193,7 +216,7 @@ func (q *DBQueue) Dequeue(ctx context.Context) (WorkItem, error) {
              LIMIT 1
          )
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
-                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		now,
 	)
 	item, err := scanWorkItem(row)
@@ -206,10 +229,20 @@ func (q *DBQueue) Dequeue(ctx context.Context) (WorkItem, error) {
 	return item, nil
 }
 
-// Complete marks a processing item done.
+// Complete marks a processing item done. Every scan_results row linked through
+// work_queue_scan_results is flipped to 'done' inside the same transaction, so
+// a successful Complete guarantees the work_queue row and all originating
+// scan_results agree. Crash or partial-write between the updates is impossible:
+// SQLite either commits the whole transaction or rolls back.
 func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	now := formatTime(q.now())
-	res, err := q.db.ExecContext(ctx,
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("queue: begin complete tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
 		`UPDATE work_queue
          SET status = 'done',
              completed_at = ?,
@@ -222,7 +255,24 @@ func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("queue: complete: %w", err)
 	}
-	return requireAffected(res, "queue: complete")
+	if err := requireAffected(res, "queue: complete"); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE scan_results
+         SET status = 'done'
+         WHERE id IN (SELECT scan_result_id FROM work_queue_scan_results WHERE work_queue_id = ?)
+           AND status != 'done'`,
+		id,
+	); err != nil {
+		return fmt.Errorf("queue: complete scan_results writeback: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("queue: commit complete tx: %w", err)
+	}
+	return nil
 }
 
 // Cleanup removes retryable queued work for the same normalized artist/title.
@@ -281,7 +331,7 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
          WHERE id = ?
            AND status = 'processing'
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
-                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths`,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		nextAttempts,
 		nextAttemptAt,
 		lastError,
@@ -305,6 +355,7 @@ func scanWorkItem(row rowScanner) (WorkItem, error) {
 	var item WorkItem
 	var nextAttemptAt, createdAt, updatedAt, outputPaths string
 	var completedAt sql.NullString
+	var scanResultID sql.NullInt64
 	err := row.Scan(
 		&item.ID,
 		&item.Inputs.Track.ArtistName,
@@ -321,9 +372,13 @@ func scanWorkItem(row rowScanner) (WorkItem, error) {
 		&updatedAt,
 		&completedAt,
 		&outputPaths,
+		&scanResultID,
 	)
 	if err != nil {
 		return WorkItem{}, err
+	}
+	if scanResultID.Valid {
+		item.Inputs.ScanResultID = scanResultID.Int64
 	}
 	item.NextAttemptAt, err = parseTime(nextAttemptAt)
 	if err != nil {
@@ -393,6 +448,13 @@ func parseTime(s string) (time.Time, error) {
 
 func formatTime(t time.Time) string {
 	return t.UTC().Format(timeFormat)
+}
+
+func nullableID(id int64) any {
+	if id <= 0 {
+		return nil
+	}
+	return id
 }
 
 func requireAffected(res sql.Result, op string) error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -366,6 +367,34 @@ func TestConfigKeysIncludesVerificationFFmpegPath(t *testing.T) {
 		}
 	}
 	t.Fatal("configKeys missing verification.ffmpeg_path")
+}
+
+func TestCircuitOpenDurationConfigKey(t *testing.T) {
+	cfg := config.Config{API: config.APIConfig{CircuitOpenDuration: 1800}}
+
+	got, ok := configValue(cfg, "api.circuit_open_duration")
+	if !ok {
+		t.Fatal("configValue(api.circuit_open_duration) ok = false; want true")
+	}
+	if got != "1800" {
+		t.Fatalf("configValue(api.circuit_open_duration) = %q; want %q", got, "1800")
+	}
+
+	if err := setConfigValue(&cfg, "api.circuit_open_duration", "600"); err != nil {
+		t.Fatalf("setConfigValue valid: %v", err)
+	}
+	if cfg.API.CircuitOpenDuration != 600 {
+		t.Fatalf("CircuitOpenDuration = %d; want 600", cfg.API.CircuitOpenDuration)
+	}
+	for _, bad := range []string{"", "abc", "0", "-30"} {
+		if err := setConfigValue(&cfg, "api.circuit_open_duration", bad); err == nil {
+			t.Fatalf("setConfigValue accepted invalid api.circuit_open_duration %q", bad)
+		}
+	}
+
+	if !slices.Contains(configKeys(), "api.circuit_open_duration") {
+		t.Fatal("configKeys missing api.circuit_open_duration")
+	}
 }
 
 func isolateCommandsEnv(t *testing.T) {

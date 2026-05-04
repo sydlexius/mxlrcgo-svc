@@ -4,21 +4,31 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 )
 
+// fakeQueue models DBQueue's status transitions for tests. Dequeue moves an
+// item out of the pending pool and into processing; Complete/Fail/Release
+// remove it from processing. Release additionally records the ID so tests
+// can assert that an item was returned to the pending pool without a failure
+// being recorded against it.
 type fakeQueue struct {
 	items       []queue.WorkItem
+	processing  []queue.WorkItem
 	completed   []int64
 	failed      []int64
+	released    []int64
 	failCauses  []error
 	completeErr error
 	failErr     error
+	releaseErr  error
 }
 
 func (q *fakeQueue) Dequeue(_ context.Context) (queue.WorkItem, error) {
@@ -27,6 +37,7 @@ func (q *fakeQueue) Dequeue(_ context.Context) (queue.WorkItem, error) {
 	}
 	item := q.items[0]
 	q.items = q.items[1:]
+	q.processing = append(q.processing, item)
 	return item, nil
 }
 
@@ -34,6 +45,7 @@ func (q *fakeQueue) Complete(_ context.Context, id int64) error {
 	if q.completeErr != nil {
 		return q.completeErr
 	}
+	q.removeFromProcessing(id)
 	q.completed = append(q.completed, id)
 	return nil
 }
@@ -42,9 +54,28 @@ func (q *fakeQueue) Fail(_ context.Context, id int64, cause error) (queue.WorkIt
 	if q.failErr != nil {
 		return queue.WorkItem{}, q.failErr
 	}
+	q.removeFromProcessing(id)
 	q.failed = append(q.failed, id)
 	q.failCauses = append(q.failCauses, cause)
 	return queue.WorkItem{ID: id, Status: queue.StatusFailed}, nil
+}
+
+func (q *fakeQueue) Release(_ context.Context, id int64) error {
+	if q.releaseErr != nil {
+		return q.releaseErr
+	}
+	q.removeFromProcessing(id)
+	q.released = append(q.released, id)
+	return nil
+}
+
+func (q *fakeQueue) removeFromProcessing(id int64) {
+	for i, item := range q.processing {
+		if item.ID == id {
+			q.processing = append(q.processing[:i], q.processing[i+1:]...)
+			return
+		}
+	}
 }
 
 type cacheStore struct {
@@ -654,6 +685,123 @@ func TestRunCounterIncrementsOnWriteFailure(t *testing.T) {
 		if sleeps[i] != want[i] {
 			t.Fatalf("sleeps[%d] = %s; want %s", i, sleeps[i], want[i])
 		}
+	}
+}
+
+func TestRunOnceOpensCircuitOnRateLimitedAndDoesNotMarkFailed(t *testing.T) {
+	for name, sentinel := range map[string]error{
+		"rate limited": musixmatch.ErrRateLimited,
+		"unauthorized": musixmatch.ErrUnauthorized,
+	} {
+		t.Run(name, func(t *testing.T) {
+			track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+			q := &fakeQueue{items: []queue.WorkItem{
+				{ID: 900, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+				{ID: 901, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "b.lrc"}},
+			}}
+			fetcher := &fakeFetcher{err: fmt.Errorf("upstream: %w", sentinel)}
+			w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+			fixed := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+			w.now = func() time.Time { return fixed }
+			w.SetCircuitOpenDuration(30 * time.Minute)
+
+			// First call dequeues, hits sentinel, opens circuit.
+			if err := w.RunOnce(context.Background()); err != nil {
+				if !errors.Is(err, errQueueEmpty) {
+					t.Fatalf("RunOnce: %v; want nil or errQueueEmpty", err)
+				}
+			}
+			if len(q.failed) != 0 {
+				t.Fatalf("failed = %v; want none on circuit-open trip", q.failed)
+			}
+			if got := q.released; len(got) != 1 || got[0] != 900 {
+				t.Fatalf("released = %v; want [900] (dequeued item must return to pending pool, not stay in processing)", got)
+			}
+			if len(q.processing) != 0 {
+				t.Fatalf("processing = %v; want empty after release", q.processing)
+			}
+			if w.circuitOpenUntil.IsZero() {
+				t.Fatal("circuitOpenUntil = zero; want circuit opened")
+			}
+			if got, want := w.circuitOpenUntil, fixed.Add(30*time.Minute); !got.Equal(want) {
+				t.Fatalf("circuitOpenUntil = %v; want %v", got, want)
+			}
+
+			// Subsequent call must skip dequeue entirely while circuit open.
+			callsBefore := fetcher.calls
+			itemsBefore := len(q.items)
+			err := w.RunOnce(context.Background())
+			if !errors.Is(err, errQueueEmpty) {
+				t.Fatalf("RunOnce while open = %v; want errQueueEmpty", err)
+			}
+			if fetcher.calls != callsBefore {
+				t.Fatalf("fetcher.calls = %d; want unchanged %d (no dequeue while open)", fetcher.calls, callsBefore)
+			}
+			if len(q.items) != itemsBefore {
+				t.Fatalf("queue items = %d; want unchanged %d (no dequeue while open)", len(q.items), itemsBefore)
+			}
+			if len(q.failed) != 0 {
+				t.Fatalf("failed = %v; want none while circuit open", q.failed)
+			}
+
+			// Advance the clock past the window; next RunOnce closes the circuit
+			// and resumes processing (and trips again on the same fetcher).
+			w.now = func() time.Time { return fixed.Add(31 * time.Minute) }
+			err = w.RunOnce(context.Background())
+			if err != nil && !errors.Is(err, errQueueEmpty) {
+				t.Fatalf("RunOnce after window = %v; want nil or errQueueEmpty", err)
+			}
+			if fetcher.calls == callsBefore {
+				t.Fatalf("fetcher.calls = %d; want >%d after circuit closed", fetcher.calls, callsBefore)
+			}
+		})
+	}
+}
+
+func TestRunOnceWithOpenCircuitDoesNotIncrementBackoff(t *testing.T) {
+	w := New(&fakeQueue{}, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	fixed := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	w.now = func() time.Time { return fixed }
+	w.circuitOpenUntil = fixed.Add(10 * time.Minute)
+
+	if err := w.RunOnce(context.Background()); !errors.Is(err, errQueueEmpty) {
+		t.Fatalf("RunOnce = %v; want errQueueEmpty", err)
+	}
+	if w.consecutiveFailures != 0 {
+		t.Fatalf("consecutiveFailures = %d; want 0 (open-circuit must not trip backoff)", w.consecutiveFailures)
+	}
+}
+
+func TestRunOnceSurfacesReleaseFailureAfterCircuitTrip(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{
+		items: []queue.WorkItem{
+			{ID: 950, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+		},
+		releaseErr: errors.New("db down"),
+	}
+	fetcher := &fakeFetcher{err: fmt.Errorf("upstream: %w", musixmatch.ErrRateLimited)}
+	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+	w.SetCircuitOpenDuration(30 * time.Minute)
+
+	err := w.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce returned nil; want release-failure error to be surfaced")
+	}
+	if errors.Is(err, errQueueEmpty) {
+		t.Fatalf("RunOnce returned errQueueEmpty; want a real error so the outer loop can react. got %v", err)
+	}
+	if !errors.Is(err, q.releaseErr) {
+		t.Fatalf("RunOnce error %v; want errors.Is(_, releaseErr) so the cause is preserved", err)
+	}
+	// Circuit must still be opened even though release failed; we want the
+	// quiet window applied to upstream while operators investigate the
+	// orphaned row.
+	if w.circuitOpenUntil.IsZero() {
+		t.Fatal("circuitOpenUntil = zero; want circuit opened despite release failure")
+	}
+	if len(q.failed) != 0 {
+		t.Fatalf("failed = %v; want none on circuit-open trip even when release fails", q.failed)
 	}
 }
 

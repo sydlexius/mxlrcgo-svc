@@ -25,7 +25,19 @@ type Config struct {
 type APIConfig struct {
 	Token    string `toml:"token"`
 	Cooldown int    `toml:"cooldown"`
+	// CircuitOpenDuration is the duration in seconds the worker pauses
+	// dequeuing after the upstream API returns a rate-limit or unauthorized
+	// signal. Default 1800 (30 min). Values below circuitOpenMinSeconds are
+	// clamped at load time.
+	CircuitOpenDuration int `toml:"circuit_open_duration"`
 }
+
+// circuitOpenDefaultSeconds is the default circuit-open window (30 min).
+const circuitOpenDefaultSeconds = 30 * 60
+
+// circuitOpenMinSeconds is the minimum permissible circuit-open window.
+// Values below this are clamped to this floor with a warning.
+const circuitOpenMinSeconds = 5 * 60
 
 // OutputConfig holds output-related configuration.
 type OutputConfig struct {
@@ -62,7 +74,7 @@ type VerificationConfig struct {
 // defaults sets built-in fallback values.
 func defaults() Config {
 	return Config{
-		API:          APIConfig{Cooldown: 15},
+		API:          APIConfig{Cooldown: 15, CircuitOpenDuration: circuitOpenDefaultSeconds},
 		Output:       OutputConfig{Dir: "lyrics"},
 		DB:           DBConfig{Path: xdgDataPath("mxlrcgo-svc", "mxlrcgo.db")},
 		Server:       ServerConfig{Addr: "127.0.0.1:3876"},
@@ -113,11 +125,19 @@ func Load(path string) (Config, error) {
 			if cfg.Verification.MinSimilarity <= 0 || cfg.Verification.MinSimilarity > 1 {
 				cfg.Verification.MinSimilarity = d.Verification.MinSimilarity
 			}
+			// CircuitOpenDuration: 0 means "not set in file"; restore the
+			// default so users copying config.example.toml don't disable
+			// the breaker. Any non-zero value is honored and may be
+			// clamped to the minimum below.
+			if cfg.API.CircuitOpenDuration == 0 {
+				cfg.API.CircuitOpenDuration = d.API.CircuitOpenDuration
+			}
 		} else if !os.IsNotExist(err) {
 			return cfg, fmt.Errorf("config: stat %s: %w", path, err)
 		}
 	}
 	applyEnvOverrides(&cfg)
+	clampCircuitOpenDuration(&cfg)
 	if cfg.DB.Path == "" {
 		return cfg, fmt.Errorf("config: cannot determine DB path: set MXLRC_DB_PATH or XDG_DATA_HOME")
 	}
@@ -149,6 +169,15 @@ func applyEnvOverrides(cfg *Config) {
 			slog.Warn("env var is invalid; using current value", "var", cooldownVar, "value", v, "current", cfg.API.Cooldown) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
 		} else {
 			cfg.API.Cooldown = n
+		}
+	}
+
+	if v := os.Getenv("MXLRC_API_CIRCUIT_OPEN_DURATION"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			slog.Warn("env var is invalid; using current value", "var", "MXLRC_API_CIRCUIT_OPEN_DURATION", "value", v, "current", cfg.API.CircuitOpenDuration) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
+		} else {
+			cfg.API.CircuitOpenDuration = n
 		}
 	}
 
@@ -219,6 +248,20 @@ func applyEnvOverrides(cfg *Config) {
 		} else {
 			cfg.Verification.MinSimilarity = n
 		}
+	}
+}
+
+// clampCircuitOpenDuration enforces the minimum window for the worker
+// circuit breaker. Values below circuitOpenMinSeconds are raised to that
+// floor and a warning is logged so misconfiguration is visible.
+func clampCircuitOpenDuration(cfg *Config) {
+	if cfg.API.CircuitOpenDuration <= 0 {
+		cfg.API.CircuitOpenDuration = circuitOpenDefaultSeconds
+		return
+	}
+	if cfg.API.CircuitOpenDuration < circuitOpenMinSeconds {
+		slog.Warn("circuit_open_duration below minimum; clamping", "configured", cfg.API.CircuitOpenDuration, "minimum", circuitOpenMinSeconds)
+		cfg.API.CircuitOpenDuration = circuitOpenMinSeconds
 	}
 }
 

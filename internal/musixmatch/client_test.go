@@ -183,7 +183,11 @@ func TestFindLyricsErrors(t *testing.T) {
 	}{
 		"http unauthorized": {
 			client:  newTestClient(http.StatusUnauthorized, ""),
-			wantErr: "too many requests",
+			wantErr: "unauthorized",
+		},
+		"http too many requests": {
+			client:  newTestClient(http.StatusTooManyRequests, ""),
+			wantErr: "rate limited",
 		},
 		"http not found": {
 			client:  newTestClient(http.StatusNotFound, ""),
@@ -198,7 +202,7 @@ func TestFindLyricsErrors(t *testing.T) {
 					}
 				}
 			}`),
-			wantErr: "invalid token",
+			wantErr: "token renewal required",
 		},
 		"restricted lyrics": {
 			client: newTestClient(http.StatusOK, `{
@@ -265,6 +269,41 @@ func TestFindLyricsErrors(t *testing.T) {
 				t.Fatalf("error = %q; want substring %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestFindLyricsReturnsSentinelErrors(t *testing.T) {
+	tests := map[string]struct {
+		status   int
+		sentinel error
+	}{
+		"401 unauthorized":      {http.StatusUnauthorized, ErrUnauthorized},
+		"429 too many requests": {http.StatusTooManyRequests, ErrRateLimited},
+		"404 not found":         {http.StatusNotFound, ErrNotFound},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			client := newTestClient(tt.status, "")
+			_, err := client.FindLyrics(context.Background(), models.Track{TrackName: "title", ArtistName: "artist"})
+			if err == nil {
+				t.Fatal("FindLyrics returned nil error")
+			}
+			if !errors.Is(err, tt.sentinel) {
+				t.Fatalf("error = %v; want errors.Is(_, %v)", err, tt.sentinel)
+			}
+		})
+	}
+}
+
+func TestFindLyricsInBodyInvalidTokenReturnsErrUnauthorized(t *testing.T) {
+	body := `{"message": {"header": {"status_code": 401, "hint": "renew"}}}`
+	client := newTestClient(http.StatusOK, body)
+	_, err := client.FindLyrics(context.Background(), models.Track{TrackName: "title", ArtistName: "artist"})
+	if err == nil {
+		t.Fatal("FindLyrics returned nil error for in-body 401/renew")
+	}
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v; want errors.Is(_, ErrUnauthorized) so circuit breaker keys off it", err)
 	}
 }
 

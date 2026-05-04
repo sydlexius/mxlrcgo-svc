@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/sydlexius/mxlrcgo-svc/internal/backoff"
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
@@ -39,6 +40,10 @@ type Worker struct {
 	writer                lyrics.Writer
 	verifier              verification.Verifier
 	verifyBelowConfidence float64
+	consecutiveFailures   int
+	baseBackoff           time.Duration
+	maxBackoff            time.Duration
+	sleep                 func(context.Context, time.Duration)
 }
 
 var errQueueEmpty = errors.New("worker queue empty")
@@ -51,6 +56,21 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 		fetcher:               fetcher,
 		writer:                writer,
 		verifyBelowConfidence: 0.85,
+		baseBackoff:           backoff.DefaultBase,
+		maxBackoff:            backoff.DefaultMax,
+		sleep:                 sleepCtx,
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
 
@@ -86,6 +106,14 @@ func (w *Worker) RunPaced(ctx context.Context, interval time.Duration) error {
 
 func (w *Worker) run(ctx context.Context, pause func(context.Context) error) error {
 	for {
+		if w.consecutiveFailures > 0 {
+			delay := backoff.Geometric(w.consecutiveFailures, w.baseBackoff, w.maxBackoff)
+			slog.Warn("worker backing off after consecutive failures", "attempts", w.consecutiveFailures, "delay", delay)
+			w.sleep(ctx, delay)
+			if ctx.Err() != nil {
+				return nil
+			}
+		}
 		if err := w.RunOnce(ctx); err != nil {
 			if errors.Is(err, errQueueEmpty) {
 				return nil
@@ -97,6 +125,9 @@ func (w *Worker) run(ctx context.Context, pause func(context.Context) error) err
 		}
 		if ctx.Err() != nil {
 			return nil
+		}
+		if w.consecutiveFailures > 0 {
+			continue
 		}
 		if pause != nil {
 			if err := pause(ctx); err != nil {
@@ -151,11 +182,13 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	ctxNoCancel := context.WithoutCancel(ctx)
 	if err := w.queue.Complete(ctxNoCancel, item.ID); err != nil {
 		cause := fmt.Errorf("worker: complete item %d: %w", item.ID, err)
+		w.consecutiveFailures++
 		if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
 			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(cause, err))
 		}
 		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
 	}
+	w.consecutiveFailures = 0
 	return nil
 }
 
@@ -210,6 +243,7 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 }
 
 func (w *Worker) fail(ctx context.Context, id int64, cause error) error {
+	w.consecutiveFailures++
 	if _, err := w.queue.Fail(context.WithoutCancel(ctx), id, cause); err != nil {
 		return fmt.Errorf("worker: fail item %d after %v: %w", id, cause, err)
 	}

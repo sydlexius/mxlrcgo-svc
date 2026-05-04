@@ -548,16 +548,6 @@ func TestDBQueue_FailRequiresProcessingStatus(t *testing.T) {
 	}
 }
 
-func TestDBQueue_BackoffCapsLargeAttemptCounts(t *testing.T) {
-	q := NewDBQueue(nil)
-	q.baseBackoff = time.Minute
-	q.maxBackoff = time.Hour
-
-	if got := q.backoff(10_000); got != time.Hour {
-		t.Fatalf("backoff(10000) = %s; want %s", got, time.Hour)
-	}
-}
-
 func TestDBQueue_CompleteMarksDone(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

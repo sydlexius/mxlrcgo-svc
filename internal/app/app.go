@@ -8,14 +8,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/sydlexius/mxlrcgo-svc/internal/backoff"
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
-)
-
-const (
-	defaultBaseBackoff = time.Minute
-	defaultMaxBackoff  = time.Hour
 )
 
 // App owns all processing state and orchestrates the lyrics fetch loop.
@@ -45,8 +41,8 @@ func NewApp(fetcher musixmatch.Fetcher, writer lyrics.Writer, inputs *queue.Inpu
 		mode:        mode,
 		total:       inputs.Len(),
 		cooldown:    cooldown,
-		baseBackoff: defaultBaseBackoff,
-		maxBackoff:  defaultMaxBackoff,
+		baseBackoff: backoff.DefaultBase,
+		maxBackoff:  backoff.DefaultMax,
 		sleep:       sleep,
 	}
 }
@@ -121,32 +117,12 @@ func (a *App) backoffTimer(ctx context.Context, attempts int) {
 		return
 	}
 
-	delay := a.backoff(attempts)
+	delay := backoff.Geometric(attempts, a.baseBackoff, a.maxBackoff)
 	if delay <= 0 {
 		return
 	}
 	slog.Warn("backing off after lyrics fetch failure", "attempts", attempts, "delay", delay)
 	_ = a.sleep(ctx, delay)
-}
-
-func (a *App) backoff(attempts int) time.Duration {
-	if attempts < 1 {
-		attempts = 1
-	}
-	if a.baseBackoff <= 0 || a.maxBackoff <= 0 {
-		return 0
-	}
-	delay := a.baseBackoff
-	for i := 1; i < attempts; i++ {
-		if delay >= a.maxBackoff || delay > a.maxBackoff/2 {
-			return a.maxBackoff
-		}
-		delay *= 2
-	}
-	if delay > a.maxBackoff {
-		return a.maxBackoff
-	}
-	return delay
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

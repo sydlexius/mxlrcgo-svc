@@ -104,6 +104,39 @@ func TestAdd_ValidatesRequiredFields(t *testing.T) {
 	}
 }
 
+func TestGetByName(t *testing.T) {
+	ctx := context.Background()
+	repo := library.New(openTestDB(t))
+
+	added, err := repo.Add(ctx, "/music/rock", "Rock")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := repo.GetByName(ctx, "Rock")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if got != added {
+		t.Fatalf("GetByName = %+v; want %+v", got, added)
+	}
+
+	if _, err := repo.GetByName(ctx, "  Rock  "); err != nil {
+		t.Fatalf("GetByName trimmed: %v", err)
+	}
+
+	if _, err := repo.GetByName(ctx, ""); err == nil {
+		t.Fatal("GetByName empty name returned nil error")
+	}
+	if _, err := repo.GetByName(ctx, "    "); err == nil {
+		t.Fatal("GetByName whitespace name returned nil error")
+	}
+
+	if _, err := repo.GetByName(ctx, "Missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByName missing = %v; want sql.ErrNoRows", err)
+	}
+}
+
 func TestUpdateRemove_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := library.New(openTestDB(t))

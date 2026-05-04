@@ -3,9 +3,11 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -425,3 +427,428 @@ func writeCommandsConfig(t *testing.T, dbPath string) string {
 }
 
 var _ lyrics.Writer = fakeWriter{}
+
+// commandsTestEnv prepares an isolated config + DB and pre-seeds a library and
+// optional queue/scan rows. Returns the config path used by run* helpers.
+func commandsTestEnv(t *testing.T) (cfgPath string, dbPath string) {
+	t.Helper()
+	isolateCommandsEnv(t)
+	dir := t.TempDir()
+	dbPath = filepath.Join(dir, "state", "test.db")
+	cfgPath = writeCommandsConfig(t, dbPath)
+	return cfgPath, dbPath
+}
+
+func TestRunQueueList_FiltersByStatus(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	q := queue.NewDBQueue(sqlDB)
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Pending", TrackName: "Track"}}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Failing", TrackName: "Track"}}, 1); err != nil {
+		t.Fatalf("Enqueue 2: %v", err)
+	}
+	claimed, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Fail(ctx, claimed.ID, errorsNew("boom")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"queue", "list", "--status", "failed", "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d; want 0; out=%s", code, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "ID") || !strings.Contains(got, "Status") || !strings.Contains(got, "LastError") {
+		t.Fatalf("missing header in output: %q", got)
+	}
+	// The first dequeue (FIFO) claims the row inserted first ("Pending"),
+	// which is then failed. So a single failed row shows up; the "Failing"
+	// row stays pending and must NOT appear under --status=failed.
+	if !strings.Contains(got, "Pending") {
+		t.Fatalf("expected failed row (artist=Pending) in output: %q", got)
+	}
+	if strings.Contains(got, "Failing") {
+		t.Fatalf("status filter leaked pending row: %q", got)
+	}
+}
+
+func TestRunQueueRetry_RejectsNonFailedRow(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	q := queue.NewDBQueue(sqlDB)
+	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Pending"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"queue", "retry", strconvFormatInt(item.ID), "--config", cfg}, &out, Deps{})
+	if code == 0 {
+		t.Fatalf("Run exit code = 0; want non-zero (retry on pending must fail). out=%s", out.String())
+	}
+	if !strings.Contains(out.String(), "not in failed status") {
+		t.Fatalf("expected not-retryable message; got %q", out.String())
+	}
+}
+
+func TestRunQueueRetry_ResetsFailedRow(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	q := queue.NewDBQueue(sqlDB)
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if _, err := q.Fail(ctx, claimed.ID, errorsNew("boom")); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"queue", "retry", strconvFormatInt(claimed.ID), "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d; want 0; out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "retried") {
+		t.Fatalf("expected retried message; got %q", out.String())
+	}
+
+	// Verify state.
+	sqlDB, err = db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer sqlDB.Close()
+	items, err := queue.NewDBQueue(sqlDB).List(ctx, queue.ListFilter{Status: queue.StatusPending})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 1 || items[0].Attempts != 0 {
+		t.Fatalf("post-retry pending items = %+v; want one with attempts=0", items)
+	}
+}
+
+func TestRunQueueClear_DryRunDoesNotDelete(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	q := queue.NewDBQueue(sqlDB)
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, claimed.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"queue", "clear", "--done", "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("Run dry-run exit code = %d; want 0; out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "would delete 1") {
+		t.Fatalf("expected dry-run message; got %q", out.String())
+	}
+
+	// Re-open and confirm row still there.
+	sqlDB, err = db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	c, err := queue.NewDBQueue(sqlDB).CountDone(ctx)
+	if err != nil {
+		t.Fatalf("CountDone: %v", err)
+	}
+	_ = sqlDB.Close()
+	if c != 1 {
+		t.Fatalf("dry-run deleted rows: CountDone=%d, want 1", c)
+	}
+
+	// Now actually delete.
+	out.Reset()
+	code = Run(ctx, []string{"queue", "clear", "--done", "--yes", "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("Run --yes exit code = %d; want 0", code)
+	}
+	if !strings.Contains(out.String(), "deleted 1") {
+		t.Fatalf("expected deletion message; got %q", out.String())
+	}
+}
+
+func TestRunScanResults_ResolvesLibraryByNameAndID(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(ctx, "/music", "MusicLib")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	if err := scanRepo.Upsert(ctx, lib.ID, []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "Artist", TrackName: "Title"},
+		Outdir:   "/music",
+		Filename: "a.lrc",
+	}}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	for _, ref := range []string{"MusicLib", strconvFormatInt(lib.ID)} {
+		var out bytes.Buffer
+		code := Run(ctx, []string{"scan", "results", "--library", ref, "--config", cfg}, &out, Deps{})
+		if code != 0 {
+			t.Fatalf("Run --library=%q exit code = %d; want 0; out=%s", ref, code, out.String())
+		}
+		if !strings.Contains(out.String(), "/music/a.mp3") {
+			t.Fatalf("expected scan_result row for ref=%q; got %q", ref, out.String())
+		}
+		if !strings.Contains(out.String(), "MusicLib") {
+			t.Fatalf("expected library name in output for ref=%q; got %q", ref, out.String())
+		}
+	}
+}
+
+func TestRunScanClear_DryRunAndConfirm(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(ctx, "/music", "MusicLib")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	if err := scanRepo.Upsert(ctx, lib.ID, []models.ScanResult{
+		{FilePath: "/music/a.mp3", Track: models.Track{ArtistName: "Artist", TrackName: "A"}},
+		{FilePath: "/music/b.mp3", Track: models.Track{ArtistName: "Artist", TrackName: "B"}},
+	}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	// Dry run.
+	var out bytes.Buffer
+	code := Run(ctx, []string{"scan", "clear", "--library", "MusicLib", "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("dry-run exit code = %d; want 0; out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "would delete 2") {
+		t.Fatalf("expected dry-run message; got %q", out.String())
+	}
+
+	// Confirm dry run did nothing.
+	sqlDB, err = db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	c, err := scan.New(sqlDB).CountByLibrary(ctx, lib.ID)
+	if err != nil {
+		t.Fatalf("CountByLibrary: %v", err)
+	}
+	_ = sqlDB.Close()
+	if c != 2 {
+		t.Fatalf("CountByLibrary post dry-run = %d; want 2", c)
+	}
+
+	// Confirm.
+	out.Reset()
+	code = Run(ctx, []string{"scan", "clear", "--library", "MusicLib", "--yes", "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("--yes exit code = %d; want 0; out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "deleted 2") {
+		t.Fatalf("expected deletion message; got %q", out.String())
+	}
+
+	// Confirm library still exists.
+	sqlDB, err = db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer sqlDB.Close()
+	if _, err := library.New(sqlDB).Get(ctx, lib.ID); err != nil {
+		t.Fatalf("library removed by scan clear: %v", err)
+	}
+}
+
+func errorsNew(s string) error { return errors.New(s) }
+
+func strconvFormatInt(i int64) string { return strconv.FormatInt(i, 10) }
+
+func TestValidateQueueStatus(t *testing.T) {
+	for _, ok := range []string{"", "pending", "processing", "failed", "done"} {
+		if err := validateQueueStatus(ok); err != nil {
+			t.Errorf("validateQueueStatus(%q) = %v; want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"running", "PENDING", "x"} {
+		if err := validateQueueStatus(bad); err == nil {
+			t.Errorf("validateQueueStatus(%q) = nil; want error", bad)
+		}
+	}
+}
+
+func TestValidateScanStatus(t *testing.T) {
+	for _, ok := range []string{"", "pending", "processing", "done", "failed"} {
+		if err := validateScanStatus(ok); err != nil {
+			t.Errorf("validateScanStatus(%q) = %v; want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"queued", "DONE", "?"} {
+		if err := validateScanStatus(bad); err == nil {
+			t.Errorf("validateScanStatus(%q) = nil; want error", bad)
+		}
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	cases := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"", 5, ""},
+		{"abc", 5, "abc"},
+		{"abcdef", 6, "abcdef"},
+		{"abcdef", 5, "ab..."},
+		{"abcdef", 3, "abc"},
+		{"abcdef", 1, "a"},
+		{"abcdef", 0, "abcdef"},
+		{"abcdef", -1, "abcdef"},
+	}
+	for _, tc := range cases {
+		got := truncate(tc.in, tc.max)
+		if got != tc.want {
+			t.Errorf("truncate(%q, %d) = %q; want %q", tc.in, tc.max, got, tc.want)
+		}
+	}
+}
+
+func TestRunQueueList_InvalidStatusReturnsError(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := Run(context.Background(), []string{"queue", "list", "--status", "bogus", "--config", cfg}, &out, Deps{})
+	if code == 0 {
+		t.Fatalf("queue list with bogus status: exit code 0; want non-zero. out=%s", out.String())
+	}
+	if !strings.Contains(out.String(), "invalid status") {
+		t.Fatalf("output missing 'invalid status': %q", out.String())
+	}
+}
+
+func TestRunQueueRetry_MissingIDSurfacesNotFound(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := Run(context.Background(), []string{"queue", "retry", "--config", cfg, "9999"}, &out, Deps{})
+	if code == 0 {
+		t.Fatalf("queue retry of missing id: exit code 0; want non-zero. out=%s", out.String())
+	}
+}
+
+func TestRunQueueClear_ConfirmDeletes(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	q := queue.NewDBQueue(sqlDB)
+	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "Done"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Dequeue(ctx); err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"queue", "clear", "--done", "--yes", "--config", cfg}, &out, Deps{})
+	if code != 0 {
+		t.Fatalf("queue clear --yes exit code = %d; want 0. out=%s", code, out.String())
+	}
+}
+
+func TestRunScanResults_InvalidStatusReturnsError(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := Run(context.Background(), []string{"scan", "results", "--status", "bogus", "--config", cfg}, &out, Deps{})
+	if code == 0 {
+		t.Fatalf("scan results bogus status: exit code 0; want non-zero. out=%s", out.String())
+	}
+	if !strings.Contains(out.String(), "invalid status") {
+		t.Fatalf("output missing 'invalid status': %q", out.String())
+	}
+}
+
+func TestRunScanClear_RequiresLibrary(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := Run(context.Background(), []string{"scan", "clear", "--library", "Nonexistent", "--config", cfg}, &out, Deps{})
+	if code == 0 {
+		t.Fatalf("scan clear unknown library: exit code 0; want non-zero. out=%s", out.String())
+	}
+}
+
+func TestResolveLibraryRejectsBlankRef(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	repo := library.New(sqlDB)
+	if _, err := resolveLibrary(ctx, repo, ""); err == nil {
+		t.Fatal("resolveLibrary empty ref returned nil error")
+	}
+	if _, err := resolveLibrary(ctx, repo, "  "); err == nil {
+		t.Fatal("resolveLibrary whitespace ref returned nil error")
+	}
+	_ = cfg
+}

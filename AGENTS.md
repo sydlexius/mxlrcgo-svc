@@ -205,6 +205,15 @@ A Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them 
 - Purpose: Represent a single work item in the processing queue
 - Location: `internal/models/models.go`
 - Pattern: Bundles a `Track` (what to search for) with `Outdir` and `Filename` (where to write output)
+- Purpose: Durable SQLite-backed work queue for serve/worker mode
+- Location: `internal/queue/queue.go`
+- Pattern: `DBQueue` struct with `Enqueue`, `Dequeue`, `Complete`, `Fail`, `Cleanup`, plus inspection/maintenance methods `List(ctx, ListFilter)`, `Retry(ctx, id)` (rejects non-failed rows with `ErrNotRetryable`), `ClearDone(ctx)`, and `CountDone(ctx)`. Used by the `queue list / failed / retry / clear` CLI subcommands and the worker.
+- Purpose: Persistence for library scan_results rows
+- Location: `internal/scan/repository.go`
+- Pattern: `Repo` struct with `Upsert`, `ListByLibrary`, `ListPendingByLibrary`, `SetStatus`, plus inspection/maintenance methods `List(ctx, Filter)` (filters by optional `LibraryID` and `Status`), `ClearByLibrary(ctx, libraryID)`, and `CountByLibrary(ctx, libraryID)`. Used by the `scan results` and `scan clear` CLI subcommands and the scheduler.
+- Purpose: Library root CRUD (with name lookup for CLI ergonomics)
+- Location: `internal/library/repository.go`
+- Pattern: `Repo` struct with `Add`, `List`, `Get`, `GetByName`, `Update`, `Remove`. `GetByName` lets `scan` and other commands accept either a numeric library id or a human-readable name from `--library`.
 ## Entry Points
 - Location: `cmd/mxlrcgo-svc/main.go` (`func main()`)
 - Triggers: Direct CLI invocation (`mxlrcgo-svc [args]`)

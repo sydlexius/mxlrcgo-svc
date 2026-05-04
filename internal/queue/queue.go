@@ -26,6 +26,11 @@ const (
 
 const timeFormat = time.RFC3339
 
+// ErrNotRetryable is returned by Retry when the targeted work item is not in
+// the failed state and therefore cannot be safely reset (e.g. processing or
+// done). This avoids racing the worker on rows it currently owns.
+var ErrNotRetryable = errors.New("queue: work item is not in failed status")
+
 // InputsQueue is a FIFO queue for processing work items.
 type InputsQueue struct {
 	Queue []models.Inputs
@@ -365,6 +370,133 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
 		return WorkItem{}, fmt.Errorf("queue: commit fail tx: %w", err)
 	}
 	return item, nil
+}
+
+// ListFilter narrows the rows returned by List.
+type ListFilter struct {
+	// Status optionally restricts results to a single status value (e.g.
+	// "pending", "processing", "failed", "done"). Empty means no filter.
+	Status string
+	// Limit caps the number of rows returned. Zero or negative means no cap.
+	Limit int
+}
+
+// List returns work items ordered by priority desc, created_at asc, id asc,
+// optionally filtered by status and capped by limit.
+func (q *DBQueue) List(ctx context.Context, filter ListFilter) (items []WorkItem, retErr error) {
+	const baseQuery = `SELECT id, artist, title, outdir, filename, source_path, status, priority, attempts,
+                       next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id
+                       FROM work_queue`
+	const orderClause = ` ORDER BY priority DESC, created_at ASC, id ASC`
+	const limitClause = ` LIMIT ?`
+	var args []any
+	var query string
+	switch {
+	case filter.Status != "" && filter.Limit > 0:
+		query = baseQuery + ` WHERE status = ?` + orderClause + limitClause
+		args = append(args, filter.Status, filter.Limit)
+	case filter.Status != "":
+		query = baseQuery + ` WHERE status = ?` + orderClause
+		args = append(args, filter.Status)
+	case filter.Limit > 0:
+		query = baseQuery + orderClause + limitClause
+		args = append(args, filter.Limit)
+	default:
+		query = baseQuery + orderClause
+	}
+
+	rows, err := q.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("queue: list: %w", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("queue: close list rows: %w", err)
+		}
+	}()
+
+	for rows.Next() {
+		item, err := scanWorkItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("queue: list scan: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue: list rows: %w", err)
+	}
+	return items, nil
+}
+
+// Retry resets a failed work item back to pending so the worker picks it up on
+// the next dequeue. attempts is reset to zero, last_error is cleared, and
+// next_attempt_at is set to now. Retry returns ErrNotRetryable when the row's
+// current status is not "failed", which avoids racing the worker on
+// processing rows or undoing a successful completion.
+func (q *DBQueue) Retry(ctx context.Context, id int64) (WorkItem, error) {
+	now := formatTime(q.now())
+	row := q.db.QueryRowContext(ctx,
+		`UPDATE work_queue
+         SET status = 'pending',
+             attempts = 0,
+             next_attempt_at = ?,
+             last_error = ''
+         WHERE id = ?
+           AND status = 'failed'
+         RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
+                   next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
+		now,
+		id,
+	)
+	item, err := scanWorkItem(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Either the row does not exist, or its status is not 'failed'. The
+		// caller cannot tell those apart here; existence is checked separately
+		// so the user gets a clear error message either way.
+		var exists int
+		if err := q.db.QueryRowContext(ctx,
+			`SELECT 1 FROM work_queue WHERE id = ?`, id,
+		).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return WorkItem{}, sql.ErrNoRows
+			}
+			return WorkItem{}, fmt.Errorf("queue: retry existence check: %w", err)
+		}
+		return WorkItem{}, ErrNotRetryable
+	}
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("queue: retry: %w", err)
+	}
+	return item, nil
+}
+
+// ClearDone removes every work_queue row whose status is "done" and returns
+// the number of rows deleted.
+func (q *DBQueue) ClearDone(ctx context.Context) (int64, error) {
+	res, err := q.db.ExecContext(ctx,
+		`DELETE FROM work_queue WHERE status = 'done'`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("queue: clear done: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("queue: clear done rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// CountDone returns the number of work_queue rows whose status is "done".
+// It is useful for reporting what ClearDone would delete without actually
+// deleting anything.
+func (q *DBQueue) CountDone(ctx context.Context) (int64, error) {
+	var n int64
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM work_queue WHERE status = 'done'`,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("queue: count done: %w", err)
+	}
+	return n, nil
 }
 
 type rowScanner interface {

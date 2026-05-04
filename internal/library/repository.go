@@ -80,6 +80,24 @@ func (r *Repo) Get(ctx context.Context, id int64) (models.Library, error) {
 	return lib, nil
 }
 
+// GetByName returns the library root whose name matches name. It returns
+// sql.ErrNoRows when not found.
+func (r *Repo) GetByName(ctx context.Context, name string) (models.Library, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return models.Library{}, fmt.Errorf("library: name must not be empty")
+	}
+	var lib models.Library
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, path, name, created_at, updated_at FROM libraries WHERE name = ?`,
+		name,
+	).Scan(&lib.ID, &lib.Path, &lib.Name, &lib.CreatedAt, &lib.UpdatedAt)
+	if err != nil {
+		return models.Library{}, fmt.Errorf("library: get by name: %w", err)
+	}
+	return lib, nil
+}
+
 // Update changes the path and name for an existing library root.
 func (r *Repo) Update(ctx context.Context, id int64, path, name string) (models.Library, error) {
 	path, name, err := validate(path, name)

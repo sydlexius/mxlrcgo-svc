@@ -39,9 +39,18 @@ type Worker struct {
 	writer                lyrics.Writer
 	verifier              verification.Verifier
 	verifyBelowConfidence float64
+	consecutiveFailures   int
+	baseBackoff           time.Duration
+	maxBackoff            time.Duration
+	sleep                 func(context.Context, time.Duration)
 }
 
 var errQueueEmpty = errors.New("worker queue empty")
+
+const (
+	defaultBaseBackoff = time.Minute
+	defaultMaxBackoff  = time.Hour
+)
 
 // New creates a queue consumer worker.
 func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Worker {
@@ -51,7 +60,42 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 		fetcher:               fetcher,
 		writer:                writer,
 		verifyBelowConfidence: 0.85,
+		baseBackoff:           defaultBaseBackoff,
+		maxBackoff:            defaultMaxBackoff,
+		sleep:                 sleepCtx,
 	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func (w *Worker) backoff(attempts int) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	if w.baseBackoff <= 0 || w.maxBackoff <= 0 {
+		return 0
+	}
+	delay := w.baseBackoff
+	for i := 1; i < attempts; i++ {
+		if delay >= w.maxBackoff || delay > w.maxBackoff/2 {
+			return w.maxBackoff
+		}
+		delay *= 2
+	}
+	if delay > w.maxBackoff {
+		return w.maxBackoff
+	}
+	return delay
 }
 
 // EnableVerification configures optional STT verification for low-confidence matches.
@@ -97,6 +141,15 @@ func (w *Worker) run(ctx context.Context, pause func(context.Context) error) err
 		}
 		if ctx.Err() != nil {
 			return nil
+		}
+		if w.consecutiveFailures > 0 {
+			delay := w.backoff(w.consecutiveFailures)
+			slog.Warn("worker backing off after fetch failures", "attempts", w.consecutiveFailures, "delay", delay)
+			w.sleep(ctx, delay)
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
 		}
 		if pause != nil {
 			if err := pause(ctx); err != nil {
@@ -151,11 +204,13 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	ctxNoCancel := context.WithoutCancel(ctx)
 	if err := w.queue.Complete(ctxNoCancel, item.ID); err != nil {
 		cause := fmt.Errorf("worker: complete item %d: %w", item.ID, err)
+		w.consecutiveFailures++
 		if _, err := w.queue.Fail(ctxNoCancel, item.ID, cause); err != nil {
 			return fmt.Errorf("worker: complete item %d and mark failed: %w", item.ID, errors.Join(cause, err))
 		}
 		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
 	}
+	w.consecutiveFailures = 0
 	return nil
 }
 
@@ -210,6 +265,7 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 }
 
 func (w *Worker) fail(ctx context.Context, id int64, cause error) error {
+	w.consecutiveFailures++
 	if _, err := w.queue.Fail(context.WithoutCancel(ctx), id, cause); err != nil {
 		return fmt.Errorf("worker: fail item %d after %v: %w", id, cause, err)
 	}

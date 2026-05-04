@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
@@ -521,6 +522,109 @@ func TestRunPacedPausesAfterEachProcessedItem(t *testing.T) {
 	if len(completedAtPause) < 2 || completedAtPause[0] != 1 || completedAtPause[1] != 2 {
 		t.Fatalf("completed at pause = %v; want pauses after each processed item", completedAtPause)
 	}
+}
+
+func TestRunBacksOffGeometricallyAfterConsecutiveFailures(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{items: []queue.WorkItem{
+		{ID: 100, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+		{ID: 101, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "b.lrc"}},
+		{ID: 102, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "c.lrc"}},
+	}}
+	fetcher := &fakeFetcher{err: errors.New("rate limited")}
+	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+	w.baseBackoff = time.Second
+	w.maxBackoff = time.Hour
+	var sleeps []time.Duration
+	w.sleep = func(_ context.Context, d time.Duration) {
+		sleeps = append(sleeps, d)
+	}
+
+	if err := w.run(context.Background(), nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if len(q.failed) != 3 {
+		t.Fatalf("failed = %v; want all 3 items marked failed", q.failed)
+	}
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+	if len(sleeps) != len(want) {
+		t.Fatalf("sleep count = %d, want %d: %v", len(sleeps), len(want), sleeps)
+	}
+	for i := range want {
+		if sleeps[i] != want[i] {
+			t.Fatalf("sleep[%d] = %s, want %s", i, sleeps[i], want[i])
+		}
+	}
+}
+
+func TestRunResetsBackoffAfterSuccess(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	cached, err := encodeSong(models.Song{Track: track, Lyrics: models.Lyrics{LyricsBody: "cached"}})
+	if err != nil {
+		t.Fatalf("encodeSong: %v", err)
+	}
+	q := &fakeQueue{items: []queue.WorkItem{
+		{ID: 200, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+		{ID: 201, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "b.lrc"}},
+		{ID: 202, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "c.lrc"}},
+	}}
+	cache := &fakeCacheToggle{hits: []bool{false, true, false}, payload: cached}
+	fetcher := &fakeFetcher{err: errors.New("rate limited")}
+	w := New(q, cache, fetcher, &fakeWriter{})
+	w.baseBackoff = time.Second
+	w.maxBackoff = time.Hour
+	var sleeps []time.Duration
+	var pauses int
+	w.sleep = func(_ context.Context, d time.Duration) {
+		sleeps = append(sleeps, d)
+	}
+
+	if err := w.run(context.Background(), func(context.Context) error {
+		pauses++
+		return nil
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if pauses != 1 {
+		t.Fatalf("pauses = %d; want 1 (after the cache-hit success)", pauses)
+	}
+	want := []time.Duration{time.Second, time.Second}
+	if len(sleeps) != len(want) {
+		t.Fatalf("sleep count = %d, want %d: %v", len(sleeps), len(want), sleeps)
+	}
+	for i := range want {
+		if sleeps[i] != want[i] {
+			t.Fatalf("sleep[%d] = %s, want %s (counter must reset on cache-hit success)", i, sleeps[i], want[i])
+		}
+	}
+}
+
+type fakeCacheToggle struct {
+	hits    []bool
+	payload string
+	idx     int
+}
+
+func (c *fakeCacheToggle) LookupExact(context.Context, string, string, string) (string, error) {
+	hit := false
+	if c.idx < len(c.hits) {
+		hit = c.hits[c.idx]
+	}
+	c.idx++
+	if hit {
+		return c.payload, nil
+	}
+	return "", sql.ErrNoRows
+}
+
+func (c *fakeCacheToggle) LookupFallback(context.Context, string, string) (string, error) {
+	return "", sql.ErrNoRows
+}
+
+func (c *fakeCacheToggle) Store(context.Context, string, string, string, string) error {
+	return nil
 }
 
 func TestConfidence(t *testing.T) {

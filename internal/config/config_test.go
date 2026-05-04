@@ -16,6 +16,7 @@ func isolateEnv(t *testing.T) {
 	for _, k := range []string{
 		"MUSIXMATCH_TOKEN", "MXLRC_API_TOKEN",
 		"MXLRC_API_COOLDOWN", "MXLRC_COOLDOWN",
+		"MXLRC_API_CIRCUIT_OPEN_DURATION",
 		"MXLRC_OUTPUT_DIR", "MXLRC_SERVER_ADDR", "MXLRC_WEBHOOK_API_KEY",
 		"MXLRC_PROVIDER_PRIMARY", "MXLRC_PROVIDERS_DISABLED",
 		"MXLRC_VERIFICATION_ENABLED", "MXLRC_VERIFICATION_WHISPER_URL", "MXLRC_WHISPER_URL",
@@ -400,6 +401,49 @@ func TestLoad_BlankProviderAndInvalidVerificationSampleReDefault(t *testing.T) {
 	}
 	if cfg.Verification.MinSimilarity != 0.35 {
 		t.Fatalf("verification.min_similarity = %v; want 0.35", cfg.Verification.MinSimilarity)
+	}
+}
+
+// TestLoad_CircuitOpenDurationDefault verifies the default 30 min window.
+func TestLoad_CircuitOpenDurationDefault(t *testing.T) {
+	isolateEnv(t)
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.CircuitOpenDuration != 30*60 {
+		t.Fatalf("CircuitOpenDuration = %d; want 1800", cfg.API.CircuitOpenDuration)
+	}
+}
+
+// TestLoad_CircuitOpenDurationEnvOverride verifies the env var overrides
+// the default.
+func TestLoad_CircuitOpenDurationEnvOverride(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("MXLRC_API_CIRCUIT_OPEN_DURATION", "1200")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.CircuitOpenDuration != 1200 {
+		t.Fatalf("CircuitOpenDuration = %d; want 1200", cfg.API.CircuitOpenDuration)
+	}
+}
+
+// TestLoad_CircuitOpenDurationClampsBelowMinimum verifies values below the
+// 5 min minimum are clamped up.
+func TestLoad_CircuitOpenDurationClampsBelowMinimum(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("MXLRC_API_CIRCUIT_OPEN_DURATION", "60")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.CircuitOpenDuration != 5*60 {
+		t.Fatalf("CircuitOpenDuration = %d; want 300 (clamped)", cfg.API.CircuitOpenDuration)
 	}
 }
 

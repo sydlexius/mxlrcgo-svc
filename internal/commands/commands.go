@@ -409,6 +409,7 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	}
 	workQ := queue.NewDBQueue(sqlDB)
 	w := worker.New(workQ, cache.New(sqlDB), fetcher, newWriter())
+	w.SetCircuitOpenDuration(time.Duration(cfg.API.CircuitOpenDuration) * time.Second)
 	configureWorkerVerification(w, cfg, verifier)
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -850,6 +851,7 @@ func configKeys() []string {
 	return []string{
 		"api.token",
 		"api.cooldown",
+		"api.circuit_open_duration",
 		"output.dir",
 		"db.path",
 		"server.addr",
@@ -871,6 +873,8 @@ func configValue(cfg config.Config, key string) (string, bool) {
 		return cfg.API.Token, true
 	case "api.cooldown":
 		return strconv.Itoa(cfg.API.Cooldown), true
+	case "api.circuit_open_duration":
+		return strconv.Itoa(cfg.API.CircuitOpenDuration), true
 	case "output.dir":
 		return cfg.Output.Dir, true
 	case "db.path":
@@ -910,6 +914,12 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 			return fmt.Errorf("api.cooldown must be a non-negative integer")
 		}
 		cfg.API.Cooldown = n
+	case "api.circuit_open_duration":
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("api.circuit_open_duration must be a positive integer (seconds)")
+		}
+		cfg.API.CircuitOpenDuration = n
 	case "output.dir":
 		cfg.Output.Dir = value
 	case "db.path":

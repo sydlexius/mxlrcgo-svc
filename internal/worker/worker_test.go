@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
+	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 )
@@ -654,6 +656,84 @@ func TestRunCounterIncrementsOnWriteFailure(t *testing.T) {
 		if sleeps[i] != want[i] {
 			t.Fatalf("sleeps[%d] = %s; want %s", i, sleeps[i], want[i])
 		}
+	}
+}
+
+func TestRunOnceOpensCircuitOnRateLimitedAndDoesNotMarkFailed(t *testing.T) {
+	for name, sentinel := range map[string]error{
+		"rate limited": musixmatch.ErrRateLimited,
+		"unauthorized": musixmatch.ErrUnauthorized,
+	} {
+		t.Run(name, func(t *testing.T) {
+			track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+			q := &fakeQueue{items: []queue.WorkItem{
+				{ID: 900, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+				{ID: 901, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "b.lrc"}},
+			}}
+			fetcher := &fakeFetcher{err: fmt.Errorf("upstream: %w", sentinel)}
+			w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
+			fixed := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+			w.now = func() time.Time { return fixed }
+			w.SetCircuitOpenDuration(30 * time.Minute)
+
+			// First call dequeues, hits sentinel, opens circuit.
+			if err := w.RunOnce(context.Background()); err != nil {
+				if !errors.Is(err, errQueueEmpty) {
+					t.Fatalf("RunOnce: %v; want nil or errQueueEmpty", err)
+				}
+			}
+			if len(q.failed) != 0 {
+				t.Fatalf("failed = %v; want none on circuit-open trip", q.failed)
+			}
+			if w.circuitOpenUntil.IsZero() {
+				t.Fatal("circuitOpenUntil = zero; want circuit opened")
+			}
+			if got, want := w.circuitOpenUntil, fixed.Add(30*time.Minute); !got.Equal(want) {
+				t.Fatalf("circuitOpenUntil = %v; want %v", got, want)
+			}
+
+			// Subsequent call must skip dequeue entirely while circuit open.
+			callsBefore := fetcher.calls
+			itemsBefore := len(q.items)
+			err := w.RunOnce(context.Background())
+			if !errors.Is(err, errQueueEmpty) {
+				t.Fatalf("RunOnce while open = %v; want errQueueEmpty", err)
+			}
+			if fetcher.calls != callsBefore {
+				t.Fatalf("fetcher.calls = %d; want unchanged %d (no dequeue while open)", fetcher.calls, callsBefore)
+			}
+			if len(q.items) != itemsBefore {
+				t.Fatalf("queue items = %d; want unchanged %d (no dequeue while open)", len(q.items), itemsBefore)
+			}
+			if len(q.failed) != 0 {
+				t.Fatalf("failed = %v; want none while circuit open", q.failed)
+			}
+
+			// Advance the clock past the window; next RunOnce closes the circuit
+			// and resumes processing (and trips again on the same fetcher).
+			w.now = func() time.Time { return fixed.Add(31 * time.Minute) }
+			err = w.RunOnce(context.Background())
+			if err != nil && !errors.Is(err, errQueueEmpty) {
+				t.Fatalf("RunOnce after window = %v; want nil or errQueueEmpty", err)
+			}
+			if fetcher.calls == callsBefore {
+				t.Fatalf("fetcher.calls = %d; want >%d after circuit closed", fetcher.calls, callsBefore)
+			}
+		})
+	}
+}
+
+func TestRunOnceWithOpenCircuitDoesNotIncrementBackoff(t *testing.T) {
+	w := New(&fakeQueue{}, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	fixed := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	w.now = func() time.Time { return fixed }
+	w.circuitOpenUntil = fixed.Add(10 * time.Minute)
+
+	if err := w.RunOnce(context.Background()); !errors.Is(err, errQueueEmpty) {
+		t.Fatalf("RunOnce = %v; want errQueueEmpty", err)
+	}
+	if w.consecutiveFailures != 0 {
+		t.Fatalf("consecutiveFailures = %d; want 0 (open-circuit must not trip backoff)", w.consecutiveFailures)
 	}
 }
 

@@ -32,9 +32,19 @@ type Cache interface {
 	Store(ctx context.Context, artist, title, album, lyrics string) error
 }
 
+// defaultCircuitOpenDuration is the fallback window applied when no value
+// is configured via SetCircuitOpenDuration. Mirrors the config default so
+// non-server callers (tests, ad-hoc CLI runs) get sensible behavior.
+const defaultCircuitOpenDuration = 30 * time.Minute
+
 // Worker consumes queued lyrics work one item at a time. The scan_results
 // writeback for successful completions is handled atomically inside
 // queue.DBQueue.Complete, so the worker has no separate ledger dependency.
+//
+// Worker is intentionally single-goroutine: per-provider concurrency is the
+// architectural model (see CLAUDE.md). RunOnce must not be invoked
+// concurrently against the same Worker; the circuit-breaker state is
+// therefore stored without a mutex.
 type Worker struct {
 	queue                 Queue
 	cache                 Cache
@@ -46,6 +56,9 @@ type Worker struct {
 	baseBackoff           time.Duration
 	maxBackoff            time.Duration
 	sleep                 func(context.Context, time.Duration)
+	now                   func() time.Time
+	circuitOpenDuration   time.Duration
+	circuitOpenUntil      time.Time
 }
 
 var errQueueEmpty = errors.New("worker queue empty")
@@ -61,6 +74,18 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 		baseBackoff:           backoff.DefaultBase,
 		maxBackoff:            backoff.DefaultMax,
 		sleep:                 sleepCtx,
+		now:                   time.Now,
+		circuitOpenDuration:   defaultCircuitOpenDuration,
+	}
+}
+
+// SetCircuitOpenDuration overrides the window the worker stays quiet after
+// observing a rate-limit or unauthorized signal from the fetcher. Values
+// less than or equal to zero are ignored; clamping against any minimum
+// is the responsibility of the caller (typically the config layer).
+func (w *Worker) SetCircuitOpenDuration(d time.Duration) {
+	if d > 0 {
+		w.circuitOpenDuration = d
 	}
 }
 
@@ -147,6 +172,17 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Circuit breaker gate: while open, do not dequeue and do not mark any
+	// rows failed. Returning errQueueEmpty unwinds the run loop cleanly so
+	// the outer ticker idles for the configured window.
+	if !w.circuitOpenUntil.IsZero() {
+		if w.now().Before(w.circuitOpenUntil) {
+			return errQueueEmpty
+		}
+		// Circuit just closed; log once on the first dequeue attempt.
+		w.circuitOpenUntil = time.Time{}
+		slog.Info("worker circuit closed")
+	}
 	item, err := w.queue.Dequeue(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -157,6 +193,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 
 	song, cacheHit, err := w.song(ctx, item.Inputs.Track)
 	if err != nil {
+		if w.tripCircuitIfRateLimited(item, err) {
+			return errQueueEmpty
+		}
 		slog.Warn("worker song resolution failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
 		return w.fail(ctx, item, err)
 	}
@@ -242,6 +281,22 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 		return fmt.Errorf("worker: store cache: %w", err)
 	}
 	return nil
+}
+
+// tripCircuitIfRateLimited inspects the fetcher error for the upstream
+// rate-limit / unauthorized sentinels and, if matched, opens the circuit
+// breaker. Returns true when the circuit was opened so the caller can
+// short-circuit out of RunOnce without marking the row failed and without
+// tripping the per-item geometric backoff. The dequeued item is intentionally
+// left alone: the next dequeue after the circuit closes will pick it up
+// (or the queue's own attempts/next_attempt_at logic will handle it).
+func (w *Worker) tripCircuitIfRateLimited(item queue.WorkItem, err error) bool {
+	if !errors.Is(err, musixmatch.ErrRateLimited) && !errors.Is(err, musixmatch.ErrUnauthorized) {
+		return false
+	}
+	w.circuitOpenUntil = w.now().Add(w.circuitOpenDuration)
+	slog.Warn("worker circuit opened", "until", w.circuitOpenUntil, "id", item.ID, "cause", err)
+	return true
 }
 
 func (w *Worker) fail(ctx context.Context, item queue.WorkItem, cause error) error {

@@ -78,12 +78,6 @@ docker_manifests:
       - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
       - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
 
-  - name_template: "ghcr.io/sydlexius/mxlrcgo-svc:dev"
-    skip_push: '{{ not .Prerelease }}'
-    image_templates:
-      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-amd64"
-      - "ghcr.io/sydlexius/mxlrcgo-svc:{{ .Version }}-arm64"
-
 signs:
   - artifacts: checksum
     cmd: cosign

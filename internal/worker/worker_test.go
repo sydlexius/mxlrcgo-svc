@@ -601,6 +601,62 @@ func TestRunResetsBackoffAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestRunBackoffFiresBeforeRunOnceAfterErrorReturn(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{
+		items: []queue.WorkItem{
+			{ID: 300, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+		},
+	}
+	w := New(q, &fakeCache{}, &fakeFetcher{err: errors.New("rate limited")}, &fakeWriter{})
+	w.baseBackoff = time.Second
+	w.maxBackoff = time.Hour
+	w.consecutiveFailures = 3
+
+	var sleeps []time.Duration
+	w.sleep = func(_ context.Context, d time.Duration) {
+		sleeps = append(sleeps, d)
+	}
+
+	if err := w.run(context.Background(), nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(sleeps) == 0 || sleeps[0] != 4*time.Second {
+		t.Fatalf("first sleep = %v; want 4s before any dequeue (carry-over backoff)", sleeps)
+	}
+}
+
+func TestRunCounterIncrementsOnWriteFailure(t *testing.T) {
+	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
+	q := &fakeQueue{items: []queue.WorkItem{
+		{ID: 400, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"}},
+		{ID: 401, Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "b.lrc"}},
+	}}
+	fetcher := &fakeFetcher{song: models.Song{Track: track, Lyrics: models.Lyrics{LyricsBody: "ok"}}}
+	writer := &fakeWriter{err: errors.New("disk full")}
+	w := New(q, &fakeCache{}, fetcher, writer)
+	w.baseBackoff = time.Second
+	w.maxBackoff = time.Hour
+
+	var sleeps []time.Duration
+	w.sleep = func(_ context.Context, d time.Duration) {
+		sleeps = append(sleeps, d)
+	}
+
+	if err := w.run(context.Background(), nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := []time.Duration{time.Second, 2 * time.Second}
+	if len(sleeps) != len(want) {
+		t.Fatalf("sleeps = %v; want %v (write failures must also trip backoff)", sleeps, want)
+	}
+	for i := range want {
+		if sleeps[i] != want[i] {
+			t.Fatalf("sleeps[%d] = %s; want %s", i, sleeps[i], want[i])
+		}
+	}
+}
+
 type fakeCacheToggle struct {
 	hits    []bool
 	payload string

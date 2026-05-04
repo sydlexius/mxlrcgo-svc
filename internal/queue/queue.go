@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sydlexius/mxlrcgo-svc/internal/backoff"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 )
@@ -23,11 +24,7 @@ const (
 	StatusFailed = "failed"
 )
 
-const (
-	defaultBaseBackoff = time.Minute
-	defaultMaxBackoff  = time.Hour
-	timeFormat         = time.RFC3339
-)
+const timeFormat = time.RFC3339
 
 // InputsQueue is a FIFO queue for processing work items.
 type InputsQueue struct {
@@ -99,8 +96,8 @@ type DBQueue struct {
 func NewDBQueue(db *sql.DB) *DBQueue {
 	return &DBQueue{
 		db:          db,
-		baseBackoff: defaultBaseBackoff,
-		maxBackoff:  defaultMaxBackoff,
+		baseBackoff: backoff.DefaultBase,
+		maxBackoff:  backoff.DefaultMax,
 		now:         time.Now,
 	}
 }
@@ -270,7 +267,7 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
 	}
 
 	nextAttempts := attempts + 1
-	nextAttemptAt := formatTime(q.now().Add(q.backoff(nextAttempts)))
+	nextAttemptAt := formatTime(q.now().Add(backoff.Geometric(nextAttempts, q.baseBackoff, q.maxBackoff)))
 	lastError := ""
 	if cause != nil {
 		lastError = cause.Error()
@@ -298,26 +295,6 @@ func (q *DBQueue) Fail(ctx context.Context, id int64, cause error) (WorkItem, er
 		return WorkItem{}, fmt.Errorf("queue: commit fail tx: %w", err)
 	}
 	return item, nil
-}
-
-func (q *DBQueue) backoff(attempts int) time.Duration {
-	if attempts < 1 {
-		attempts = 1
-	}
-	if q.baseBackoff <= 0 || q.maxBackoff <= 0 {
-		return 0
-	}
-	delay := q.baseBackoff
-	for i := 1; i < attempts; i++ {
-		if delay >= q.maxBackoff || delay > q.maxBackoff/2 {
-			return q.maxBackoff
-		}
-		delay *= 2
-	}
-	if delay > q.maxBackoff {
-		return q.maxBackoff
-	}
-	return delay
 }
 
 type rowScanner interface {

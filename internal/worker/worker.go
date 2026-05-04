@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/sydlexius/mxlrcgo-svc/internal/backoff"
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
@@ -47,11 +48,6 @@ type Worker struct {
 
 var errQueueEmpty = errors.New("worker queue empty")
 
-const (
-	defaultBaseBackoff = time.Minute
-	defaultMaxBackoff  = time.Hour
-)
-
 // New creates a queue consumer worker.
 func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Worker {
 	return &Worker{
@@ -60,8 +56,8 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 		fetcher:               fetcher,
 		writer:                writer,
 		verifyBelowConfidence: 0.85,
-		baseBackoff:           defaultBaseBackoff,
-		maxBackoff:            defaultMaxBackoff,
+		baseBackoff:           backoff.DefaultBase,
+		maxBackoff:            backoff.DefaultMax,
 		sleep:                 sleepCtx,
 	}
 }
@@ -76,26 +72,6 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
-}
-
-func (w *Worker) backoff(attempts int) time.Duration {
-	if attempts < 1 {
-		attempts = 1
-	}
-	if w.baseBackoff <= 0 || w.maxBackoff <= 0 {
-		return 0
-	}
-	delay := w.baseBackoff
-	for i := 1; i < attempts; i++ {
-		if delay >= w.maxBackoff || delay > w.maxBackoff/2 {
-			return w.maxBackoff
-		}
-		delay *= 2
-	}
-	if delay > w.maxBackoff {
-		return w.maxBackoff
-	}
-	return delay
 }
 
 // EnableVerification configures optional STT verification for low-confidence matches.
@@ -130,6 +106,14 @@ func (w *Worker) RunPaced(ctx context.Context, interval time.Duration) error {
 
 func (w *Worker) run(ctx context.Context, pause func(context.Context) error) error {
 	for {
+		if w.consecutiveFailures > 0 {
+			delay := backoff.Geometric(w.consecutiveFailures, w.baseBackoff, w.maxBackoff)
+			slog.Warn("worker backing off after consecutive failures", "attempts", w.consecutiveFailures, "delay", delay)
+			w.sleep(ctx, delay)
+			if ctx.Err() != nil {
+				return nil
+			}
+		}
 		if err := w.RunOnce(ctx); err != nil {
 			if errors.Is(err, errQueueEmpty) {
 				return nil
@@ -143,12 +127,6 @@ func (w *Worker) run(ctx context.Context, pause func(context.Context) error) err
 			return nil
 		}
 		if w.consecutiveFailures > 0 {
-			delay := w.backoff(w.consecutiveFailures)
-			slog.Warn("worker backing off after fetch failures", "attempts", w.consecutiveFailures, "delay", delay)
-			w.sleep(ctx, delay)
-			if ctx.Err() != nil {
-				return nil
-			}
 			continue
 		}
 		if pause != nil {

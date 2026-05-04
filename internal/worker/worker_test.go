@@ -14,13 +14,21 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 )
 
+// fakeQueue models DBQueue's status transitions for tests. Dequeue moves an
+// item out of the pending pool and into processing; Complete/Fail/Release
+// remove it from processing. Release additionally records the ID so tests
+// can assert that an item was returned to the pending pool without a failure
+// being recorded against it.
 type fakeQueue struct {
 	items       []queue.WorkItem
+	processing  []queue.WorkItem
 	completed   []int64
 	failed      []int64
+	released    []int64
 	failCauses  []error
 	completeErr error
 	failErr     error
+	releaseErr  error
 }
 
 func (q *fakeQueue) Dequeue(_ context.Context) (queue.WorkItem, error) {
@@ -29,6 +37,7 @@ func (q *fakeQueue) Dequeue(_ context.Context) (queue.WorkItem, error) {
 	}
 	item := q.items[0]
 	q.items = q.items[1:]
+	q.processing = append(q.processing, item)
 	return item, nil
 }
 
@@ -36,6 +45,7 @@ func (q *fakeQueue) Complete(_ context.Context, id int64) error {
 	if q.completeErr != nil {
 		return q.completeErr
 	}
+	q.removeFromProcessing(id)
 	q.completed = append(q.completed, id)
 	return nil
 }
@@ -44,9 +54,28 @@ func (q *fakeQueue) Fail(_ context.Context, id int64, cause error) (queue.WorkIt
 	if q.failErr != nil {
 		return queue.WorkItem{}, q.failErr
 	}
+	q.removeFromProcessing(id)
 	q.failed = append(q.failed, id)
 	q.failCauses = append(q.failCauses, cause)
 	return queue.WorkItem{ID: id, Status: queue.StatusFailed}, nil
+}
+
+func (q *fakeQueue) Release(_ context.Context, id int64) error {
+	if q.releaseErr != nil {
+		return q.releaseErr
+	}
+	q.removeFromProcessing(id)
+	q.released = append(q.released, id)
+	return nil
+}
+
+func (q *fakeQueue) removeFromProcessing(id int64) {
+	for i, item := range q.processing {
+		if item.ID == id {
+			q.processing = append(q.processing[:i], q.processing[i+1:]...)
+			return
+		}
+	}
 }
 
 type cacheStore struct {
@@ -684,6 +713,12 @@ func TestRunOnceOpensCircuitOnRateLimitedAndDoesNotMarkFailed(t *testing.T) {
 			}
 			if len(q.failed) != 0 {
 				t.Fatalf("failed = %v; want none on circuit-open trip", q.failed)
+			}
+			if got := q.released; len(got) != 1 || got[0] != 900 {
+				t.Fatalf("released = %v; want [900] (dequeued item must return to pending pool, not stay in processing)", got)
+			}
+			if len(q.processing) != 0 {
+				t.Fatalf("processing = %v; want empty after release", q.processing)
 			}
 			if w.circuitOpenUntil.IsZero() {
 				t.Fatal("circuitOpenUntil = zero; want circuit opened")

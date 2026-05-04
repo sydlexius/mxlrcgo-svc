@@ -275,6 +275,26 @@ func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Release returns a processing item to the pending pool without recording a
+// failure. Used when the worker dequeued the item but cannot process it for a
+// reason that should not count against the row's retry budget (e.g. the
+// global rate-limit circuit breaker tripped). Attempts and next_attempt_at
+// are left untouched so the row is immediately eligible for the next dequeue.
+func (q *DBQueue) Release(ctx context.Context, id int64) error {
+	res, err := q.db.ExecContext(ctx,
+		`UPDATE work_queue
+         SET status = 'pending',
+             last_error = ''
+         WHERE id = ?
+           AND status = 'processing'`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: release: %w", err)
+	}
+	return requireAffected(res, "queue: release")
+}
+
 // Cleanup removes retryable queued work for the same normalized artist/title.
 // Processing and completed rows are preserved to avoid racing active workers or
 // losing history for work that has already finished.

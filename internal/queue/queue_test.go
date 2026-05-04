@@ -750,6 +750,71 @@ func TestDBQueue_FailRequiresProcessingStatus(t *testing.T) {
 	}
 }
 
+func TestDBQueue_ReleaseReturnsItemToPendingWithoutFailure(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	dequeued, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if dequeued.ID != item.ID {
+		t.Fatalf("Dequeue id = %d; want %d", dequeued.ID, item.ID)
+	}
+
+	if err := q.Release(ctx, item.ID); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	var status string
+	var attempts int
+	var nextAttempt string
+	var lastError string
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT status, attempts, next_attempt_at, last_error FROM work_queue WHERE id = ?`,
+		item.ID,
+	).Scan(&status, &attempts, &nextAttempt, &lastError); err != nil {
+		t.Fatalf("query released row: %v", err)
+	}
+	if status != StatusPending {
+		t.Fatalf("status = %q; want %q (release must restore pending)", status, StatusPending)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts = %d; want 0 (release must not count as a failure)", attempts)
+	}
+	if lastError != "" {
+		t.Fatalf("last_error = %q; want empty after release", lastError)
+	}
+	requeued, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue after release: %v", err)
+	}
+	if requeued.ID != item.ID {
+		t.Fatalf("re-dequeued id = %d; want %d (released item must be eligible again)", requeued.ID, item.ID)
+	}
+}
+
+func TestDBQueue_ReleaseRequiresProcessingStatus(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	item, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Artist", TrackName: "Title"}}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := q.Release(ctx, item.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Release on pending row = %v; want sql.ErrNoRows", err)
+	}
+}
+
 func TestDBQueue_CompleteMarksDone(t *testing.T) {
 	ctx := context.Background()
 	q := NewDBQueue(openQueueTestDB(t))

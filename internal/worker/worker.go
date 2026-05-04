@@ -23,6 +23,7 @@ type Queue interface {
 	Dequeue(ctx context.Context) (queue.WorkItem, error)
 	Complete(ctx context.Context, id int64) error
 	Fail(ctx context.Context, id int64, cause error) (queue.WorkItem, error)
+	Release(ctx context.Context, id int64) error
 }
 
 // Cache provides lyrics cache operations.
@@ -193,7 +194,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 
 	song, cacheHit, err := w.song(ctx, item.Inputs.Track)
 	if err != nil {
-		if w.tripCircuitIfRateLimited(item, err) {
+		if w.tripCircuitIfRateLimited(ctx, item, err) {
 			return errQueueEmpty
 		}
 		slog.Warn("worker song resolution failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", err)
@@ -285,17 +286,20 @@ func (w *Worker) store(ctx context.Context, track models.Track, song models.Song
 
 // tripCircuitIfRateLimited inspects the fetcher error for the upstream
 // rate-limit / unauthorized sentinels and, if matched, opens the circuit
-// breaker. Returns true when the circuit was opened so the caller can
-// short-circuit out of RunOnce without marking the row failed and without
-// tripping the per-item geometric backoff. The dequeued item is intentionally
-// left alone: the next dequeue after the circuit closes will pick it up
-// (or the queue's own attempts/next_attempt_at logic will handle it).
-func (w *Worker) tripCircuitIfRateLimited(item queue.WorkItem, err error) bool {
+// breaker and releases the dequeued item back to the pending pool. Returns
+// true when the circuit was opened so the caller can short-circuit out of
+// RunOnce without marking the row failed and without tripping the per-item
+// geometric backoff. Release uses a context decoupled from cancellation so
+// the row never stays stuck in 'processing' when ctx is being torn down.
+func (w *Worker) tripCircuitIfRateLimited(ctx context.Context, item queue.WorkItem, err error) bool {
 	if !errors.Is(err, musixmatch.ErrRateLimited) && !errors.Is(err, musixmatch.ErrUnauthorized) {
 		return false
 	}
 	w.circuitOpenUntil = w.now().Add(w.circuitOpenDuration)
 	slog.Warn("worker circuit opened", "until", w.circuitOpenUntil, "id", item.ID, "cause", err)
+	if releaseErr := w.queue.Release(context.WithoutCancel(ctx), item.ID); releaseErr != nil {
+		slog.Warn("worker release after circuit open failed", "id", item.ID, "error", releaseErr)
+	}
 	return true
 }
 

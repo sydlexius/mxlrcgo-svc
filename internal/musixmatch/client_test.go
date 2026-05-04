@@ -202,7 +202,7 @@ func TestFindLyricsErrors(t *testing.T) {
 					}
 				}
 			}`),
-			wantErr: "invalid token",
+			wantErr: "token renewal required",
 		},
 		"restricted lyrics": {
 			client: newTestClient(http.StatusOK, `{
@@ -292,6 +292,18 @@ func TestFindLyricsReturnsSentinelErrors(t *testing.T) {
 				t.Fatalf("error = %v; want errors.Is(_, %v)", err, tt.sentinel)
 			}
 		})
+	}
+}
+
+func TestFindLyricsInBodyInvalidTokenReturnsErrUnauthorized(t *testing.T) {
+	body := `{"message": {"header": {"status_code": 401, "hint": "renew"}}}`
+	client := newTestClient(http.StatusOK, body)
+	_, err := client.FindLyrics(context.Background(), models.Track{TrackName: "title", ArtistName: "artist"})
+	if err == nil {
+		t.Fatal("FindLyrics returned nil error for in-body 401/renew")
+	}
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v; want errors.Is(_, ErrUnauthorized) so circuit breaker keys off it", err)
 	}
 }
 

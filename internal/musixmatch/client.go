@@ -121,7 +121,7 @@ func (c *Client) FindLyrics(ctx context.Context, track models.Track) (models.Son
 	}
 
 	if v.GetInt("message", "header", "status_code") == 401 && string(v.GetStringBytes("message", "header", "hint")) == "renew" {
-		return song, errors.New("invalid token")
+		return song, fmt.Errorf("%w: token renewal required", ErrUnauthorized)
 	}
 
 	mtg := v.Get("message", "body", "macro_calls", "matcher.track.get", "message")

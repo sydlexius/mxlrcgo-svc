@@ -852,3 +852,192 @@ func TestResolveLibraryRejectsBlankRef(t *testing.T) {
 	}
 	_ = cfg
 }
+
+func TestRunQueueCmd_MissingSubcommand(t *testing.T) {
+	var out bytes.Buffer
+	code := runQueueCmd(context.Background(), &out, QueueCmd{})
+	if code != 2 {
+		t.Fatalf("runQueueCmd empty = %d; want 2", code)
+	}
+	if !strings.Contains(out.String(), "missing queue subcommand") {
+		t.Fatalf("output = %q; want missing-subcommand message", out.String())
+	}
+}
+
+func TestRunQueueCmd_FailedRoutesToList(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := runQueueCmd(context.Background(), &out, QueueCmd{Failed: &QueueFailedCmd{ConfigPath: cfg, Limit: 5}})
+	if code != 0 {
+		t.Fatalf("queue failed = %d; want 0. out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "ID") {
+		t.Fatalf("queue failed missing header: %q", out.String())
+	}
+}
+
+func TestRunQueueClear_RequiresDoneFlag(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := runQueueClear(context.Background(), &out, QueueClearCmd{ConfigPath: cfg, Done: false})
+	if code != 2 {
+		t.Fatalf("queue clear without --done = %d; want 2", code)
+	}
+	if !strings.Contains(out.String(), "requires --done") {
+		t.Fatalf("output = %q; want --done required message", out.String())
+	}
+}
+
+func TestRunScanResults_EmptyDBPrintsHeaderOnly(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := runScanResults(context.Background(), &out, ScanResultsCmd{ConfigPath: cfg})
+	if code != 0 {
+		t.Fatalf("scan results empty = %d; want 0. out=%s", code, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "ID") || !strings.Contains(got, "Library") {
+		t.Fatalf("output missing header: %q", got)
+	}
+}
+
+func TestRunQueueList_EmptyDBPrintsHeaderOnly(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := runQueueList(context.Background(), &out, QueueListCmd{ConfigPath: cfg})
+	if code != 0 {
+		t.Fatalf("queue list empty = %d; want 0. out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "ID") {
+		t.Fatalf("output missing header: %q", out.String())
+	}
+}
+
+func TestRunQueueClear_DryRunCountsZero(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := runQueueClear(context.Background(), &out, QueueClearCmd{ConfigPath: cfg, Done: true, Yes: false})
+	if code != 0 {
+		t.Fatalf("dry-run on empty db = %d; want 0. out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "would delete 0") {
+		t.Fatalf("dry-run output = %q; want 'would delete 0'", out.String())
+	}
+}
+
+func TestRunScanClear_DryRunOnEmpty(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	if _, err := libRepo.Add(ctx, "/music", "Music"); err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := runScanClear(ctx, &out, ScanClearCmd{ConfigPath: cfg, Library: "Music", Yes: false})
+	if code != 0 {
+		t.Fatalf("scan clear dry-run = %d; want 0. out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "would delete 0") {
+		t.Fatalf("scan clear dry-run output = %q; want 'would delete 0'", out.String())
+	}
+}
+
+func TestRunScanClear_RequiresLibraryFlag(t *testing.T) {
+	cfg, _ := commandsTestEnv(t)
+	var out bytes.Buffer
+	code := runScanClear(context.Background(), &out, ScanClearCmd{ConfigPath: cfg})
+	if code == 0 {
+		t.Fatalf("scan clear without --library = 0; want non-zero")
+	}
+}
+
+func TestRunScanResults_FilterByLibraryByID(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	libRepo := library.New(sqlDB)
+	lib, err := libRepo.Add(ctx, "/music", "Music")
+	if err != nil {
+		t.Fatalf("Add library: %v", err)
+	}
+	scanRepo := scan.New(sqlDB)
+	if err := scanRepo.Upsert(ctx, lib.ID, []models.ScanResult{{
+		FilePath: "/music/a.mp3",
+		Track:    models.Track{ArtistName: "A", TrackName: "Track"},
+		Outdir:   "/music",
+		Filename: "a.lrc",
+		Status:   scan.StatusPending,
+	}}, scan.UpsertOptions{}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	var out bytes.Buffer
+	code := runScanResults(ctx, &out, ScanResultsCmd{ConfigPath: cfg, Library: strconv.FormatInt(lib.ID, 10)})
+	if code != 0 {
+		t.Fatalf("scan results --library <id> = %d; want 0. out=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "/music/a.mp3") {
+		t.Fatalf("scan results --library <id> missing row: %q", out.String())
+	}
+}
+
+func TestResolveLibrary_NumericNameLooksUpByName(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	repo := library.New(sqlDB)
+	added, err := repo.Add(ctx, "/music/numeric", "9999")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	got, err := resolveLibrary(ctx, repo, "9999")
+	if err != nil {
+		t.Fatalf("resolveLibrary numeric-name: %v", err)
+	}
+	if got.ID != added.ID {
+		t.Fatalf("resolveLibrary id = %d; want %d", got.ID, added.ID)
+	}
+	_ = cfg
+}
+
+func TestResolveLibrary_NumericRefAmbiguousIDvsName(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	repo := library.New(sqlDB)
+	// Library #1 (Music)
+	if _, err := repo.Add(ctx, "/music/a", "Music"); err != nil {
+		t.Fatalf("Add a: %v", err)
+	}
+	// Library #2 named "1" — ref "1" now matches BOTH id=1 and name="1".
+	if _, err := repo.Add(ctx, "/music/b", "1"); err != nil {
+		t.Fatalf("Add b: %v", err)
+	}
+
+	_, err = resolveLibrary(ctx, repo, "1")
+	if err == nil {
+		t.Fatal("resolveLibrary returned nil error for ambiguous ID-vs-name match")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("err = %v; want substring 'ambiguous'", err)
+	}
+	_ = cfg
+}

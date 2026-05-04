@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -80,19 +81,43 @@ func (r *Repo) Get(ctx context.Context, id int64) (models.Library, error) {
 	return lib, nil
 }
 
+// ErrAmbiguousLibraryName is returned when a name lookup matches more than
+// one library row. The schema does not enforce uniqueness on name (only path),
+// so callers must disambiguate by ID rather than have the lookup silently pick
+// an arbitrary row.
+var ErrAmbiguousLibraryName = errors.New("library: ambiguous name (multiple rows match)")
+
 // GetByName returns the library root whose name matches name. It returns
-// sql.ErrNoRows when not found.
+// sql.ErrNoRows when not found and ErrAmbiguousLibraryName when more than one
+// row shares the same name (schema only enforces unique path).
 func (r *Repo) GetByName(ctx context.Context, name string) (models.Library, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return models.Library{}, fmt.Errorf("library: name must not be empty")
 	}
-	var lib models.Library
-	err := r.db.QueryRowContext(ctx,
-		`SELECT id, path, name, created_at, updated_at FROM libraries WHERE name = ?`,
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, path, name, created_at, updated_at FROM libraries WHERE name = ? LIMIT 2`,
 		name,
-	).Scan(&lib.ID, &lib.Path, &lib.Name, &lib.CreatedAt, &lib.UpdatedAt)
+	)
 	if err != nil {
+		return models.Library{}, fmt.Errorf("library: get by name: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return models.Library{}, fmt.Errorf("library: get by name: %w", err)
+		}
+		return models.Library{}, fmt.Errorf("library: get by name: %w", sql.ErrNoRows)
+	}
+	var lib models.Library
+	if err := rows.Scan(&lib.ID, &lib.Path, &lib.Name, &lib.CreatedAt, &lib.UpdatedAt); err != nil {
+		return models.Library{}, fmt.Errorf("library: get by name: %w", err)
+	}
+	if rows.Next() {
+		return models.Library{}, fmt.Errorf("library: get by name %q: %w", name, ErrAmbiguousLibraryName)
+	}
+	if err := rows.Err(); err != nil {
 		return models.Library{}, fmt.Errorf("library: get by name: %w", err)
 	}
 	return lib, nil

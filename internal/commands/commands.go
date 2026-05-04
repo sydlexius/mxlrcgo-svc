@@ -1087,10 +1087,39 @@ func resolveLibrary(ctx context.Context, repo *library.Repo, ref string) (models
 	if ref == "" {
 		return models.Library{}, fmt.Errorf("library reference must not be empty")
 	}
-	if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
-		return repo.Get(ctx, id)
+	id, parseErr := strconv.ParseInt(ref, 10, 64)
+	if parseErr != nil {
+		return repo.GetByName(ctx, ref)
 	}
-	return repo.GetByName(ctx, ref)
+	// All-digit ref: query both interpretations so a library literally named
+	// "123" can never silently mask the ID match (and vice versa).
+	byID, idErr := repo.Get(ctx, id)
+	byName, nameErr := repo.GetByName(ctx, ref)
+	idFound := idErr == nil
+	nameFound := nameErr == nil
+	switch {
+	case idFound && nameFound:
+		if byID.ID == byName.ID {
+			return byID, nil
+		}
+		return models.Library{}, fmt.Errorf("library reference %q is ambiguous: matches id %d and name %q (id %d); pass an unambiguous form", ref, byID.ID, byName.Name, byName.ID)
+	case idFound:
+		if !errors.Is(nameErr, sql.ErrNoRows) {
+			return models.Library{}, nameErr
+		}
+		return byID, nil
+	case nameFound:
+		if !errors.Is(idErr, sql.ErrNoRows) {
+			return models.Library{}, idErr
+		}
+		return byName, nil
+	case errors.Is(idErr, sql.ErrNoRows) && errors.Is(nameErr, sql.ErrNoRows):
+		return models.Library{}, fmt.Errorf("library reference %q: %w", ref, sql.ErrNoRows)
+	case !errors.Is(idErr, sql.ErrNoRows):
+		return models.Library{}, idErr
+	default:
+		return models.Library{}, nameErr
+	}
 }
 
 // validateQueueStatus checks --status for queue commands.
@@ -1284,7 +1313,7 @@ func runScanResults(ctx context.Context, out io.Writer, args ScanResultsCmd) int
 	libRepo := library.New(sqlDB)
 	scanRepo := scan.New(sqlDB)
 
-	filter := scan.Filter{Status: args.Status}
+	filter := scan.Filter{Status: args.Status, Limit: args.Limit}
 	libNames := map[int64]string{}
 	if strings.TrimSpace(args.Library) != "" {
 		lib, err := resolveLibrary(ctx, libRepo, args.Library)
@@ -1313,9 +1342,6 @@ func runScanResults(ctx context.Context, out io.Writer, args ScanResultsCmd) int
 	if err != nil {
 		slog.Error("failed to list scan results", "error", err)
 		return 1
-	}
-	if args.Limit > 0 && len(results) > args.Limit {
-		results = results[:args.Limit]
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)

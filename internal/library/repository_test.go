@@ -150,3 +150,23 @@ func TestUpdateRemove_NotFound(t *testing.T) {
 		t.Fatalf("Remove missing got %v; want sql.ErrNoRows", err)
 	}
 }
+
+func TestGetByName_AmbiguousReturnsError(t *testing.T) {
+	ctx := context.Background()
+	repo := library.New(openTestDB(t))
+
+	if _, err := repo.Add(ctx, "/music/a", "Music"); err != nil {
+		t.Fatalf("Add a: %v", err)
+	}
+	if _, err := repo.Add(ctx, "/music/b", "Music"); err != nil {
+		t.Fatalf("Add b: %v", err)
+	}
+
+	_, err := repo.GetByName(ctx, "Music")
+	if err == nil {
+		t.Fatal("GetByName ambiguous returned nil error")
+	}
+	if !errors.Is(err, library.ErrAmbiguousLibraryName) {
+		t.Fatalf("err = %v; want errors.Is(_, ErrAmbiguousLibraryName)", err)
+	}
+}

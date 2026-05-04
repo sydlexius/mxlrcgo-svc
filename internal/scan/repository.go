@@ -169,6 +169,10 @@ type Filter struct {
 	// Status optionally restricts results to a single status value (e.g.
 	// "pending", "processing", "done", "failed"). Empty means no filter.
 	Status string
+	// Limit caps the number of returned rows. Zero or negative means no
+	// limit. Applied as a SQL LIMIT so the database does not materialize
+	// the full result set when the caller only wants a slice.
+	Limit int
 }
 
 // List returns persisted scan results matching filter in stable ID order.
@@ -190,6 +194,10 @@ func (r *Repo) List(ctx context.Context, filter Filter) (results []models.ScanRe
 		args = append(args, filter.Status)
 	default:
 		query = baseQuery + orderClause
+	}
+	if filter.Limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, filter.Limit)
 	}
 
 	rows, err := r.db.QueryContext(ctx, query, args...)

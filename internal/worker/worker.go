@@ -15,7 +15,6 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
 	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
-	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
 	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 )
 
@@ -33,20 +32,14 @@ type Cache interface {
 	Store(ctx context.Context, artist, title, album, lyrics string) error
 }
 
-// ScanResults updates the persistent discovery ledger as queue items reach
-// terminal states. Optional: workers handling items that did not originate from
-// a library scan can leave it nil.
-type ScanResults interface {
-	SetStatus(ctx context.Context, ids []int64, status string) error
-}
-
-// Worker consumes queued lyrics work one item at a time.
+// Worker consumes queued lyrics work one item at a time. The scan_results
+// writeback for successful completions is handled atomically inside
+// queue.DBQueue.Complete, so the worker has no separate ledger dependency.
 type Worker struct {
 	queue                 Queue
 	cache                 Cache
 	fetcher               musixmatch.Fetcher
 	writer                lyrics.Writer
-	scanResults           ScanResults
 	verifier              verification.Verifier
 	verifyBelowConfidence float64
 	consecutiveFailures   int
@@ -88,29 +81,6 @@ func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfide
 	w.verifier = verifier
 	if belowConfidence > 0 && belowConfidence <= 1 {
 		w.verifyBelowConfidence = belowConfidence
-	}
-}
-
-// SetScanResults wires the discovery ledger so successful completions flow
-// back to scan_results. Pass nil to disable writeback.
-func (w *Worker) SetScanResults(s ScanResults) {
-	w.scanResults = s
-}
-
-// markScanResultDone records a successful completion in the scan_results
-// ledger. Failures are logged but never propagated, since the queue's own
-// state is already authoritative for retry behavior. Failures are not
-// written back: queue.Fail schedules a retry rather than terminating, so
-// flipping scan_results to "failed" would lie about a row that is still
-// scheduled to retry. Permanent failures stay in "processing" until either
-// the queue eventually succeeds and flips them to "done", or a future
-// max-attempts cap promotes them to "failed".
-func (w *Worker) markScanResultDone(ctx context.Context, id int64) {
-	if w.scanResults == nil || id <= 0 {
-		return
-	}
-	if err := w.scanResults.SetStatus(ctx, []int64{id}, scan.StatusDone); err != nil {
-		slog.Warn("worker scan_results writeback failed", "scan_result_id", id, "status", scan.StatusDone, "error", err)
 	}
 }
 
@@ -220,7 +190,6 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		}
 		return fmt.Errorf("worker: complete item %d (marked failed): %w", item.ID, cause)
 	}
-	w.markScanResultDone(ctxNoCancel, item.Inputs.ScanResultID)
 	w.consecutiveFailures = 0
 	return nil
 }

@@ -391,6 +391,80 @@ func insertScanResult(t *testing.T, sqlDB *sql.DB, filePath string) int64 {
 	return id
 }
 
+func TestDBQueue_CompleteAtomicallyWritesScanResultsDone(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	scanID := insertScanResult(t, sqlDB, "/music/atomic.mp3")
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Atomic"},
+		ScanResultID: scanID,
+	}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var queueStatus, scanStatus string
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT status FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&queueStatus); err != nil {
+		t.Fatalf("read work_queue: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT status FROM scan_results WHERE id = ?`, scanID,
+	).Scan(&scanStatus); err != nil {
+		t.Fatalf("read scan_results: %v", err)
+	}
+	if queueStatus != "done" {
+		t.Fatalf("work_queue status = %q; want done", queueStatus)
+	}
+	if scanStatus != "done" {
+		t.Fatalf("scan_results status = %q; want done (Complete must atomically flip both ledgers)", scanStatus)
+	}
+}
+
+func TestDBQueue_CompleteWithoutScanResultIDLeavesLedgerUntouched(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	// Webhook-style enqueue with no originating scan_result should still
+	// complete cleanly without touching scan_results.
+	if _, err := q.Enqueue(ctx, models.Inputs{
+		Track: models.Track{ArtistName: "Artist", TrackName: "Adhoc"},
+	}, 1); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if err := q.Complete(ctx, item.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var status string
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT status FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&status); err != nil {
+		t.Fatalf("read work_queue: %v", err)
+	}
+	if status != "done" {
+		t.Fatalf("work_queue status = %q; want done", status)
+	}
+}
+
 func TestDBQueue_EnqueuePersistsScanResultID(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := openQueueTestDB(t)

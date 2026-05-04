@@ -208,10 +208,20 @@ func (q *DBQueue) Dequeue(ctx context.Context) (WorkItem, error) {
 	return item, nil
 }
 
-// Complete marks a processing item done.
+// Complete marks a processing item done. If the work_queue row carries a
+// scan_result_id, the linked scan_results row is flipped to 'done' inside the
+// same transaction, so a successful Complete guarantees both ledgers agree.
+// Crash or partial-write between the two updates is impossible: SQLite either
+// commits the whole transaction or rolls back.
 func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	now := formatTime(q.now())
-	res, err := q.db.ExecContext(ctx,
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("queue: begin complete tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
 		`UPDATE work_queue
          SET status = 'done',
              completed_at = ?,
@@ -224,7 +234,24 @@ func (q *DBQueue) Complete(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("queue: complete: %w", err)
 	}
-	return requireAffected(res, "queue: complete")
+	if err := requireAffected(res, "queue: complete"); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE scan_results
+         SET status = 'done'
+         WHERE id = (SELECT scan_result_id FROM work_queue WHERE id = ?)
+           AND status != 'done'`,
+		id,
+	); err != nil {
+		return fmt.Errorf("queue: complete scan_results writeback: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("queue: commit complete tx: %w", err)
+	}
+	return nil
 }
 
 // Cleanup removes retryable queued work for the same normalized artist/title.

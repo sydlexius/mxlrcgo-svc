@@ -105,6 +105,9 @@ func TestRepo_UpsertWithForceStatusOverwritesExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByLibrary: %v", err)
 	}
+	if len(got) != 1 {
+		t.Fatalf("ListByLibrary returned %d results; want 1", len(got))
+	}
 	if got[0].Status != scan.StatusPending {
 		t.Fatalf("Status = %q; want %q after ForceStatus refresh", got[0].Status, scan.StatusPending)
 	}

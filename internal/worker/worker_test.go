@@ -683,94 +683,9 @@ func (c *fakeCacheToggle) Store(context.Context, string, string, string, string)
 	return nil
 }
 
-type fakeScanResults struct {
-	calls   []scanResultsCall
-	failErr error
-}
-
-type scanResultsCall struct {
-	ids    []int64
-	status string
-}
-
-func (s *fakeScanResults) SetStatus(_ context.Context, ids []int64, status string) error {
-	s.calls = append(s.calls, scanResultsCall{ids: append([]int64(nil), ids...), status: status})
-	return s.failErr
-}
-
-func TestRunOnceWritesBackScanResultDoneOnSuccess(t *testing.T) {
-	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
-	q := &fakeQueue{items: []queue.WorkItem{{
-		ID: 30,
-		Inputs: models.Inputs{
-			Track:        track,
-			Outdir:       "out",
-			Filename:     "a.lrc",
-			ScanResultID: 7,
-		},
-	}}}
-	fetcher := &fakeFetcher{song: models.Song{
-		Track:  track,
-		Lyrics: models.Lyrics{LyricsBody: "fresh lyrics"},
-	}}
-	scanRepo := &fakeScanResults{}
-	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
-	w.SetScanResults(scanRepo)
-
-	if err := w.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	if len(scanRepo.calls) != 1 {
-		t.Fatalf("scan_results calls = %d; want 1", len(scanRepo.calls))
-	}
-	if scanRepo.calls[0].status != "done" || len(scanRepo.calls[0].ids) != 1 || scanRepo.calls[0].ids[0] != 7 {
-		t.Fatalf("scan_results call = %+v; want done for id 7", scanRepo.calls[0])
-	}
-}
-
-func TestRunOnceDoesNotWriteScanResultOnRetryableFailure(t *testing.T) {
-	q := &fakeQueue{items: []queue.WorkItem{{
-		ID: 31,
-		Inputs: models.Inputs{
-			Track:        models.Track{ArtistName: "Artist", TrackName: "Title"},
-			ScanResultID: 8,
-		},
-	}}}
-	scanRepo := &fakeScanResults{}
-	w := New(q, &fakeCache{}, &fakeFetcher{err: errors.New("fetch failed")}, &fakeWriter{})
-	w.SetScanResults(scanRepo)
-
-	if err := w.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	// queue.Fail schedules a retry, so the scan_results row must stay in
-	// "processing" rather than being prematurely flipped to "failed".
-	if len(scanRepo.calls) != 0 {
-		t.Fatalf("scan_results calls = %v; want none for retryable failure", scanRepo.calls)
-	}
-	if len(q.failed) != 1 || q.failed[0] != 31 {
-		t.Fatalf("queue failed = %v; want [31]", q.failed)
-	}
-}
-
-func TestRunOnceSkipsScanResultWritebackWhenIDZero(t *testing.T) {
-	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
-	q := &fakeQueue{items: []queue.WorkItem{{
-		ID:     32,
-		Inputs: models.Inputs{Track: track, Outdir: "out", Filename: "a.lrc"},
-	}}}
-	fetcher := &fakeFetcher{song: models.Song{Track: track, Lyrics: models.Lyrics{LyricsBody: "x"}}}
-	scanRepo := &fakeScanResults{}
-	w := New(q, &fakeCache{}, fetcher, &fakeWriter{})
-	w.SetScanResults(scanRepo)
-
-	if err := w.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	if len(scanRepo.calls) != 0 {
-		t.Fatalf("scan_results calls = %v; want none for items without ScanResultID", scanRepo.calls)
-	}
-}
+// scan_results writeback for successful completions is now atomic inside
+// queue.DBQueue.Complete and is covered by queue tests against real SQLite,
+// so worker tests no longer need a fake ScanResults dependency.
 
 func TestConfidence(t *testing.T) {
 	want := models.Track{ArtistName: "  Héllo ", TrackName: "World"}

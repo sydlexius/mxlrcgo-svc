@@ -1369,3 +1369,72 @@ func TestDBQueue_CountCancelByLibrary_ProjectsWithoutWriting(t *testing.T) {
 		t.Fatalf("shared output_paths after dry-run = %+v; want 2 (unchanged)", paths)
 	}
 }
+
+func TestDBQueue_CancelByLibraryTx_RunsInExternalTransaction(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+
+	libA := addLibrary(t, sqlDB, "A", "/music/a")
+	srA := addScanResultIn(t, sqlDB, libA, "/music/a/1.mp3", "/music/a", "track.lrc")
+
+	item, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "Solo"},
+		OutputPaths:  []models.OutputPath{{Outdir: "/music/a", Filename: "track.lrc"}},
+		ScanResultID: srA,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	deleted, updated, err := q.CancelByLibraryTx(ctx, tx, libA)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("CancelByLibraryTx: %v", err)
+	}
+	if deleted != 1 || updated != 0 {
+		_ = tx.Rollback()
+		t.Fatalf("CancelByLibraryTx = (deleted=%d, updated=%d); want (1, 0)", deleted, updated)
+	}
+
+	// Before commit, the row must still be visible on a separate read because
+	// the change is uncommitted. Verify rollback restores it.
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	var preCommit int
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&preCommit); err != nil {
+		t.Fatalf("post-rollback count: %v", err)
+	}
+	if preCommit != 1 {
+		t.Fatalf("work_queue row %d count after rollback = %d; want 1", item.ID, preCommit)
+	}
+
+	// Now commit a second invocation and verify the row is gone.
+	tx2, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx 2: %v", err)
+	}
+	if _, _, err := q.CancelByLibraryTx(ctx, tx2, libA); err != nil {
+		_ = tx2.Rollback()
+		t.Fatalf("CancelByLibraryTx 2: %v", err)
+	}
+	if err := tx2.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	var postCommit int
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&postCommit); err != nil {
+		t.Fatalf("post-commit count: %v", err)
+	}
+	if postCommit != 0 {
+		t.Fatalf("work_queue row %d count after commit = %d; want 0", item.ID, postCommit)
+	}
+}

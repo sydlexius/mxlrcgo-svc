@@ -1434,17 +1434,28 @@ func runScanClear(ctx context.Context, out io.Writer, args ScanClearCmd) int {
 		_, _ = fmt.Fprintf(out, "would delete %d scan_results rows and cancel %d / update %d work_queue rows for library %q (id=%d); pass --yes to confirm\n", count, qDel, qUpd, lib.Name, lib.ID)
 		return 0
 	}
-	// Cancel work_queue first so the junction is still populated when the
-	// keep-set query runs. ClearByLibrary then cascades the junction away
-	// along with the scan_results rows themselves.
-	qDel, qUpd, err := workQueue.CancelByLibrary(ctx, lib.ID)
+	// One transaction wraps both mutations so a failure on the scan_results
+	// delete cannot leave the queue canceled while scan_results survive.
+	// Cancel first: it reads the junction (work_queue_scan_results) which
+	// cascades away when ClearByLibraryTx then deletes the scan_results.
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		slog.Error("failed to begin scan clear tx", "error", err)
+		return 1
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // rollback is a no-op after commit
+	qDel, qUpd, err := workQueue.CancelByLibraryTx(ctx, tx, lib.ID)
 	if err != nil {
 		slog.Error("failed to cancel work_queue rows", "error", err)
 		return 1
 	}
-	deleted, err := scanRepo.ClearByLibrary(ctx, lib.ID)
+	deleted, err := scanRepo.ClearByLibraryTx(ctx, tx, lib.ID)
 	if err != nil {
 		slog.Error("failed to clear scan results", "error", err)
+		return 1
+	}
+	if err := tx.Commit(); err != nil {
+		slog.Error("failed to commit scan clear tx", "error", err)
 		return 1
 	}
 	_, _ = fmt.Fprintf(out, "deleted %d scan_results rows and canceled %d / updated %d work_queue rows for library %q (id=%d)\n", deleted, qDel, qUpd, lib.Name, lib.ID)

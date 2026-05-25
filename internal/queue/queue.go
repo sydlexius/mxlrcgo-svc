@@ -547,6 +547,13 @@ func (q *DBQueue) CancelByLibrary(ctx context.Context, libraryID int64) (deleted
 	return deleted, updated, nil
 }
 
+// CancelByLibraryTx runs the same logic as CancelByLibrary inside a caller-
+// supplied transaction so the queue mutation can be committed atomically with
+// other writes (e.g. scan_results delete). The caller owns Begin and Commit.
+func (q *DBQueue) CancelByLibraryTx(ctx context.Context, tx *sql.Tx, libraryID int64) (deleted int64, updated int64, retErr error) {
+	return cancelByLibrary(ctx, tx, libraryID, false)
+}
+
 // CountCancelByLibrary returns the (deleted, updated) projection that
 // CancelByLibrary would produce, without writing. Intended for dry-run output.
 func (q *DBQueue) CountCancelByLibrary(ctx context.Context, libraryID int64) (deleted int64, updated int64, retErr error) {
@@ -613,14 +620,31 @@ func cancelByLibrary(ctx context.Context, tx *sql.Tx, libraryID int64, dryRun bo
 			}
 		}
 		if len(filtered) == 0 {
-			deleted++
 			if dryRun {
+				deleted++
 				continue
 			}
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM work_queue WHERE id = ?`, c.id,
-			); err != nil {
+			// The status guard here is belt-and-suspenders: candidates were
+			// selected with status IN ('pending', 'failed'), but SQLite WAL
+			// admits a small window between candidate selection and this
+			// per-row write during which the worker could move the row to
+			// 'processing'. A 0 affected-rows result means the row moved on
+			// and we skip counting it without raising an error.
+			res, err := tx.ExecContext(ctx,
+				`DELETE FROM work_queue
+                 WHERE id = ?
+                   AND status IN ('pending', 'failed')`,
+				c.id,
+			)
+			if err != nil {
 				return 0, 0, fmt.Errorf("queue: cancel delete row %d: %w", c.id, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return 0, 0, fmt.Errorf("queue: cancel delete rows affected %d: %w", c.id, err)
+			}
+			if n == 1 {
+				deleted++
 			}
 			continue
 		}
@@ -629,19 +653,30 @@ func cancelByLibrary(ctx context.Context, tx *sql.Tx, libraryID int64, dryRun bo
 			// also present in a non-X scan_result. Nothing to change.
 			continue
 		}
-		updated++
 		if dryRun {
+			updated++
 			continue
 		}
 		newJSON, err := json.Marshal(filtered)
 		if err != nil {
 			return 0, 0, fmt.Errorf("queue: marshal filtered output_paths for row %d: %w", c.id, err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE work_queue SET output_paths = ? WHERE id = ?`,
+		res, err := tx.ExecContext(ctx,
+			`UPDATE work_queue
+             SET output_paths = ?
+             WHERE id = ?
+               AND status IN ('pending', 'failed')`,
 			string(newJSON), c.id,
-		); err != nil {
+		)
+		if err != nil {
 			return 0, 0, fmt.Errorf("queue: cancel update row %d: %w", c.id, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, 0, fmt.Errorf("queue: cancel update rows affected %d: %w", c.id, err)
+		}
+		if n == 1 {
+			updated++
 		}
 	}
 	return deleted, updated, nil

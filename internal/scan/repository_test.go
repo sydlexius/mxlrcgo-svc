@@ -465,6 +465,26 @@ func TestRepo_ClearByLibraryTx_CommitsViaCaller(t *testing.T) {
 	}
 }
 
+func TestRepo_ClearByLibraryTx_ErrorsWhenTableMissing(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openTestDB(t)
+	scanRepo := scan.New(sqlDB)
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Drop scan_results inside the same transaction so the DELETE fails; the
+	// error must be surfaced to the caller rather than swallowed.
+	if _, err := tx.ExecContext(ctx, `DROP TABLE scan_results`); err != nil {
+		t.Fatalf("drop scan_results: %v", err)
+	}
+	if _, err := scanRepo.ClearByLibraryTx(ctx, tx, 1); err == nil {
+		t.Fatalf("ClearByLibraryTx with missing table: want error, got nil")
+	}
+}
+
 func TestRepo_ClearByLibraryTx_RollbackPreservesRows(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := openTestDB(t)

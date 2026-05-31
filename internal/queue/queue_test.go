@@ -1247,6 +1247,120 @@ func TestDBQueue_CancelByLibrary_UpdatesSharedRowAndLeavesOtherLibraryUntouched(
 	}
 }
 
+func TestDBQueue_CancelByLibrary_LeavesSharedRowWhenAllPathsBelongToOtherLibrary(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+
+	libA := addLibrary(t, sqlDB, "A", "/music/a")
+	libB := addLibrary(t, sqlDB, "B", "/music/b")
+
+	// The row is a cancel candidate because it links to library A, but every
+	// output_path it carries also belongs to library B's scan_result. The
+	// keep-set therefore retains all paths and the row needs no change: this
+	// exercises the defensive "filtered == paths" branch in cancelByLibrary.
+	srA := addScanResultIn(t, sqlDB, libA, "/music/a/shared.mp3", "/music/a", "shared.lrc")
+	srB := addScanResultIn(t, sqlDB, libB, "/music/b/shared.mp3", "/music/b", "shared.lrc")
+	row, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Both", TrackName: "Shared"},
+		OutputPaths:  []models.OutputPath{{Outdir: "/music/b", Filename: "shared.lrc"}},
+		ScanResultID: srA,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	linkScanResult(t, sqlDB, row.ID, srB)
+
+	deleted, updated, err := q.CancelByLibrary(ctx, libA)
+	if err != nil {
+		t.Fatalf("CancelByLibrary: %v", err)
+	}
+	if deleted != 0 || updated != 0 {
+		t.Fatalf("CancelByLibrary = (deleted=%d, updated=%d); want (0, 0) when no paths change", deleted, updated)
+	}
+
+	// Row preserved with its single library-B path intact.
+	var rawPaths string
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT output_paths FROM work_queue WHERE id = ?`, row.ID,
+	).Scan(&rawPaths); err != nil {
+		t.Fatalf("read output_paths: %v", err)
+	}
+	var paths []models.OutputPath
+	if err := json.Unmarshal([]byte(rawPaths), &paths); err != nil {
+		t.Fatalf("unmarshal output_paths %q: %v", rawPaths, err)
+	}
+	if len(paths) != 1 || paths[0].Outdir != "/music/b" || paths[0].Filename != "shared.lrc" {
+		t.Fatalf("output_paths = %+v; want one /music/b entry unchanged", paths)
+	}
+}
+
+func TestDBQueue_CancelByLibrary_ErrorsOnCorruptOutputPaths(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+
+	libA := addLibrary(t, sqlDB, "A", "/music/a")
+	srA := addScanResultIn(t, sqlDB, libA, "/music/a/x.mp3", "/music/a", "x.lrc")
+	row, err := q.Enqueue(ctx, models.Inputs{
+		Track:        models.Track{ArtistName: "Artist", TrackName: "X"},
+		OutputPaths:  []models.OutputPath{{Outdir: "/music/a", Filename: "x.lrc"}},
+		ScanResultID: srA,
+	}, 1)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// Corrupt the persisted output_paths so cancelByLibrary's json.Unmarshal of
+	// the candidate row fails and the error is surfaced rather than swallowed.
+	if _, err := sqlDB.ExecContext(ctx,
+		`UPDATE work_queue SET output_paths = ? WHERE id = ?`, "{not-valid-json", row.ID); err != nil {
+		t.Fatalf("corrupt output_paths: %v", err)
+	}
+	if _, _, err := q.CancelByLibrary(ctx, libA); err == nil {
+		t.Fatalf("CancelByLibrary: want error on corrupt output_paths, got nil")
+	}
+}
+
+func TestDBQueue_CancelByLibrary_ErrorsWhenDBClosed(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, _, err := q.CancelByLibrary(ctx, 1); err == nil {
+		t.Fatalf("CancelByLibrary on closed DB: want error, got nil")
+	}
+}
+
+func TestDBQueue_CountCancelByLibrary_ErrorsWhenDBClosed(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, _, err := q.CountCancelByLibrary(ctx, 1); err == nil {
+		t.Fatalf("CountCancelByLibrary on closed DB: want error, got nil")
+	}
+}
+
+func TestDBQueue_CancelByLibrary_ErrorsWhenJunctionMissing(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+	libA := addLibrary(t, sqlDB, "A", "/music/a")
+	// Drop the junction table so the candidate-selection query fails inside
+	// the cancel transaction; the error must propagate to the caller rather
+	// than be swallowed.
+	if _, err := sqlDB.ExecContext(ctx, `DROP TABLE work_queue_scan_results`); err != nil {
+		t.Fatalf("drop junction table: %v", err)
+	}
+	if _, _, err := q.CancelByLibrary(ctx, libA); err == nil {
+		t.Fatalf("CancelByLibrary with missing junction table: want error, got nil")
+	}
+}
+
 func TestDBQueue_CancelByLibrary_LeavesProcessingAndDoneRowsUntouched(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := openQueueTestDB(t)

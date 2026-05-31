@@ -820,6 +820,15 @@ func TestRunScan_LibrarySelectorScansOnlyTheNamedLibrary(t *testing.T) {
 	}}, scan.UpsertOptions{}); err != nil {
 		t.Fatalf("Upsert B: %v", err)
 	}
+	// Make Beta's directory unscannable. With --only Alpha, Beta is never
+	// walked, so this is harmless; but if the selector were broken and Beta
+	// got scanned, scanner.ScanLibrary would hit the missing directory and
+	// error (scheduler propagates it), forcing a non-zero exit and failing
+	// the test. Without this, both seed rows survive and the test passes even
+	// if nothing was scanned at all.
+	if err := os.RemoveAll(dirB); err != nil {
+		t.Fatalf("remove Beta dir: %v", err)
+	}
 	_ = sqlDB.Close()
 
 	var out bytes.Buffer
@@ -849,6 +858,35 @@ func TestRunScan_LibrarySelectorScansOnlyTheNamedLibrary(t *testing.T) {
 	}
 	if countA != 1 || countB != 1 {
 		t.Fatalf("CountByLibrary A=%d B=%d; want 1 each", countA, countB)
+	}
+}
+
+func TestRunScan_LibrarySelectorReportsScanFailure(t *testing.T) {
+	cfg, dbPath := commandsTestEnv(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := library.New(sqlDB).Add(ctx, dir, "Alpha"); err != nil {
+		t.Fatalf("Add Alpha: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	// Remove the selected library's directory so scanner.ScanLibrary errors
+	// when the scheduler walks it. The selector path must surface that as a
+	// non-zero exit rather than swallowing it.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove dir: %v", err)
+	}
+
+	var out bytes.Buffer
+	code := Run(ctx, []string{"scan", "--only", "Alpha", "--config", cfg}, &out, Deps{})
+	if code != 1 {
+		t.Fatalf("scan --only Alpha with missing dir: exit = %d; want 1; out=%s", code, out.String())
 	}
 }
 

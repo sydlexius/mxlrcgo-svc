@@ -99,19 +99,22 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleReadyz reports readiness by checking database reachability. When no
-// readiness checker is configured the endpoint reports ready, since there is
-// nothing to verify. Error detail is intentionally omitted to avoid leaking
-// filesystem paths or connection strings.
+// readiness checker is configured the endpoint still reports ready, but omits
+// the database check from the response rather than claiming a check that never
+// ran. Error detail is intentionally omitted to avoid leaking filesystem paths
+// or connection strings.
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	if h.ready != nil {
-		if err := h.ready.PingContext(r.Context()); err != nil {
-			slog.Warn("readiness check failed", "error", err)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"status": "unavailable",
-				"checks": map[string]string{"database": "error"},
-			})
-			return
-		}
+	if h.ready == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
+		return
+	}
+	if err := h.ready.PingContext(r.Context()); err != nil {
+		slog.Warn("readiness check failed", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "unavailable",
+			"checks": map[string]string{"database": "error"},
+		})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ready",

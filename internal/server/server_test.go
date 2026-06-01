@@ -267,6 +267,22 @@ func TestReadyzReportsDatabase(t *testing.T) {
 		}
 	})
 
+	t.Run("no checker omits database claim", func(t *testing.T) {
+		h := NewHandler(&fakeAuth{}, &fakeQueue{}, "lyrics") // no WithReadiness
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("readyz status = %d; want 200", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"status":"ready"`) {
+			t.Fatalf("readyz body = %q; want status ready", rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "database") {
+			t.Fatalf("readyz body = %q; must not claim a database check when none is configured", rec.Body.String())
+		}
+	})
+
 	t.Run("database unavailable", func(t *testing.T) {
 		h := NewHandler(&fakeAuth{}, &fakeQueue{}, "lyrics", WithReadiness(&fakeReadiness{err: errors.New("db file /secret/path down")}))
 		rec := httptest.NewRecorder()

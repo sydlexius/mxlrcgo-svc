@@ -11,7 +11,7 @@ require (
 	github.com/rjeczalik/notify v0.9.3
 	github.com/valyala/fastjson v1.6.10
 	golang.org/x/text v0.36.0
-	modernc.org/sqlite v1.48.2
+	modernc.org/sqlite v1.51.0
 )
 
 require (
@@ -26,7 +26,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	modernc.org/libc v1.70.0 // indirect
+	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )

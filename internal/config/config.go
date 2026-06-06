@@ -23,8 +23,13 @@ type Config struct {
 
 // APIConfig holds API-related configuration.
 type APIConfig struct {
-	Token    string `toml:"token"`
-	Cooldown int    `toml:"cooldown"`
+	Token string `toml:"token"`
+	// Cooldown is the minimum gap (in seconds) between Musixmatch API requests.
+	// It serves two roles: (1) the worker's inter-item pause in serve mode, and
+	// (2) the HTTP client's hard per-request floor -- the client will not issue a
+	// new request until at least Cooldown seconds have elapsed since the last
+	// one, regardless of how the worker schedules work. Default 15.
+	Cooldown int `toml:"cooldown"`
 	// CircuitOpenDuration is the duration in seconds the worker pauses
 	// dequeuing after the upstream API returns a rate-limit or unauthorized
 	// signal. Default 1800 (30 min). Values below circuitOpenMinSeconds are

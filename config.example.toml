@@ -15,7 +15,10 @@
 # Overrides (highest to lowest): --token flag, MUSIXMATCH_TOKEN env, MXLRC_API_TOKEN env.
 # token = "your-token-here"
 
-# Cooldown between API requests in seconds.
+# Minimum gap between Musixmatch API requests in seconds. Acts as both the
+# worker's inter-item pause in serve mode and a hard per-request floor inside
+# the HTTP client -- no request is issued until at least this many seconds
+# have elapsed since the last one, even if the worker's paced pause is skipped.
 cooldown = 15
 
 # Worker circuit-breaker window in seconds. When the upstream API returns a

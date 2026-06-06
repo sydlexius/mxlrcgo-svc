@@ -601,10 +601,17 @@ func normalizeWorkerInterval(interval time.Duration) time.Duration {
 }
 
 func selectedProvider(cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) (providers.LyricsProvider, error) {
+	fetcher := newFetcher(token)
+	// Apply the per-request pacer floor to the concrete Musixmatch client.
+	// Test-injected fake fetchers do not satisfy *musixmatch.Client so this
+	// is a no-op for them, preserving the injection seam unchanged.
+	if mc, ok := fetcher.(*musixmatch.Client); ok {
+		mc.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
+	}
 	return providers.Select(
 		cfg.Providers.Primary,
 		cfg.Providers.Disabled,
-		providers.New(providers.Musixmatch, newFetcher(token)),
+		providers.New(providers.Musixmatch, fetcher),
 	)
 }
 

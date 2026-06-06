@@ -1687,3 +1687,47 @@ func TestMissCadenceConfigKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectedProviderWiresMinIntervalOnRealClient(t *testing.T) {
+	cfg := config.Config{
+		API:       config.APIConfig{Cooldown: 30},
+		Providers: config.ProvidersConfig{Primary: "musixmatch"},
+	}
+	// Use the real NewClient factory so we get a *musixmatch.Client back.
+	// Capture the client before selectedProvider wraps it so we can inspect it.
+	var captured *musixmatch.Client
+	_, err := selectedProvider(cfg, "token", func(token string) musixmatch.Fetcher {
+		captured = musixmatch.NewClient(token)
+		return captured
+	})
+	if err != nil {
+		t.Fatalf("selectedProvider: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("factory was never called")
+	}
+	// selectedProvider must have called WithMinInterval(30s) on the captured client.
+	if captured.MinInterval() != 30*time.Second {
+		t.Fatalf("MinInterval = %v; want 30s (from cfg.API.Cooldown=30)", captured.MinInterval())
+	}
+}
+
+func TestSelectedProviderFakeInjectionUnaffected(t *testing.T) {
+	cfg := config.Config{
+		API:       config.APIConfig{Cooldown: 30},
+		Providers: config.ProvidersConfig{Primary: "musixmatch"},
+	}
+	// Fake fetcher: should be used unchanged; the type assertion inside
+	// selectedProvider will not match, so the fake is not paced.
+	var gotFetcher musixmatch.Fetcher
+	_, err := selectedProvider(cfg, "token", func(token string) musixmatch.Fetcher {
+		gotFetcher = fakeFetcher{}
+		return gotFetcher
+	})
+	if err != nil {
+		t.Fatalf("selectedProvider: %v", err)
+	}
+	if _, ok := gotFetcher.(fakeFetcher); !ok {
+		t.Fatal("fake fetcher was replaced; injection seam is broken")
+	}
+}

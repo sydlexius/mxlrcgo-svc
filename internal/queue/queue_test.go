@@ -2059,8 +2059,8 @@ func TestDBQueue_RetireMiss(t *testing.T) {
 	if retired.Status != StatusDone {
 		t.Fatalf("status = %q; want %q", retired.Status, StatusDone)
 	}
-	if retired.LastError != "miss limit reached" {
-		t.Fatalf("last_error = %q; want %q", retired.LastError, "miss limit reached")
+	if retired.LastError != missLimitReachedError {
+		t.Fatalf("last_error = %q; want %q", retired.LastError, missLimitReachedError)
 	}
 	if retired.CompletedAt == nil {
 		t.Fatal("completed_at = nil; want non-nil")

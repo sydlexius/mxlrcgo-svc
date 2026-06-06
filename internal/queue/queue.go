@@ -466,6 +466,11 @@ func (q *DBQueue) Defer(ctx context.Context, id int64, retryAfter time.Duration,
 	return item, nil
 }
 
+// missLimitReachedError is the last_error value RetireMiss writes when a benign
+// miss is retired after exhausting max_miss_attempts. Defined once so the SQL
+// bind, the tests, and any log/inspection of the sentinel cannot drift.
+const missLimitReachedError = "miss limit reached"
+
 // RetireMiss permanently closes a processing row that has exceeded the
 // configured miss-attempt cap. It runs a transaction that mirrors Complete's
 // scan_results writeback: work_queue is set to status='done' with sentinel
@@ -494,12 +499,13 @@ func (q *DBQueue) RetireMiss(ctx context.Context, id int64) (WorkItem, error) {
 		`UPDATE work_queue
          SET status = 'done',
              completed_at = ?,
-             last_error = 'miss limit reached'
+             last_error = ?
          WHERE id = ?
            AND status = 'processing'
          RETURNING id, artist, title, outdir, filename, source_path, status, priority, attempts,
                    miss_count, providers_version, next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id`,
 		now,
+		missLimitReachedError,
 		id,
 	)
 	item, err := scanWorkItem(row)

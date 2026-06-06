@@ -602,6 +602,15 @@ func (q *DBQueue) CountRecheckDeferred(ctx context.Context, libraryID *int64) (i
 //   - scan_results: rows linked via work_queue_scan_results whose status='done'
 //     are reset to 'pending' so the scan layer does not strand the track.
 //
+// When libraryID is non-nil the scan_results writeback is additionally scoped to
+// that library. A deduped work_queue row can link to scan_results in several
+// libraries (the row is collapsed on artist_key/title_key), so reviving a row
+// shared between libraries X and Y under `--library X` must not flip Y's
+// scan_results back to 'pending'. Reviving the shared work_queue row itself is
+// correct (re-fetching the deduped track once serves every linked library), and
+// Y's scan_result stays 'done' until the row reprocesses, at which point the
+// completion writeback re-confirms it.
+//
 // The scan_results guard is WHERE status='done' (not a literal mirror of
 // RetireMiss, which writes 'done' WHERE status != 'done'). This is intentional:
 // RetireMiss flips every linked scan_result to 'done', so at revival time they
@@ -681,14 +690,23 @@ func (q *DBQueue) RecheckRetired(ctx context.Context, libraryID *int64) (int64, 
 	// Reset the linked scan_results rows from 'done' back to 'pending'.
 	// Target only the rows linked to the work_queue IDs we just revived, via
 	// the work_queue_scan_results junction. This mirrors RetireMiss's writeback.
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE scan_results
+	// When scoped to a library, restrict the writeback to that library's
+	// scan_results so a shared (deduped) row does not strand-revive another
+	// library's terminal scan state. The libClause-bound subquery is reused via
+	// a fixed AND library_id = ? predicate (never user-built SQL).
+	writebackQuery := `UPDATE scan_results
              SET status = 'pending'
              WHERE id IN (SELECT scan_result_id FROM work_queue_scan_results WHERE work_queue_id = ?)
-               AND status = 'done'`,
-			id,
-		); err != nil {
+               AND status = 'done'`
+	if libraryID != nil {
+		writebackQuery += ` AND library_id = ?`
+	}
+	for _, id := range ids {
+		writebackArgs := []any{id}
+		if libraryID != nil {
+			writebackArgs = append(writebackArgs, *libraryID)
+		}
+		if _, err := tx.ExecContext(ctx, writebackQuery, writebackArgs...); err != nil {
 			return 0, fmt.Errorf("queue: recheck retired scan_results writeback for row %d: %w", id, err)
 		}
 	}

@@ -2558,6 +2558,86 @@ func TestDBQueue_RecheckLibraryScoping(t *testing.T) {
 	}
 }
 
+// TestDBQueue_RecheckRetired_SharedRow verifies that a deduped work_queue row
+// linked to scan_results in two libraries is revived under --library X without
+// resetting the OTHER library's scan_result. Regression test for the
+// cross-library writeback leak: reviving the shared row is correct (one fetch
+// serves every linked library), but the scan_results writeback must stay scoped
+// to the target library so the non-target library's terminal state is preserved.
+func TestDBQueue_RecheckRetired_SharedRow(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openQueueTestDB(t)
+	q := NewDBQueue(sqlDB)
+	q.now = func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }
+
+	libA, srA := insertLibraryAndScanResult(t, sqlDB, "/libA", "/libA/shared.mp3")
+	_, srB := insertLibraryAndScanResult(t, sqlDB, "/libB", "/libB/shared.mp3")
+
+	// Enqueue the same track (same artist/title) twice with different scan
+	// results so both collapse onto one deduped work_queue row, linked to both
+	// libraries via the work_queue_scan_results junction.
+	track := models.Track{ArtistName: "Shared", TrackName: "Track"}
+	first, err := q.Enqueue(ctx, models.Inputs{Track: track, Outdir: "out", Filename: "song.lrc", ScanResultID: srA}, PriorityScan)
+	if err != nil {
+		t.Fatalf("Enqueue A: %v", err)
+	}
+	second, err := q.Enqueue(ctx, models.Inputs{Track: track, Outdir: "out", Filename: "song.lrc", ScanResultID: srB}, PriorityScan)
+	if err != nil {
+		t.Fatalf("Enqueue B: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("expected dedup onto one row; got %d and %d", first.ID, second.ID)
+	}
+	wqID := first.ID
+
+	// Drive the shared row to retired.
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+	if item.ID != wqID {
+		t.Fatalf("dequeued %d; want shared row %d", item.ID, wqID)
+	}
+	if _, err := q.RetireMiss(ctx, wqID); err != nil {
+		t.Fatalf("RetireMiss: %v", err)
+	}
+
+	// Recheck only library A.
+	n, err := q.RecheckRetired(ctx, &libA)
+	if err != nil {
+		t.Fatalf("RecheckRetired scoped: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("RecheckRetired scoped = %d; want 1 (shared row belongs to libA)", n)
+	}
+
+	// The shared work_queue row must be revived (deferred).
+	var wqStatus string
+	if err := sqlDB.QueryRowContext(ctx, `SELECT status FROM work_queue WHERE id = ?`, wqID).Scan(&wqStatus); err != nil {
+		t.Fatalf("read shared row: %v", err)
+	}
+	if wqStatus != StatusDeferred {
+		t.Fatalf("shared row status = %q; want deferred", wqStatus)
+	}
+
+	// Library A's scan_result must be reset to pending.
+	var aStatus, bStatus string
+	if err := sqlDB.QueryRowContext(ctx, `SELECT status FROM scan_results WHERE id = ?`, srA).Scan(&aStatus); err != nil {
+		t.Fatalf("read srA: %v", err)
+	}
+	if aStatus != "pending" {
+		t.Fatalf("srA status = %q; want pending (target library)", aStatus)
+	}
+
+	// Library B's scan_result must remain done -- no cross-library leak.
+	if err := sqlDB.QueryRowContext(ctx, `SELECT status FROM scan_results WHERE id = ?`, srB).Scan(&bStatus); err != nil {
+		t.Fatalf("read srB: %v", err)
+	}
+	if bStatus != "done" {
+		t.Fatalf("srB status = %q; want done (non-target library must be untouched)", bStatus)
+	}
+}
+
 // TestDBQueue_RecheckRetired_NoRetiredRows verifies RecheckRetired is a clean
 // no-op (0, nil) when no rows match the retired sentinel.
 func TestDBQueue_RecheckRetired_NoRetiredRows(t *testing.T) {

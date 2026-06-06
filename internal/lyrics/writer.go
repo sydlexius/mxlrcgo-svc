@@ -55,6 +55,14 @@ func NewLRCWriter(roots ...string) *LRCWriter {
 	return &LRCWriter{roots: cleaned}
 }
 
+// isUnsafeBaseName reports whether name would escape its directory when joined
+// into an output path: an absolute path, or any string containing a path
+// separator. Shared by the raw caller-provided-filename guard and the
+// defense-in-depth post-compute guard on the derived output name.
+func isUnsafeBaseName(name string) bool {
+	return filepath.IsAbs(name) || strings.ContainsAny(name, `/\`)
+}
+
 // WriteLRC writes the song lyrics to an LRC or TXT file in the given output directory.
 // Only synced lyrics are written as .lrc; unsynced lyrics and instrumentals are
 // written as .txt (the .lrc extension is reserved for timed/synced content).
@@ -96,7 +104,7 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		// re-resolution that follows. Validate the raw input here, before the
 		// extension swap turns "."/".." into harmless-looking ".lrc"/"..lrc".
 		if filename == "." || filename == ".." || filename != filepath.Base(filename) ||
-			filepath.IsAbs(filename) || strings.ContainsAny(filename, `/\`) {
+			isUnsafeBaseName(filename) {
 			return fmt.Errorf("refusing to write: output filename %q is not a base name", filename)
 		}
 		// In dir mode the scanner sets an explicit .lrc filename. Swap the
@@ -104,6 +112,15 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		fn = strings.TrimSuffix(filename, filepath.Ext(filename)) + ext
 	} else {
 		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ext
+	}
+
+	// Defense in depth: re-check the derived name after the extension swap or
+	// Slugify. The raw-input guard above covers the provided-filename branch and
+	// Slugify strips separators (see TestSlugifyNeverReturnsSeparatorsOrAbs), so
+	// this is expected to be unreachable -- but it keeps the base-name invariant
+	// local to the write and fails closed if either branch ever regresses.
+	if isUnsafeBaseName(fn) {
+		return fmt.Errorf("refusing to write: derived output name %q is not a base name", fn)
 	}
 
 	// When the output directory falls under a confinement root, re-resolve and

@@ -80,6 +80,13 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 	totalBatches := (len(results) + UpsertBatchSize - 1) / UpsertBatchSize
 	failed := 0
 	for start := 0; start < len(results); start += UpsertBatchSize {
+		// Abort promptly if the caller canceled: a dead context turns every
+		// remaining batch into a guaranteed begin-tx failure, so surface the
+		// real cause instead of looping to a generic aggregate error.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("scan: upsert canceled: %w", err)
+		}
+
 		end := start + UpsertBatchSize
 		if end > len(results) {
 			end = len(results)
@@ -102,6 +109,11 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 			return nil
 		})
 		if err != nil {
+			// A cancellation surfacing through the batch is terminal, not a
+			// skippable per-batch failure: stop and return the context error.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("scan: upsert canceled: %w", ctxErr)
+			}
 			failed++
 			slog.Error("scan: upsert batch failed; skipping",
 				"library_id", libraryID, "batch", batchNum, "of", totalBatches,
@@ -114,19 +126,31 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 	return nil
 }
 
-// upsertBatch writes one batch of scan results within tx.
-func upsertBatch(ctx context.Context, tx *sql.Tx, libraryID int64, results []models.ScanResult, opts UpsertOptions) error {
+// upsertBatch writes one batch of scan results within tx. The INSERT is prepared
+// once and reused for every row in the batch, so SQLite parses and plans the
+// statement a single time instead of per row, shortening how long the write lock
+// is held.
+func upsertBatch(ctx context.Context, tx *sql.Tx, libraryID int64, results []models.ScanResult, opts UpsertOptions) (retErr error) {
 	stmt := baseUpsert
 	if opts.ForceStatus {
 		stmt += `,
                  status = excluded.status`
 	}
+	prepared, err := tx.PrepareContext(ctx, stmt)
+	if err != nil {
+		return fmt.Errorf("scan: prepare upsert: %w", err)
+	}
+	defer func() {
+		if err := prepared.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("scan: close upsert stmt: %w", err)
+		}
+	}()
 	for _, res := range results {
 		insertStatus := res.Status
 		if insertStatus == "" {
 			insertStatus = StatusPending
 		}
-		if _, err := tx.ExecContext(ctx, stmt,
+		if _, err := prepared.ExecContext(ctx,
 			libraryID,
 			res.FilePath,
 			res.Track.ArtistName,

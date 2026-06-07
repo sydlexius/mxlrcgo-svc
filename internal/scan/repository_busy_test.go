@@ -3,6 +3,7 @@ package scan_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -102,6 +103,34 @@ func TestRepo_UpsertConcurrentWriterRetries(t *testing.T) {
 
 	if got := countScanResults(t, connA, lib.ID); got != 50 {
 		t.Fatalf("persisted %d rows; want 50", got)
+	}
+}
+
+// TestRepo_UpsertContextCanceledAbortsEarly verifies that a canceled context
+// aborts the batch loop promptly with a context error, instead of grinding
+// through every batch and returning a generic aggregate failure.
+func TestRepo_UpsertContextCanceledAbortsEarly(t *testing.T) {
+	sqlDB := openTestDB(t)
+	lib, err := library.New(sqlDB).Add(context.Background(), "/music", "Music")
+	if err != nil {
+		t.Fatalf("add library: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // canceled before Upsert runs
+
+	// More than one batch worth of rows; a canceled ctx must abort rather than
+	// attempt (and fail) every batch.
+	results := makeResults(scan.UpsertBatchSize+1, "cancel")
+	err = scan.New(sqlDB).Upsert(ctx, lib.ID, results, scan.UpsertOptions{})
+	if err == nil {
+		t.Fatal("Upsert = nil; want a context.Canceled error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Upsert err = %v; want errors.Is(err, context.Canceled)", err)
+	}
+	if got := countScanResults(t, sqlDB, lib.ID); got != 0 {
+		t.Fatalf("persisted %d rows; want 0 on canceled ctx", got)
 	}
 }
 

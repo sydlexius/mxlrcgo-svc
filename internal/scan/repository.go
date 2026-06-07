@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 
+	dbpkg "github.com/sydlexius/mxlrcgo-svc/internal/db"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 )
@@ -40,16 +42,19 @@ type UpsertOptions struct {
 	ForceStatus bool
 }
 
-// Upsert stores scan results for a library, keyed by library_id and file_path.
-// On conflict, status is preserved by default; pass ForceStatus to overwrite.
-func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.ScanResult, opts UpsertOptions) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("scan: begin upsert tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+// UpsertBatchSize bounds how many scan results are written per transaction.
+// Small batches keep SQLite's write lock held only briefly, so a concurrent
+// writer (the serve worker, or another scan process) is not starved past
+// busy_timeout. This replaces the previous whole-library single transaction,
+// which held the write lock for seconds and aborted the entire scan on a single
+// SQLITE_BUSY.
+const UpsertBatchSize = 500
 
-	const baseUpsert = `INSERT INTO scan_results (library_id, file_path, artist, title, artist_key, title_key, outdir, filename, status)
+// upsertMaxAttempts bounds the per-batch SQLITE_BUSY retries. busy_timeout
+// already waits per attempt, so a handful of retries is ample.
+const upsertMaxAttempts = 5
+
+const baseUpsert = `INSERT INTO scan_results (library_id, file_path, artist, title, artist_key, title_key, outdir, filename, status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(library_id, file_path) DO UPDATE SET
                  artist = excluded.artist,
@@ -58,18 +63,94 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
                  title_key = excluded.title_key,
                  outdir = excluded.outdir,
                  filename = excluded.filename`
+
+// Upsert stores scan results for a library, keyed by library_id and file_path.
+// On conflict, status is preserved by default; pass ForceStatus to overwrite.
+//
+// Results are written in batches of UpsertBatchSize, each in its own
+// transaction retried on SQLITE_BUSY, so a concurrent writer cannot abort the
+// whole scan. A batch that still fails after retries is logged and skipped while
+// the remaining batches continue; this is safe because scan_results is an
+// idempotent cache (a later scan re-upserts). If any batch failed, Upsert
+// returns an aggregate error after processing them all.
+func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.ScanResult, opts UpsertOptions) error {
+	if len(results) == 0 {
+		return nil
+	}
+	totalBatches := (len(results) + UpsertBatchSize - 1) / UpsertBatchSize
+	failed := 0
+	for start := 0; start < len(results); start += UpsertBatchSize {
+		// Abort promptly if the caller canceled: a dead context turns every
+		// remaining batch into a guaranteed begin-tx failure, so surface the
+		// real cause instead of looping to a generic aggregate error.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("scan: upsert canceled: %w", err)
+		}
+
+		end := start + UpsertBatchSize
+		if end > len(results) {
+			end = len(results)
+		}
+		batch := results[start:end]
+		batchNum := start/UpsertBatchSize + 1
+
+		err := dbpkg.RetryOnBusy(ctx, upsertMaxAttempts, func() error {
+			tx, err := r.db.BeginTx(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("scan: begin upsert tx: %w", err)
+			}
+			defer func() { _ = tx.Rollback() }()
+			if err := upsertBatch(ctx, tx, libraryID, batch, opts); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("scan: commit upsert tx: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			// A cancellation surfacing through the batch is terminal, not a
+			// skippable per-batch failure: stop and return the context error.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("scan: upsert canceled: %w", ctxErr)
+			}
+			failed++
+			slog.Error("scan: upsert batch failed; skipping",
+				"library_id", libraryID, "batch", batchNum, "of", totalBatches,
+				"rows", len(batch), "error", err)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("scan: %d of %d upsert batches failed", failed, totalBatches)
+	}
+	return nil
+}
+
+// upsertBatch writes one batch of scan results within tx. The INSERT is prepared
+// once and reused for every row in the batch, so SQLite parses and plans the
+// statement a single time instead of per row, shortening how long the write lock
+// is held.
+func upsertBatch(ctx context.Context, tx *sql.Tx, libraryID int64, results []models.ScanResult, opts UpsertOptions) (retErr error) {
 	stmt := baseUpsert
 	if opts.ForceStatus {
 		stmt += `,
                  status = excluded.status`
 	}
-
+	prepared, err := tx.PrepareContext(ctx, stmt)
+	if err != nil {
+		return fmt.Errorf("scan: prepare upsert: %w", err)
+	}
+	defer func() {
+		if err := prepared.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("scan: close upsert stmt: %w", err)
+		}
+	}()
 	for _, res := range results {
 		insertStatus := res.Status
 		if insertStatus == "" {
 			insertStatus = StatusPending
 		}
-		_, err := tx.ExecContext(ctx, stmt,
+		if _, err := prepared.ExecContext(ctx,
 			libraryID,
 			res.FilePath,
 			res.Track.ArtistName,
@@ -79,13 +160,9 @@ func (r *Repo) Upsert(ctx context.Context, libraryID int64, results []models.Sca
 			res.Outdir,
 			res.Filename,
 			insertStatus,
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("scan: upsert %s: %w", res.FilePath, err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("scan: commit upsert tx: %w", err)
 	}
 	return nil
 }

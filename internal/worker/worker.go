@@ -377,6 +377,17 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		// (so it is neither cached nor written, never retried, and does not trip the
 		// circuit) rather than calling w.fail (retriable) or deferring it.
 		if reject, reason := w.guardReject(item, song); reject {
+			// The provider round-trip still SUCCEEDED (we fetched real lyrics and
+			// only rejected them on script policy), so recover throttle/circuit
+			// state exactly as the store-success path below does: the token is
+			// proven good and an earlier transient trip must not pin the worker in
+			// backoff after a healthy fetch.
+			w.everProviderSuccess = true
+			w.consecutiveCircuitTrips = 0
+			if w.circuitProbing {
+				slog.Info("worker circuit closed; provider recovered")
+				w.circuitProbing = false
+			}
 			slog.Warn("worker guard rejected lyrics", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "reason", reason)
 			if err := w.queue.Complete(context.WithoutCancel(ctx), item.ID); err != nil {
 				return w.fail(ctx, item, fmt.Errorf("worker: complete guard-rejected item %d: %w", item.ID, err))

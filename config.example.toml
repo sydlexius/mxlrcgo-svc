@@ -3,7 +3,7 @@
 # Environment variable overrides (in precedence order): MUSIXMATCH_TOKEN,
 # MXLRC_API_TOKEN, MXLRC_API_COOLDOWN (or MXLRC_COOLDOWN),
 # MXLRC_API_CIRCUIT_OPEN_DURATION, MXLRC_API_CIRCUIT_BACKOFF_BASE, MXLRC_OUTPUT_DIR,
-# MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY,
+# MXLRC_BILINGUAL_OUTPUT, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY,
 # MXLRC_PROVIDER_PRIMARY, MXLRC_PROVIDERS_DISABLED, MXLRC_QUEUE_RANDOMIZE,
 # MXLRC_VERIFICATION_ENABLED, MXLRC_VERIFICATION_WHISPER_URL,
 # MXLRC_VERIFICATION_FFMPEG_PATH,
@@ -66,6 +66,14 @@ dir = "lyrics"
 # Synced (SYLT) tags are intentionally not handled.
 # embedded_lyrics = "off"
 
+# Bilingual interleaved output (env: MXLRC_BILINGUAL_OUTPUT). Default false.
+# When true AND a provider returns a non-empty translation track, the original
+# and translation lines are interleaved under shared timestamps (each original
+# line is followed by its translation at the same [MM:SS.cc] marker) in a single
+# .lrc, per docs/multilingual-output-policy.md. When false (or when no
+# translation track is present), only the original track is written.
+# bilingual_output = false
+
 [db]
 # Path to SQLite database file.
 # Default: ~/.local/share/mxlrcgo-svc/mxlrcgo.db
@@ -99,7 +107,10 @@ addr = "127.0.0.1:3876"
 # work_interval_seconds = 0
 
 [providers]
-# Active lyrics provider. Musixmatch is currently the only supported provider.
+# Active lyrics provider: "musixmatch" (default) or "petitlyrics".
+# petitlyrics has no public API; the adapter scrapes reverse-engineered
+# endpoints (Japanese catalog, JASRAC/NexTone-licensed text). Selecting it opts
+# into that access method - see docs and issue #149.
 primary = "musixmatch"
 
 # Provider names to disable explicitly.

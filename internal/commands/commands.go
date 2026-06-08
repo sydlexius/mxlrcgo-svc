@@ -30,6 +30,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/petitlyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/providers"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
@@ -467,10 +468,6 @@ func runFetch(ctx context.Context, out io.Writer, args FetchCmd, newFetcher func
 	if token == "" {
 		token = cfg.API.Token
 	}
-	if token == "" {
-		slog.Error("no API token provided: use --token flag, MUSIXMATCH_TOKEN env var, MXLRC_API_TOKEN env var, or config file")
-		return 1
-	}
 	cooldown := cfg.API.Cooldown
 	if args.Cooldown != nil {
 		cooldown = *args.Cooldown
@@ -509,7 +506,9 @@ func runFetch(ctx context.Context, out io.Writer, args FetchCmd, newFetcher func
 		}
 	}
 
-	application := newApp(fetcher, newWriter(), inputs, cooldown, mode)
+	writer := newWriter()
+	configureWriterBilingual(writer, cfg)
+	application := newApp(fetcher, writer, inputs, cooldown, mode)
 	if err := application.Run(ctx); err != nil {
 		slog.Error("application error", "error", err)
 		return 1
@@ -590,10 +589,6 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	if token == "" {
 		token = cfg.API.Token
 	}
-	if token == "" {
-		slog.Error("no API token provided: serve needs a token for the worker")
-		return 1
-	}
 	outdir := cfg.Output.Dir
 	if args.Outdir != nil {
 		outdir = *args.Outdir
@@ -629,7 +624,9 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	// failure is not fatal: confinement is simply skipped (the writer falls back
 	// to its unconfined path) and the handler degrades as documented below.
 	allowedRoots := webhookAllowedRoots(ctx, sqlDB)
-	w := worker.New(workQ, cache.New(sqlDB), fetcher, newWriter(allowedRoots...))
+	writer := newWriter(allowedRoots...)
+	configureWriterBilingual(writer, cfg)
+	w := worker.New(workQ, cache.New(sqlDB), fetcher, writer)
 	w.SetCircuitOpenDuration(time.Duration(cfg.API.CircuitOpenDuration) * time.Second)
 	w.SetCircuitBackoff(time.Duration(cfg.API.CircuitBackoffBase)*time.Second, time.Duration(cfg.API.CircuitOpenDuration)*time.Second)
 	w.SetMissBackoff(time.Duration(cfg.API.MissBackoffBaseHours)*time.Hour, time.Duration(cfg.API.MissBackoffCapHours)*time.Hour)
@@ -752,11 +749,27 @@ func selectedProvider(cfg config.Config, token string, newFetcher func(string) m
 	if mc, ok := fetcher.(*musixmatch.Client); ok {
 		mc.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
 	}
-	return providers.Select(
+	// Petit Lyrics needs no token. It gets the same per-request pacing floor as
+	// Musixmatch for now; independent per-provider rate-limit tuning is future
+	// work (the upstreams' limits are independent). The selected provider's
+	// results are screened by the worker's language guard like any other.
+	petit := petitlyrics.NewClient()
+	petit.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
+	p, err := providers.Select(
 		cfg.Providers.Primary,
 		cfg.Providers.Disabled,
 		providers.New(providers.Musixmatch, fetcher),
+		providers.New(providers.PetitLyrics, petit),
 	)
+	if err != nil {
+		return nil, err
+	}
+	// The API token requirement is provider-specific: only Musixmatch needs one.
+	// petitlyrics is tokenless, so a missing token must not block it.
+	if p.Name() == providers.Musixmatch && strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("no API token provided for the musixmatch provider: use --token, MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, or config file")
+	}
+	return p, nil
 }
 
 func newVerifier(cfg config.Config) (verification.Verifier, error) {
@@ -795,6 +808,16 @@ func configureWorkerGuard(w *worker.Worker, g worker.ScriptGuard) {
 		return
 	}
 	w.EnableGuard(g)
+}
+
+// configureWriterBilingual enables interleaved bilingual output on an LRC writer
+// when configured. Fake writers in tests do not satisfy *lyrics.LRCWriter, so
+// this is a no-op for them (mirrors how the Musixmatch pacer is applied via a
+// type assertion in selectedProvider).
+func configureWriterBilingual(w lyrics.Writer, cfg config.Config) {
+	if lw, ok := w.(*lyrics.LRCWriter); ok {
+		lw.SetBilingual(cfg.Output.BilingualOutput)
+	}
 }
 
 func runScheduler(ctx context.Context, sqlDB *sql.DB, cfg config.Config, args ServeCmd) {
@@ -1249,6 +1272,7 @@ func configKeys() []string {
 		"api.max_miss_attempts",
 		"output.dir",
 		"output.embedded_lyrics",
+		"output.bilingual_output",
 		"db.path",
 		"server.addr",
 		"server.webhook_api_keys",
@@ -1285,6 +1309,8 @@ func configValue(cfg config.Config, key string) (string, bool) {
 		return cfg.Output.Dir, true
 	case "output.embedded_lyrics":
 		return cfg.Output.EmbeddedLyrics, true
+	case "output.bilingual_output":
+		return strconv.FormatBool(cfg.Output.BilingualOutput), true
 	case "db.path":
 		return cfg.DB.Path, true
 	case "server.addr":
@@ -1363,6 +1389,12 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		default:
 			return fmt.Errorf("invalid value %q for output.embedded_lyrics (want off, respect, or extract)", value)
 		}
+	case "output.bilingual_output":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("output.bilingual_output must be a boolean")
+		}
+		cfg.Output.BilingualOutput = v
 	case "db.path":
 		cfg.DB.Path = value
 	case "server.addr":

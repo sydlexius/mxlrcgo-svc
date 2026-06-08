@@ -291,6 +291,41 @@ type ajaxEntry struct {
 	Lyrics     string `json:"lyrics"`
 }
 
+// lyrics_type sentinels for the secondary (non-original) tracks.
+//
+// ASSUMPTION: lyrics_type values are UNVERIFIED. They are derived from synthetic
+// fixtures, not from observed petitlyrics.com responses. The mapping chosen here
+// is: the FIRST entry is always the original track (whatever its lyrics_type --
+// in observed fixtures 1 = unsynced text, 2 = line-synced, 3 = word-synced).
+// Among the remaining entries, lyrics_type == lyricsTypeTranslation (4) is the
+// translation track and lyrics_type == lyricsTypeRomanization (5) is the
+// romanization track. Any other secondary lyrics_type is ignored. Revisit this
+// mapping once real multi-track responses are captured.
+const (
+	lyricsTypeTranslation  = 4
+	lyricsTypeRomanization = 5
+)
+
+// trackFromEntry decodes one ajaxEntry's base64 payload into synced lines via
+// parseLRC. It returns ok=false when the payload is empty, undecodable, or
+// carries no parseable timestamps (a secondary track is only adopted when it is
+// itself synced, matching the interleaved-output contract).
+func trackFromEntry(e ajaxEntry) (models.Synced, bool) {
+	if e.Lyrics == "" {
+		return models.Synced{}, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(e.Lyrics)
+	if err != nil {
+		slog.Debug("petitlyrics: secondary track failed base64 decode; skipping", "lyrics_type", e.LyricsType)
+		return models.Synced{}, false
+	}
+	lines, ok := parseLRC(string(decoded))
+	if !ok {
+		return models.Synced{}, false
+	}
+	return models.Synced{Lines: lines}, true
+}
+
 // fetchLyrics POSTs to the AJAX endpoint with the lyrics id and CSRF token,
 // then base64-decodes the payload into synced or plain lyrics.
 func (c *Client) fetchLyrics(ctx context.Context, id, token string) (models.Song, error) {
@@ -339,12 +374,36 @@ func (c *Client) fetchLyrics(ctx context.Context, id, token string) (models.Song
 
 	if lines, ok := parseLRC(text); ok {
 		song.Subtitles.Lines = lines
+		// Only a synced original gets secondary tracks merged in: bilingual
+		// interleaving (docs/multilingual-output-policy.md) needs the original to
+		// be synced, and a plain-text original has no timestamps to share.
+		applySecondaryTracks(&song, entries[1:])
 		return song, nil
 	}
 
 	// No parseable timestamps: treat as plain lyrics.
 	song.Lyrics.LyricsBody = text
 	return song, nil
+}
+
+// applySecondaryTracks populates song.TranslationSubtitles and
+// song.RomanizationSubtitles from the non-first AJAX entries, keyed by the
+// (unverified) lyrics_type sentinels documented above. Entries with an
+// unrecognized lyrics_type, or that fail to decode to synced lines, are ignored
+// so an original-only response leaves the new fields empty.
+func applySecondaryTracks(song *models.Song, rest []ajaxEntry) {
+	for _, e := range rest {
+		switch e.LyricsType {
+		case lyricsTypeTranslation:
+			if track, ok := trackFromEntry(e); ok && len(song.TranslationSubtitles.Lines) == 0 {
+				song.TranslationSubtitles = track
+			}
+		case lyricsTypeRomanization:
+			if track, ok := trackFromEntry(e); ok && len(song.RomanizationSubtitles.Lines) == 0 {
+				song.RomanizationSubtitles = track
+			}
+		}
+	}
 }
 
 // parseLRC parses LRC-formatted text into synced lines. It returns ok=false

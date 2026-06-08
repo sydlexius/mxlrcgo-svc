@@ -52,6 +52,56 @@ func TestSelectedProvider(t *testing.T) {
 	}
 }
 
+func TestSelectedProviderMusixmatchRequiresToken(t *testing.T) {
+	cfg := config.Config{Providers: config.ProvidersConfig{Primary: "musixmatch"}}
+	if _, err := selectedProvider(cfg, "  ", func(string) musixmatch.Fetcher { return fakeFetcher{} }); err == nil {
+		t.Fatal("musixmatch with an empty token must return an error")
+	}
+}
+
+func TestSelectedProviderPetitLyrics(t *testing.T) {
+	cfg := config.Config{Providers: config.ProvidersConfig{Primary: "petitlyrics"}}
+	// petitlyrics is tokenless: an empty token must NOT block it.
+	got, err := selectedProvider(cfg, "", func(string) musixmatch.Fetcher { return fakeFetcher{} })
+	if err != nil {
+		t.Fatalf("selectedProvider: %v", err)
+	}
+	if got.Name() != "petitlyrics" {
+		t.Fatalf("provider name = %q; want petitlyrics", got.Name())
+	}
+}
+
+func TestConfigureWriterBilingual(t *testing.T) {
+	dir := t.TempDir()
+	w := lyrics.NewLRCWriter(dir)
+	cfg := config.Config{Output: config.OutputConfig{BilingualOutput: true}}
+	configureWriterBilingual(w, cfg)
+
+	song := models.Song{
+		Track:                models.Track{ArtistName: "a", TrackName: "t"},
+		Subtitles:            models.Synced{Lines: []models.Lines{{Text: "orig", Time: models.Time{Seconds: 1}}}},
+		TranslationSubtitles: models.Synced{Lines: []models.Lines{{Text: "trans", Time: models.Time{Seconds: 1}}}},
+	}
+	if err := w.WriteLRC(song, "", dir); err != nil {
+		t.Fatalf("WriteLRC: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want exactly one output file (err=%v): %v", err, entries)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if !strings.Contains(string(b), "orig") || !strings.Contains(string(b), "trans") {
+		t.Fatalf("expected interleaved original + translation, got:\n%s", b)
+	}
+
+	// A fake writer does not satisfy *lyrics.LRCWriter: the helper is a no-op and
+	// must not panic.
+	configureWriterBilingual(fakeWriter{}, cfg)
+}
+
 func TestNewVerifierRequiresURLWhenEnabled(t *testing.T) {
 	_, err := newVerifier(config.Config{
 		Verification: config.VerificationConfig{Enabled: true},
@@ -476,6 +526,38 @@ func TestConfigGuardGetSetRoundTrip(t *testing.T) {
 		if err := setConfigValue(&cfg, "guard.script_guard_threshold", bad); err == nil {
 			t.Fatalf("setConfigValue accepted invalid guard.script_guard_threshold %q", bad)
 		}
+	}
+}
+
+func TestConfigBilingualOutputGetSetRoundTrip(t *testing.T) {
+	cfg := config.Config{
+		Output: config.OutputConfig{BilingualOutput: true},
+	}
+	got, ok := configValue(cfg, "output.bilingual_output")
+	if !ok {
+		t.Fatal("configValue(output.bilingual_output) ok = false; want true")
+	}
+	if got != "true" {
+		t.Fatalf("configValue(output.bilingual_output) = %q; want \"true\"", got)
+	}
+	if !slices.Contains(configKeys(), "output.bilingual_output") {
+		t.Fatal("configKeys missing output.bilingual_output")
+	}
+
+	if err := setConfigValue(&cfg, "output.bilingual_output", "false"); err != nil {
+		t.Fatalf("setConfigValue bilingual_output false: %v", err)
+	}
+	if cfg.Output.BilingualOutput {
+		t.Fatal("BilingualOutput = true; want false after set")
+	}
+	if err := setConfigValue(&cfg, "output.bilingual_output", "true"); err != nil {
+		t.Fatalf("setConfigValue bilingual_output true: %v", err)
+	}
+	if !cfg.Output.BilingualOutput {
+		t.Fatal("BilingualOutput = false; want true after set")
+	}
+	if err := setConfigValue(&cfg, "output.bilingual_output", "notabool"); err == nil {
+		t.Fatal("setConfigValue accepted invalid output.bilingual_output")
 	}
 }
 

@@ -41,6 +41,14 @@ type Song struct {
 	Track     Track
 	Lyrics    Lyrics
 	Subtitles Synced
+	// TranslationSubtitles holds an optional translation track parallel to
+	// Subtitles. Zero value (empty Lines) means absent, matching the Subtitles
+	// convention. Used for opt-in bilingual interleaved output (see #146).
+	TranslationSubtitles Synced
+	// RomanizationSubtitles holds an optional romanization track parallel to
+	// Subtitles. Zero value (empty Lines) means absent. Not interleaved by
+	// default; reserved for a future romanization output flag.
+	RomanizationSubtitles Synced
 }
 
 // Inputs represents a single work item in the processing queue.

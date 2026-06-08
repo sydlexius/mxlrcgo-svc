@@ -1,0 +1,182 @@
+# Configuration
+
+Every setting can come from a TOML config file or be overridden by an environment variable (and a few by a CLI flag). This page documents the precedence, the complete environment-variable surface, the TOML config keys, and the default storage paths.
+
+A fully commented `config.example.toml` ships in the repository root; copy it and edit the keys you need. The sections below cross-reference it.
+
+## Token precedence
+
+A Musixmatch API token is required. Supply it using any of the following methods, listed in order of precedence (highest first):
+
+1. **`--token` CLI flag** - highest priority.
+   ```sh
+   mxlrcgo-svc --token YOUR_TOKEN adele,hello
+   ```
+2. **`MUSIXMATCH_TOKEN` environment variable** (`MXLRC_API_TOKEN` is accepted as a lower-precedence alias).
+   ```sh
+   export MUSIXMATCH_TOKEN=YOUR_TOKEN
+   mxlrcgo-svc adele,hello
+   ```
+3. **Config file / `.env` file** - place a `.env` in the working directory where you run the command, or set the token in the TOML config.
+   ```sh
+   MUSIXMATCH_TOKEN=YOUR_TOKEN
+   ```
+
+To obtain a token, follow steps 1 to 5 from the [Spicetify guide](https://spicetify.app/docs/faq#sometimes-popup-lyrics-andor-lyrics-plus-seem-to-not-work).
+
+## General precedence
+
+For all settings, precedence is **CLI flag > environment variable > config file > built-in default**.
+
+## Storage paths (XDG defaults)
+
+`mxlrcgo-svc` resolves its config file and SQLite database using XDG base directories by default. When `MXLRC_DOCKER=true` (set automatically in the published images), storage defaults resolve under `/config` instead:
+
+- Config file: XDG config dir, or `/config/config.toml` in Docker.
+- Database: XDG data dir, or `/config/mxlrcgo.db` in Docker.
+- Output dir: XDG, or `/music` (the image default).
+
+Override any of these explicitly with `MXLRC_DB_PATH`, `MXLRC_OUTPUT_DIR`, or the `--config` flag.
+
+## Environment variables
+
+The table below is the complete env-var surface; the watcher and verification sections of the [User Guide](USER_GUIDE.md) give the operational detail.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MUSIXMATCH_TOKEN` | (required) | Musixmatch API token. `MXLRC_API_TOKEN` is accepted as a lower-precedence alias. |
+| `MXLRC_WEBHOOK_API_KEY` | (none) | Comma-separated webhook API key(s) accepted by the server. Generate with `mxlrcgo-svc keys create --scope webhook`. |
+| `MXLRC_SERVER_ADDR` | `127.0.0.1:3876` | HTTP listen address for `serve`. Docker images default this to `0.0.0.0:50705`. |
+| `MXLRC_OUTPUT_DIR` | XDG / `/music` | Fallback output directory for webhook jobs that resolve via metadata. |
+| `MXLRC_DB_PATH` | XDG / `/config/mxlrcgo.db` | SQLite database path. |
+| `MXLRC_DOCKER` | `false` | When `true`, storage defaults resolve under `/config`. Set automatically in the images. |
+| `MXLRC_API_COOLDOWN` | `15` | Seconds between Musixmatch requests. `MXLRC_COOLDOWN` is a lower-precedence alias. |
+| `MXLRC_API_CIRCUIT_OPEN_DURATION` | `1800` | Cap (seconds) for the worker circuit-breaker window; the window ramps geometrically up to this ceiling, and a token-renewal signal opens for the full cap (floor 300). |
+| `MXLRC_API_CIRCUIT_BACKOFF_BASE` | `60` | Trip-1 circuit-breaker window (seconds); doubles each consecutive throttle up to `MXLRC_API_CIRCUIT_OPEN_DURATION`, resets on a successful fetch or clean miss (floor 15, capped at the open-duration). |
+| `MXLRC_SCAN_INTERVAL` | `900` | `serve` library-scan interval in seconds. `0` scans once without repeating. |
+| `MXLRC_WORK_INTERVAL` | `0` | Worker poll interval in seconds. `0` falls back to `api.cooldown` (15s floor). |
+| `MXLRC_PROVIDER_PRIMARY` | `musixmatch` | Primary lyrics provider. |
+| `MXLRC_PROVIDERS_DISABLED` | (none) | Comma-separated providers to disable. |
+| `MXLRC_GUARD_ACCEPTED_SCRIPTS` | (none) | Comma-separated allowlist of Unicode script buckets a lyric body may use (Latin, Han, Kana, Hangul, Other). Empty disables the language/script guard. |
+| `MXLRC_GUARD_THRESHOLD` | `0.20` | Maximum tolerated share of foreign-script letters before a result is rejected. Values outside (0, 1] reset to the default. |
+| `MXLRC_QUEUE_RANDOMIZE` | `true` | Shuffle worker dequeue order within each priority tier (anti-fingerprint). `false` restores deterministic order. |
+| `MXLRC_LOG_LEVEL` | `info` | Minimum log level: `debug`, `info`, `warn`, `error`. `debug` exposes per-request detail, worker idle-polls, and watcher events. |
+| `MXLRC_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, for log aggregators). |
+| `MXLRC_LOG_FILE` | (none) | Log file path. Empty means console-only (stderr). When set, logs go to both stderr and the file with automatic rotation. |
+| `MXLRC_LOG_MAX_SIZE_MB` | `10` | Maximum log file size in megabytes before rotation. |
+| `MXLRC_LOG_MAX_FILES` | `5` | Number of rotated log files to retain. |
+| `MXLRC_LOG_MAX_AGE_DAYS` | `30` | Maximum age in days of retained rotated log files. |
+| `MXLRC_LOG_COMPRESS` | `true` | Compress rotated log files with gzip. |
+| `MXLRCGO_WATCH_ENABLED` | `false` | Enable the optional low-latency filesystem watcher (see the User Guide). |
+| `MXLRCGO_WATCH_DEBOUNCE_MS` | `2000` | Watcher debounce window in milliseconds. |
+| `MXLRCGO_WATCH_MAX_DIRS` | `100000` | Watcher safety cap on directories watched. |
+| `MXLRC_VERIFICATION_ENABLED` | `false` | Enable Whisper-based lyric verification (requires a sidecar and `ffmpeg`). |
+| `MXLRC_VERIFICATION_WHISPER_URL` | (none) | Whisper-compatible transcription endpoint. `MXLRC_WHISPER_URL` is an alias. |
+| `MXLRC_VERIFICATION_FFMPEG_PATH` | `ffmpeg` | Path to the `ffmpeg` binary used to extract audio samples. |
+| `MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS` | `30` | Audio sample length sent to Whisper. `MXLRC_VERIFICATION_SAMPLE_DURATION` is an alias. |
+| `MXLRC_VERIFICATION_MIN_CONFIDENCE` | `0.85` | Below this Musixmatch confidence, verify against Whisper (0-1). |
+| `MXLRC_VERIFICATION_MIN_SIMILARITY` | `0.35` | Minimum transcript/lyric overlap to accept (0-1). |
+| `PUID` / `PGID` | `99` / `100` | Container-only: user/group the process drops to for file ownership. |
+
+## TOML config keys
+
+The TOML config file mirrors the environment variables in named sections. The keys below correspond one-to-one with `config.example.toml`, which carries inline documentation for each.
+
+### `[api]`
+
+```toml
+[api]
+cooldown = 15
+circuit_open_duration = 1800
+# circuit_backoff_base = 60
+```
+
+Request cooldown and the worker circuit-breaker window (env: `MXLRC_API_COOLDOWN`, `MXLRC_API_CIRCUIT_OPEN_DURATION`, `MXLRC_API_CIRCUIT_BACKOFF_BASE`).
+
+### `[output]`
+
+```toml
+[output]
+dir = "lyrics"
+```
+
+Fallback output directory for webhook jobs that resolve via metadata (env: `MXLRC_OUTPUT_DIR`).
+
+### `[db]`
+
+```toml
+[db]
+# path = "mxlrcgo.db"
+```
+
+SQLite database path (env: `MXLRC_DB_PATH`).
+
+### `[server]`
+
+```toml
+[server]
+addr = "127.0.0.1:3876"
+# webhook_api_keys = ["mxlrc_your-webhook-key"]
+# scan_interval_seconds = 900
+# work_interval_seconds = 0
+```
+
+HTTP listen address, webhook keys, and the scheduler scan/worker poll intervals (env: `MXLRC_SERVER_ADDR`, `MXLRC_WEBHOOK_API_KEY`, `MXLRC_SCAN_INTERVAL`, `MXLRC_WORK_INTERVAL`; CLI: `--listen`, `--scan-interval`, `--work-interval`).
+
+### `[providers]`
+
+```toml
+[providers]
+primary = "musixmatch"
+disabled = []
+```
+
+Provider selection. Musixmatch is the default provider; the config exposes selection so future providers can be added without changing the fetch and worker paths (env: `MXLRC_PROVIDER_PRIMARY`, `MXLRC_PROVIDERS_DISABLED`).
+
+### `[verification]`
+
+```toml
+[verification]
+enabled = false
+whisper_url = ""
+ffmpeg_path = "ffmpeg"
+sample_duration_seconds = 30
+min_confidence = 0.85
+min_similarity = 0.35
+```
+
+Optional Whisper-based speech-to-text verification for low-confidence scanned audio. When enabled, `ffmpeg` must be installed or `ffmpeg_path` must point to an executable ffmpeg binary. The worker extracts a bounded mono 16 kHz WAV sample using `sample_duration_seconds`, then sends it to a Whisper-compatible `/v1/audio/transcriptions` sidecar for audio whose Musixmatch metadata confidence is below `min_confidence`. The transcript must overlap the candidate lyrics by at least `min_similarity`. Environment variables override the TOML keys (`MXLRC_VERIFICATION_*`); `MXLRC_WHISPER_URL` and `MXLRC_VERIFICATION_SAMPLE_DURATION` remain accepted as legacy aliases.
+
+### `[guard]`
+
+```toml
+[guard]
+accepted_scripts = []
+script_guard_threshold = 0.20
+```
+
+Optional language/script guard. It rejects fetched lyrics whose body is dominated by scripts outside the allowlist, so a wrong-language match (for example a Cyrillic or CJK body returned for a Latin-script track) is never written or cached. An empty `accepted_scripts` list (the default) disables the guard. Supported buckets: Latin, Han, Kana, Hangul, Other (env: `MXLRC_GUARD_ACCEPTED_SCRIPTS`, `MXLRC_GUARD_THRESHOLD`).
+
+### `[queue]`
+
+```toml
+[queue]
+randomize = true
+```
+
+The worker shuffles its dequeue order within each priority tier so it stops querying the upstream API in strict alphabetical (library insertion) order, which is a plausible scraping fingerprint. This is **on by default** and affects only the library/serve worker path (`Dequeue`); inspection output (`queue list`) stays deterministic, and the one-shot `fetch` CLI never touches the work queue. Set `randomize = false` (or `MXLRC_QUEUE_RANDOMIZE=false`) to restore the deterministic `created_at`/`id` ordering. The env var overrides the TOML key; an invalid value warns and keeps the current setting.
+
+### `[logging]`
+
+```toml
+[logging]
+level = "info"
+format = "text"
+# file = ""
+# max_size_mb = 10
+# max_files = 5
+# max_age_days = 30
+# compress = true
+```
+
+Log level, format, and the rotating file-log settings (env: `MXLRC_LOG_LEVEL`, `MXLRC_LOG_FORMAT`, `MXLRC_LOG_FILE`, `MXLRC_LOG_MAX_SIZE_MB`, `MXLRC_LOG_MAX_FILES`, `MXLRC_LOG_MAX_AGE_DAYS`, `MXLRC_LOG_COMPRESS`).

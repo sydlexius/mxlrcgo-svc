@@ -23,6 +23,9 @@ coverage.html
 # Build artifacts
 dist/
 
+# Docs build output
+/site/
+
 # Failed lyrics fetch logs
 *_failed.txt
 

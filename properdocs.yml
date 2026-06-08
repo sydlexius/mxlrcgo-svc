@@ -82,3 +82,4 @@ nav:
   - Developer Guide:
       - Overview: DEVELOPER.md
       - Multilingual Output Policy: multilingual-output-policy.md
+      - Multi-Provider Orchestration: multi-provider-orchestration.md

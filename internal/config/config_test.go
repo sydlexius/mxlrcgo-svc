@@ -579,6 +579,56 @@ func TestLoad_CircuitBackoffBaseClampedToCapWhenExceeds(t *testing.T) {
 	}
 }
 
+// TestLoad_CircuitBackoffBaseExplicitZeroRedefaults verifies that an explicit
+// circuit_backoff_base_seconds = 0 in a config file restores the default rather
+// than leaving the breaker with a zero base (the Load() re-default block).
+func TestLoad_CircuitBackoffBaseExplicitZeroRedefaults(t *testing.T) {
+	isolateEnv(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[api]\ncircuit_backoff_base_seconds = 0\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.CircuitBackoffBase != 60 {
+		t.Fatalf("CircuitBackoffBase = %d; want 60 (explicit 0 re-defaulted)", cfg.API.CircuitBackoffBase)
+	}
+}
+
+// TestLoad_CircuitBackoffBaseInvalidEnvKeepsCurrent verifies a non-numeric env
+// value is ignored with a warning, leaving the current value intact.
+func TestLoad_CircuitBackoffBaseInvalidEnvKeepsCurrent(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("MXLRC_API_CIRCUIT_BACKOFF_BASE", "not-a-number")
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.CircuitBackoffBase != 60 {
+		t.Fatalf("CircuitBackoffBase = %d; want 60 (invalid env ignored)", cfg.API.CircuitBackoffBase)
+	}
+}
+
+// TestLoad_CircuitBackoffBaseNegativeClampsToDefault verifies an explicit
+// negative value in the file (which survives the zero re-default) is clamped
+// back to the default by clampCircuitBackoffBase.
+func TestLoad_CircuitBackoffBaseNegativeClampsToDefault(t *testing.T) {
+	isolateEnv(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[api]\ncircuit_backoff_base_seconds = -5\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.CircuitBackoffBase != 60 {
+		t.Fatalf("CircuitBackoffBase = %d; want 60 (negative clamped to default)", cfg.API.CircuitBackoffBase)
+	}
+}
+
 // TestLoad_InvalidTOMLReturnsError verifies that a malformed TOML file is
 // reported as an error.
 func TestLoad_InvalidTOMLReturnsError(t *testing.T) {

@@ -1069,6 +1069,20 @@ func TestRenewalHoldsFullCapAndDoesNotIncrementTrips(t *testing.T) {
 	}
 }
 
+func TestRenewalReleaseErrorIsSurfaced(t *testing.T) {
+	w, q, _ := newCircuitWorker()
+	q.releaseErr = errors.New("release boom")
+	renewal := fmt.Errorf("x: %w", musixmatch.ErrTokenRenewalRequired)
+
+	tripped, releaseErr := w.tripCircuitIfRateLimited(context.Background(), queue.WorkItem{ID: 7}, renewal)
+	if !tripped {
+		t.Fatal("tripped = false; want true (renewal still opens the circuit)")
+	}
+	if releaseErr == nil {
+		t.Fatal("releaseErr = nil; want the Release failure surfaced so the item is not silently orphaned")
+	}
+}
+
 func TestRunOnceResetsCircuitTripsOnNonCacheSuccess(t *testing.T) {
 	track := models.Track{ArtistName: "Artist", TrackName: "Title"}
 	q := &fakeQueue{items: []queue.WorkItem{{ID: 5, Inputs: models.Inputs{Track: track, OutputPaths: []models.OutputPath{{Outdir: "out", Filename: "a.lrc"}}}}}}

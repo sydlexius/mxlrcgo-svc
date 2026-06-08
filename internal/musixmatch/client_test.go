@@ -344,6 +344,31 @@ func TestFindLyricsBenignMissesAreClassifiable(t *testing.T) {
 	}
 }
 
+func TestFindLyricsInnerMatcher401ReturnsErrUnauthorized(t *testing.T) {
+	// HTTP 200 with an inner matcher.track.get status_code of 401 -- the bare-401
+	// throttle path inside the macro response (distinct from the header-level
+	// hint=renew path, which returns ErrTokenRenewalRequired).
+	body := `{"message": {"header": {"status_code": 200}, "body": {"macro_calls": {
+		"matcher.track.get": {"message": {"header": {"status_code": 401}}},
+		"track.lyrics.get": {"message": {"body": {}}},
+		"track.subtitles.get": {"message": {"body": {}}}
+	}}}}`
+	client := newTestClient(http.StatusOK, body)
+	_, err := client.FindLyrics(context.Background(), models.Track{TrackName: "title", ArtistName: "artist"})
+	if err == nil {
+		t.Fatal("FindLyrics returned nil error for inner matcher 401")
+	}
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v; want errors.Is(_, ErrUnauthorized)", err)
+	}
+	if errors.Is(err, ErrTokenRenewalRequired) {
+		t.Fatalf("error = %v; a bare inner 401 must NOT be classified as a renewal", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("error = %q; want non-asserting 'HTTP 401' wording", err.Error())
+	}
+}
+
 func TestTokenRenewalErrorIsBothSentinels(t *testing.T) {
 	err := fmt.Errorf("wrap: %w", ErrTokenRenewalRequired)
 	if !errors.Is(err, ErrTokenRenewalRequired) {

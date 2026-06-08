@@ -11,6 +11,10 @@ import (
 const (
 	// Musixmatch is the built-in Musixmatch provider name.
 	Musixmatch = "musixmatch"
+	// PetitLyrics is the Petit Lyrics provider name. The adapter lives in
+	// internal/petitlyrics; provider registration/selection is wired in a
+	// later phase, so this constant is currently a name reference only.
+	PetitLyrics = "petitlyrics"
 )
 
 // Fetcher is the shared lyrics lookup behavior used by provider adapters.

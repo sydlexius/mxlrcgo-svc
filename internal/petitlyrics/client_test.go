@@ -39,6 +39,7 @@ type fixtureServer struct {
 	ajaxBody      string
 	gotCSRFHeader string
 	gotXHRHeader  string
+	gotCookie     string
 }
 
 func newFixtureServer(t *testing.T, f *fixtureServer) *httptest.Server {
@@ -56,12 +57,15 @@ func newFixtureServer(t *testing.T, f *fixtureServer) *httptest.Server {
 			w.WriteHeader(f.jsStatus)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "PLSESSION", Value: "test-session"})
+		http.SetCookie(w, &http.Cookie{Name: "PLSESSION", Value: "test-session", Path: "/"})
 		_, _ = w.Write([]byte(f.jsBody))
 	})
 	mux.HandleFunc("/com/get_lyrics.ajax", func(w http.ResponseWriter, r *http.Request) {
 		f.gotCSRFHeader = r.Header.Get("X-CSRF-Token")
 		f.gotXHRHeader = r.Header.Get("X-Requested-With")
+		if ck, err := r.Cookie("PLSESSION"); err == nil {
+			f.gotCookie = ck.Value
+		}
 		if f.ajaxStatus != 0 && f.ajaxStatus != http.StatusOK {
 			w.WriteHeader(f.ajaxStatus)
 			return
@@ -105,7 +109,11 @@ func itoa(i int) string {
 func newTestClient(srv *httptest.Server) *Client {
 	c := NewClient()
 	c.baseURL = srv.URL
-	c.httpClient = srv.Client()
+	// Adopt only the test server's transport so requests reach the httptest
+	// server, while preserving the cookie jar and timeout from NewClient so the
+	// PLSESSION jar behavior (set in the CSRF stage, replayed to the AJAX stage)
+	// is actually exercised.
+	c.httpClient.Transport = srv.Client().Transport
 	return c
 }
 
@@ -148,6 +156,11 @@ func TestFindLyrics_Synced(t *testing.T) {
 	}
 	if f.gotXHRHeader != "XMLHttpRequest" {
 		t.Fatalf("X-Requested-With = %q; want XMLHttpRequest", f.gotXHRHeader)
+	}
+	// The PLSESSION cookie set by the CSRF (pl-lib.js) stage must be replayed to
+	// the AJAX stage by the client's cookie jar.
+	if f.gotCookie != "test-session" {
+		t.Fatalf("PLSESSION cookie at AJAX stage = %q; want test-session (cookie jar should persist it)", f.gotCookie)
 	}
 }
 
@@ -314,6 +327,24 @@ func TestWithMinIntervalReturnsClient(t *testing.T) {
 	}
 }
 
+func TestFindLyrics_ContextCanceled(t *testing.T) {
+	f := &fixtureServer{
+		searchBody: searchHTMLWithID("1"),
+		jsBody:     validJS,
+		ajaxBody:   ajaxJSON(b64("[00:00.00]x\n"), 2),
+	}
+	srv := newFixtureServer(t, f)
+	c := newTestClient(srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.FindLyrics(ctx, models.Track{TrackName: "x", ArtistName: "y"})
+	if err == nil {
+		t.Fatal("expected error when the context is canceled; got nil")
+	}
+}
+
 func TestPacerEnforcesMinInterval(t *testing.T) {
 	lrc := "[00:01.00]x\n"
 	f := &fixtureServer{
@@ -328,24 +359,26 @@ func TestPacerEnforcesMinInterval(t *testing.T) {
 	base := time.Unix(1000, 0)
 	fakeNow := base
 	c.now = func() time.Time { return fakeNow }
-	var gotSleep time.Duration
+	var sleeps []time.Duration
 	c.sleep = func(ctx context.Context, d time.Duration) bool {
-		gotSleep = d
+		sleeps = append(sleeps, d)
 		fakeNow = fakeNow.Add(d)
 		return true
 	}
 
+	// Pacing is enforced before each outbound request, not once per lookup. A
+	// single FindLyrics makes three requests: the first does not wait (no prior
+	// request), the second and third each wait the full interval.
 	track := models.Track{TrackName: "x", ArtistName: "y"}
 	if _, err := c.FindLyrics(context.Background(), track); err != nil {
-		t.Fatalf("first call: %v", err)
+		t.Fatalf("FindLyrics: %v", err)
 	}
-	if gotSleep != 0 {
-		t.Fatalf("first call slept %v; want 0", gotSleep)
+	if len(sleeps) != 2 {
+		t.Fatalf("got %d paced waits in one lookup; want 2 (before the 2nd and 3rd requests)", len(sleeps))
 	}
-	if _, err := c.FindLyrics(context.Background(), track); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if gotSleep != 10*time.Second {
-		t.Fatalf("second call slept %v; want 10s", gotSleep)
+	for i, d := range sleeps {
+		if d != 10*time.Second {
+			t.Fatalf("paced wait %d = %v; want 10s", i, d)
+		}
 	}
 }

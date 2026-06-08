@@ -106,7 +106,9 @@ func (c *Client) MinInterval() time.Duration {
 }
 
 // pace enforces the minimum request interval, mirroring the musixmatch pacer.
-// It must be called once at the top of FindLyrics. The wait is ctx-cancellable.
+// It is called before each outbound request (WithMinInterval is documented as a
+// minimum between requests, not between lookups), so a single FindLyrics, which
+// makes three calls, cannot burst. The wait is ctx-cancellable.
 func (c *Client) pace(ctx context.Context) error {
 	if c.minInterval <= 0 {
 		return nil
@@ -127,6 +129,20 @@ func (c *Client) pace(ctx context.Context) error {
 			return fmt.Errorf("petitlyrics: pace: %w", ctx.Err())
 		}
 	}
+}
+
+// do enforces pacing then executes req, wrapping a transport error with the
+// stage label. Centralizing pacing here keeps WithMinInterval a per-request
+// minimum: every outbound request in a lookup passes through do.
+func (c *Client) do(ctx context.Context, req *http.Request, stage string) (*http.Response, error) {
+	if err := c.pace(ctx); err != nil {
+		return nil, err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("petitlyrics: %s: %w", stage, err)
+	}
+	return res, nil
 }
 
 // Name returns the provider name.
@@ -167,10 +183,6 @@ func readBody(stage string, res *http.Response) ([]byte, error) {
 // the three-stage reverse-engineered flow: search for a lyrics id, fetch the
 // CSRF token, then request the lyrics payload via the AJAX endpoint.
 func (c *Client) FindLyrics(ctx context.Context, track models.Track) (models.Song, error) {
-	if err := c.pace(ctx); err != nil {
-		return models.Song{}, err
-	}
-
 	id, err := c.searchLyricsID(ctx, track)
 	if err != nil {
 		return models.Song{}, err
@@ -196,9 +208,9 @@ func (c *Client) searchLyricsID(ctx context.Context, track models.Track) (string
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	res, err := c.httpClient.Do(req)
+	res, err := c.do(ctx, req, "search")
 	if err != nil {
-		return "", fmt.Errorf("petitlyrics: search: %w", err)
+		return "", err
 	}
 	defer func() { _ = res.Body.Close() }()
 
@@ -226,9 +238,9 @@ func (c *Client) fetchCSRFToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("petitlyrics: csrf: build request: %w", err)
 	}
 
-	res, err := c.httpClient.Do(req)
+	res, err := c.do(ctx, req, "csrf")
 	if err != nil {
-		return "", fmt.Errorf("petitlyrics: csrf: %w", err)
+		return "", err
 	}
 	defer func() { _ = res.Body.Close() }()
 
@@ -269,9 +281,9 @@ func (c *Client) fetchLyrics(ctx context.Context, id, token string) (models.Song
 	req.Header.Set("X-CSRF-Token", token)
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 
-	res, err := c.httpClient.Do(req)
+	res, err := c.do(ctx, req, "ajax")
 	if err != nil {
-		return song, fmt.Errorf("petitlyrics: ajax: %w", err)
+		return song, err
 	}
 	defer func() { _ = res.Body.Close() }()
 

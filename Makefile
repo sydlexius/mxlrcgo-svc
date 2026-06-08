@@ -1,5 +1,6 @@
 .PHONY: build run test test-shuffle test-cover patch-cover gate scan vulncheck \
-        doctor sync-tool-versions coverage-floor smoke lint fmt hooks clean help
+        doctor sync-tool-versions coverage-floor smoke lint fmt hooks clean help \
+        docs docs-serve docs-deps
 
 # Binary name
 BINARY=mxlrcgo-svc
@@ -84,6 +85,18 @@ hooks:
 	git config core.hooksPath .githooks
 	@echo "core.hooksPath set to .githooks (pre-commit + pre-push enforced)."
 	@bash scripts/check-hooks.sh
+
+## docs-deps: Install the Python documentation tooling (ProperDocs + Material)
+docs-deps:
+	pip install -r dev-requirements.txt
+
+## docs-serve: Live-reload preview of the documentation site
+docs-serve:
+	properdocs serve
+
+## docs: Build the documentation site strictly into ./site
+docs:
+	properdocs build --strict
 
 ## clean: Remove build artifacts
 clean:

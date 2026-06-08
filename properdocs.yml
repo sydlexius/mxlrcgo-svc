@@ -1,0 +1,83 @@
+site_name: mxlrcgo-svc
+site_description: Command line tool and webhook service to fetch synced lyrics from Musixmatch and save them as .lrc files.
+site_url: https://sydlexius.github.io/mxlrcgo-svc/
+repo_url: https://github.com/sydlexius/mxlrcgo-svc
+repo_name: sydlexius/mxlrcgo-svc
+edit_uri: edit/main/docs/
+
+# Built with ProperDocs (a maintained, drop-in continuation of MkDocs 1.x) plus
+# the Material theme. The docs live under docs/ and the build output (site/) is
+# at the repo root and gitignored.
+docs_dir: docs
+site_dir: site
+
+# docs/superpowers/ holds internal planning docs that should not be published.
+exclude_docs: |
+  superpowers/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      accent: green
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      accent: green
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.action.edit
+    - content.tooltips
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: date
+      fallback_to_build_date: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/sydlexius/mxlrcgo-svc
+
+nav:
+  - Home: index.md
+  - User Guide: USER_GUIDE.md
+  - CLI Reference: CLI_REFERENCE.md
+  - Configuration: CONFIGURATION.md
+  - Developer Guide:
+      - Overview: DEVELOPER.md
+      - Multilingual Output Policy: multilingual-output-policy.md

@@ -5,7 +5,7 @@
 **Bilingual single `.lrc`** - original and translation lines share one timestamp,
 interleaved as alternating lines under the same `[MM:SS.cc]` marker.
 
-```
+```text
 [00:12.50]オリジナルの歌詞テキスト
 [00:12.50]Translation of the lyric text
 ```

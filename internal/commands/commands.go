@@ -510,7 +510,9 @@ func runFetch(ctx context.Context, out io.Writer, args FetchCmd, newFetcher func
 		}
 	}
 
-	application := newApp(fetcher, newWriter(), inputs, cooldown, mode)
+	writer := newWriter()
+	configureWriterBilingual(writer, cfg)
+	application := newApp(fetcher, writer, inputs, cooldown, mode)
 	if err := application.Run(ctx); err != nil {
 		slog.Error("application error", "error", err)
 		return 1
@@ -630,7 +632,9 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	// failure is not fatal: confinement is simply skipped (the writer falls back
 	// to its unconfined path) and the handler degrades as documented below.
 	allowedRoots := webhookAllowedRoots(ctx, sqlDB)
-	w := worker.New(workQ, cache.New(sqlDB), fetcher, newWriter(allowedRoots...))
+	writer := newWriter(allowedRoots...)
+	configureWriterBilingual(writer, cfg)
+	w := worker.New(workQ, cache.New(sqlDB), fetcher, writer)
 	w.SetCircuitOpenDuration(time.Duration(cfg.API.CircuitOpenDuration) * time.Second)
 	w.SetCircuitBackoff(time.Duration(cfg.API.CircuitBackoffBase)*time.Second, time.Duration(cfg.API.CircuitOpenDuration)*time.Second)
 	w.SetMissBackoff(time.Duration(cfg.API.MissBackoffBaseHours)*time.Hour, time.Duration(cfg.API.MissBackoffCapHours)*time.Hour)
@@ -803,6 +807,16 @@ func configureWorkerGuard(w *worker.Worker, g worker.ScriptGuard) {
 		return
 	}
 	w.EnableGuard(g)
+}
+
+// configureWriterBilingual enables interleaved bilingual output on an LRC writer
+// when configured. Fake writers in tests do not satisfy *lyrics.LRCWriter, so
+// this is a no-op for them (mirrors how the Musixmatch pacer is applied via a
+// type assertion in selectedProvider).
+func configureWriterBilingual(w lyrics.Writer, cfg config.Config) {
+	if lw, ok := w.(*lyrics.LRCWriter); ok {
+		lw.SetBilingual(cfg.Output.BilingualOutput)
+	}
 }
 
 func runScheduler(ctx context.Context, sqlDB *sql.DB, cfg config.Config, args ServeCmd) {
@@ -1257,6 +1271,7 @@ func configKeys() []string {
 		"api.max_miss_attempts",
 		"output.dir",
 		"output.embedded_lyrics",
+		"output.bilingual_output",
 		"db.path",
 		"server.addr",
 		"server.webhook_api_keys",
@@ -1293,6 +1308,8 @@ func configValue(cfg config.Config, key string) (string, bool) {
 		return cfg.Output.Dir, true
 	case "output.embedded_lyrics":
 		return cfg.Output.EmbeddedLyrics, true
+	case "output.bilingual_output":
+		return strconv.FormatBool(cfg.Output.BilingualOutput), true
 	case "db.path":
 		return cfg.DB.Path, true
 	case "server.addr":
@@ -1371,6 +1388,12 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		default:
 			return fmt.Errorf("invalid value %q for output.embedded_lyrics (want off, respect, or extract)", value)
 		}
+	case "output.bilingual_output":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("output.bilingual_output must be a boolean")
+		}
+		cfg.Output.BilingualOutput = v
 	case "db.path":
 		cfg.DB.Path = value
 	case "server.addr":

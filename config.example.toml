@@ -66,6 +66,14 @@ dir = "lyrics"
 # Synced (SYLT) tags are intentionally not handled.
 # embedded_lyrics = "off"
 
+# Bilingual interleaved output (env: MXLRC_BILINGUAL_OUTPUT). Default false.
+# When true AND a provider returns a non-empty translation track, the original
+# and translation lines are interleaved under shared timestamps (each original
+# line is followed by its translation at the same [MM:SS.cc] marker) in a single
+# .lrc, per docs/multilingual-output-policy.md. When false (or when no
+# translation track is present), only the original track is written.
+# bilingual_output = false
+
 [db]
 # Path to SQLite database file.
 # Default: ~/.local/share/mxlrcgo-svc/mxlrcgo.db

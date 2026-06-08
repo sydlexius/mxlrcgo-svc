@@ -39,6 +39,19 @@ type Writer interface {
 // here.
 type LRCWriter struct {
 	roots []string
+	// bilingual enables opt-in interleaved original+translation output (see
+	// docs/multilingual-output-policy.md). When false (the default), only the
+	// original track is written even if a translation track is present.
+	bilingual bool
+}
+
+// SetBilingual enables or disables interleaved bilingual output. When enabled
+// AND a Song carries a non-empty TranslationSubtitles track, writeSyncedLRC
+// emits each original line followed by its translation under the original
+// line's timestamp. Default false (original-only). Not goroutine-safe; call
+// before sharing the writer.
+func (w *LRCWriter) SetBilingual(enabled bool) {
+	w.bilingual = enabled
 }
 
 // NewLRCWriter creates a new LRCWriter. Any non-empty roots passed become
@@ -76,7 +89,7 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 	switch {
 	case len(song.Subtitles.Lines) > 0:
 		slog.Debug("saving synced lyrics")
-		writeContent = func(buf *bufio.Writer) error { return writeSyncedLRC(song, buf) }
+		writeContent = func(buf *bufio.Writer) error { return writeSyncedLRC(song, buf, w.bilingual) }
 		writeTags = true
 		synced = true
 	case song.Lyrics.LyricsBody != "":
@@ -235,16 +248,36 @@ func (w *LRCWriter) matchRoot(outdir string) (string, bool) {
 	return best, best != ""
 }
 
-func writeSyncedLRC(song models.Song, buff *bufio.Writer) error {
-	var text string
-	var fLine string
-	for _, line := range song.Subtitles.Lines {
-		if text = line.Text; line.Text == "" {
+// writeSyncedLRC writes the synced original track. When bilingual is true AND
+// the song carries a non-empty translation track, each original line is
+// followed immediately by its index-matched translation line under the
+// ORIGINAL line's timestamp (the interleaved format in
+// docs/multilingual-output-policy.md). Mismatched line counts are handled
+// gracefully: an original line with no translation counterpart is emitted
+// alone, and surplus translation lines (beyond the original count) are dropped.
+func writeSyncedLRC(song models.Song, buff *bufio.Writer, bilingual bool) error {
+	interleave := bilingual && len(song.TranslationSubtitles.Lines) > 0
+	translations := song.TranslationSubtitles.Lines
+
+	for i, line := range song.Subtitles.Lines {
+		text := line.Text
+		if text == "" {
 			text = "\u266a"
 		}
-		fLine = fmt.Sprintf("[%02d:%02d.%02d]%s", line.Time.Minutes, line.Time.Seconds, line.Time.Hundredths, text)
+		fLine := fmt.Sprintf("[%02d:%02d.%02d]%s", line.Time.Minutes, line.Time.Seconds, line.Time.Hundredths, text)
 		if _, err := buff.WriteString(fLine + "\n"); err != nil {
 			return fmt.Errorf("writing synced line: %w", err)
+		}
+		if interleave && i < len(translations) {
+			tText := translations[i].Text
+			if tText == "" {
+				tText = "\u266a"
+			}
+			// Use the ORIGINAL line's timestamp so the pair shares one marker.
+			tLine := fmt.Sprintf("[%02d:%02d.%02d]%s", line.Time.Minutes, line.Time.Seconds, line.Time.Hundredths, tText)
+			if _, err := buff.WriteString(tLine + "\n"); err != nil {
+				return fmt.Errorf("writing translation line: %w", err)
+			}
 		}
 	}
 

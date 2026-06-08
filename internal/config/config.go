@@ -117,6 +117,12 @@ type OutputConfig struct {
 	// or "extract" (write them to a .txt sidecar, then skip). env:
 	// MXLRC_EMBEDDED_LYRICS; CLI: --embedded-lyrics.
 	EmbeddedLyrics string `toml:"embedded_lyrics"`
+	// BilingualOutput opts into interleaved original+translation .lrc output.
+	// Default false (original-only). When true AND a provider returns a non-empty
+	// translation track, the original and translation lines are interleaved under
+	// shared timestamps per docs/multilingual-output-policy.md.
+	// Override: MXLRC_BILINGUAL_OUTPUT.
+	BilingualOutput bool `toml:"bilingual_output"`
 }
 
 // DBConfig holds database configuration.
@@ -242,6 +248,14 @@ func Load(path string) (Config, error) {
 			if cfg.Output.EmbeddedLyrics == "" {
 				cfg.Output.EmbeddedLyrics = d.Output.EmbeddedLyrics
 			}
+			// BilingualOutput defaults to false (the bool zero-value), so an
+			// explicit "bilingual_output = false" in the file is indistinguishable
+			// from "not set" by equality. Mirror the logging.compress pattern: use
+			// MetaData.IsDefined so an omitted key restores the default and an
+			// explicit value (true or false) is preserved as decoded.
+			if !md.IsDefined("output", "bilingual_output") {
+				cfg.Output.BilingualOutput = d.Output.BilingualOutput
+			}
 			if cfg.Server.Addr == "" {
 				cfg.Server.Addr = d.Server.Addr
 			}
@@ -339,7 +353,7 @@ func Load(path string) (Config, error) {
 // applyEnvOverrides overlays environment variables onto cfg.
 // Token precedence within env vars: MUSIXMATCH_TOKEN > MXLRC_API_TOKEN.
 // Cooldown precedence: MXLRC_API_COOLDOWN > MXLRC_COOLDOWN.
-// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_API_CIRCUIT_OPEN_DURATION, MXLRC_API_CIRCUIT_BACKOFF_BASE, MXLRC_MISS_BACKOFF_BASE_HOURS, MXLRC_MISS_BACKOFF_CAP_HOURS, MXLRC_MAX_MISS_ATTEMPTS, MXLRC_OUTPUT_DIR, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY, MXLRC_SCAN_INTERVAL, MXLRC_WORK_INTERVAL, MXLRC_PROVIDER_PRIMARY, MXLRC_PROVIDERS_DISABLED, MXLRC_VERIFICATION_ENABLED, MXLRC_VERIFICATION_WHISPER_URL, MXLRC_WHISPER_URL, MXLRC_VERIFICATION_FFMPEG_PATH, MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS, MXLRC_VERIFICATION_SAMPLE_DURATION, MXLRC_VERIFICATION_MIN_CONFIDENCE, MXLRC_VERIFICATION_MIN_SIMILARITY, MXLRC_GUARD_ACCEPTED_SCRIPTS, MXLRC_GUARD_THRESHOLD, MXLRC_QUEUE_RANDOMIZE, MXLRC_LOG_LEVEL, MXLRC_LOG_FORMAT, MXLRC_LOG_FILE, MXLRC_LOG_MAX_SIZE_MB, MXLRC_LOG_MAX_FILES, MXLRC_LOG_MAX_AGE_DAYS, MXLRC_LOG_COMPRESS
+// Supported: MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, MXLRC_API_COOLDOWN, MXLRC_COOLDOWN, MXLRC_API_CIRCUIT_OPEN_DURATION, MXLRC_API_CIRCUIT_BACKOFF_BASE, MXLRC_MISS_BACKOFF_BASE_HOURS, MXLRC_MISS_BACKOFF_CAP_HOURS, MXLRC_MAX_MISS_ATTEMPTS, MXLRC_OUTPUT_DIR, MXLRC_BILINGUAL_OUTPUT, MXLRC_DB_PATH, MXLRC_SERVER_ADDR, MXLRC_WEBHOOK_API_KEY, MXLRC_SCAN_INTERVAL, MXLRC_WORK_INTERVAL, MXLRC_PROVIDER_PRIMARY, MXLRC_PROVIDERS_DISABLED, MXLRC_VERIFICATION_ENABLED, MXLRC_VERIFICATION_WHISPER_URL, MXLRC_WHISPER_URL, MXLRC_VERIFICATION_FFMPEG_PATH, MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS, MXLRC_VERIFICATION_SAMPLE_DURATION, MXLRC_VERIFICATION_MIN_CONFIDENCE, MXLRC_VERIFICATION_MIN_SIMILARITY, MXLRC_GUARD_ACCEPTED_SCRIPTS, MXLRC_GUARD_THRESHOLD, MXLRC_QUEUE_RANDOMIZE, MXLRC_LOG_LEVEL, MXLRC_LOG_FORMAT, MXLRC_LOG_FILE, MXLRC_LOG_MAX_SIZE_MB, MXLRC_LOG_MAX_FILES, MXLRC_LOG_MAX_AGE_DAYS, MXLRC_LOG_COMPRESS
 func applyEnvOverrides(cfg *Config) {
 	// Token: MUSIXMATCH_TOKEN takes precedence over MXLRC_API_TOKEN (backward compat).
 	if v := os.Getenv("MUSIXMATCH_TOKEN"); v != "" {
@@ -412,6 +426,14 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MXLRC_EMBEDDED_LYRICS"); v != "" {
 		cfg.Output.EmbeddedLyrics = v
+	}
+	if v := os.Getenv("MXLRC_BILINGUAL_OUTPUT"); v != "" {
+		bilingual, err := strconv.ParseBool(v)
+		if err != nil {
+			slog.Warn("env var is invalid; using current value", "var", "MXLRC_BILINGUAL_OUTPUT", "value", v, "current", cfg.Output.BilingualOutput) //nolint:gosec // G706: tainted env var passed as a structured slog field value (not a format string); no log-injection vector since slog escapes values
+		} else {
+			cfg.Output.BilingualOutput = bilingual
+		}
 	}
 	if v := os.Getenv("MXLRC_DB_PATH"); v != "" {
 		cfg.DB.Path = v

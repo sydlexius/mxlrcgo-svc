@@ -187,11 +187,11 @@ func New(q Queue, c Cache, fetcher musixmatch.Fetcher, writer lyrics.Writer) *Wo
 // calls this so their effect is order-independent. On the impossible New error
 // (the primary lane is always present and the mode is config-validated) the prior
 // orchestrator is kept.
-func (w *Worker) rebuildOrchestrator() {
+func (w *Worker) rebuildOrchestrator() error {
 	orch, err := orchestrator.New(w.mode, w.lanes...)
 	if err != nil {
 		slog.Error("worker: rebuild orchestrator", "error", err, "mode", w.mode)
-		return
+		return err
 	}
 	orch.SetRaceWait(w.raceWait)
 	// With more than one lane the guard governs fall-through, so wire it into
@@ -201,17 +201,23 @@ func (w *Worker) rebuildOrchestrator() {
 		orch.SetGuard(w.scriptGuard)
 	}
 	w.orch = orch
+	return nil
 }
 
 // SetProvidersMode selects the orchestrator dispatch strategy and rebuilds the
 // orchestrator. An empty value restores ordered. Validation lives in the config
-// layer; an unknown mode here keeps the prior orchestrator (rebuild logs it).
+// layer; as defense in depth, an unknown mode that fails the rebuild is rolled
+// back so w.mode never diverges from the live orchestrator (which would make every
+// later SetFallbackProviders / EnableGuard / SetRaceWait rebuild fail too).
 func (w *Worker) SetProvidersMode(mode string) {
 	if mode == "" {
 		mode = orchestrator.ModeOrdered
 	}
+	prev := w.mode
 	w.mode = mode
-	w.rebuildOrchestrator()
+	if err := w.rebuildOrchestrator(); err != nil {
+		w.mode = prev
+	}
 }
 
 // SetRaceWait overrides the parallel-mode synced-upgrade window. Non-positive
@@ -222,7 +228,9 @@ func (w *Worker) SetRaceWait(d time.Duration) {
 		return
 	}
 	w.raceWait = d
-	w.rebuildOrchestrator()
+	// The mode is unchanged (and already valid) and the primary lane is always
+	// present, so the rebuild cannot fail here; only SetProvidersMode acts on it.
+	_ = w.rebuildOrchestrator()
 }
 
 // SetCircuitOpenDuration overrides the window the worker stays quiet after
@@ -259,8 +267,10 @@ func (w *Worker) SetFallbackProviders(provs ...providers.LyricsProvider) {
 	}
 	w.lanes = lanes
 	// Rebuild over the new lane set, re-applying the configured mode, race wait, and
-	// the guard-fall-through wiring (all order-independent across the setters).
-	w.rebuildOrchestrator()
+	// the guard-fall-through wiring (all order-independent across the setters). The
+	// mode is unchanged (and already valid) and the primary lane is always present,
+	// so the rebuild cannot fail here.
+	_ = w.rebuildOrchestrator()
 }
 
 // SetProvidersVersion sets the current providers generation used to invalidate
@@ -378,7 +388,9 @@ func (w *Worker) EnableGuard(g ScriptGuard) {
 	// would screen every result twice, once in suitability and once in the worker's
 	// terminal guardReject below), preserving exactly-one Accept call per result.
 	// All setters route through rebuildOrchestrator, so their order does not matter.
-	w.rebuildOrchestrator()
+	// The mode is unchanged (and already valid) and the primary lane is always
+	// present, so the rebuild cannot fail here.
+	_ = w.rebuildOrchestrator()
 }
 
 // guardReject reports whether the script guard rejects this song. It returns

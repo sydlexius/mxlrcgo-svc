@@ -30,6 +30,10 @@ type laneResult struct {
 // lane's send never blocks after cancel; the collector discards canceled-lane
 // results and does not wait for losers to drain.
 func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (models.Song, error) {
+	if err := ctx.Err(); err != nil {
+		return models.Song{}, err
+	}
+
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -52,6 +56,11 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Parent cancellation (shutdown / request abort) beats any pending commit,
+			// including a held unsynced result and the upgrade window: never turn a
+			// canceled dispatch into a successful lyrics write.
+			return models.Song{}, ctx.Err()
 		case res := <-results:
 			pending--
 			class := ClassifyOutcome(res.err)
@@ -83,13 +92,20 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 				}
 			}
 			if pending == 0 {
+				if err := ctx.Err(); err != nil {
+					return models.Song{}, err
+				}
 				if haveHeld {
 					return heldSong, nil
 				}
 				return o.resolve(ctx, &r)
 			}
 		case <-upgrade:
-			// The window elapsed with no synced upgrade: commit the held unsynced.
+			// The window elapsed with no synced upgrade: commit the held unsynced,
+			// unless the parent was canceled in the meantime.
+			if err := ctx.Err(); err != nil {
+				return models.Song{}, err
+			}
 			return heldSong, nil
 		}
 	}

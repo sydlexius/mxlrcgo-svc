@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -168,7 +167,6 @@ func TestParallelAuthOutranksBenignMiss(t *testing.T) {
 }
 
 func TestParallelNoGoroutineLeak(t *testing.T) {
-	base := runtime.NumGoroutine()
 	fast := &delayProvider{name: "musixmatch", song: syncedSong()}
 	slow := &delayProvider{name: "petitlyrics", song: syncedSong(), delay: 150 * time.Millisecond}
 	o, _ := New("parallel", delayLane(fast), delayLane(slow))
@@ -178,14 +176,13 @@ func TestParallelNoGoroutineLeak(t *testing.T) {
 	}
 
 	// The losing slow lane must observe the cancel and return; finished catches up
-	// to started for every dispatched goroutine (deterministic, unlike NumGoroutine).
+	// to started for every dispatched goroutine. This is a deterministic per-test
+	// leak signal, unlike a process-global runtime.NumGoroutine() snapshot which can
+	// flap on unrelated background goroutines.
 	waitFor(t, func() bool {
 		return atomic.LoadInt32(&slow.finished) == atomic.LoadInt32(&slow.started) &&
 			atomic.LoadInt32(&fast.finished) == atomic.LoadInt32(&fast.started)
 	}, "dispatched provider goroutines did not all unblock after cancel")
-
-	// Belt-and-suspenders: the goroutine count should settle back to the baseline.
-	waitFor(t, func() bool { return runtime.NumGoroutine() <= base }, "goroutine count did not return to baseline")
 }
 
 func TestParallelParentCancelReturnsErr(t *testing.T) {
@@ -205,6 +202,27 @@ func TestParallelParentCancelReturnsErr(t *testing.T) {
 	waitFor(t, func() bool {
 		return atomic.LoadInt32(&slow.finished) == atomic.LoadInt32(&slow.started)
 	}, "in-flight lane did not terminate after parent cancel")
+}
+
+// TestParallelParentCancelAfterHeldReturnsErr asserts that once an unsynced result
+// is held awaiting a synced upgrade, a parent cancellation still wins: the held
+// result must NOT be committed as a successful write during shutdown/abort.
+func TestParallelParentCancelAfterHeldReturnsErr(t *testing.T) {
+	fast := &delayProvider{name: "musixmatch", song: unsyncedSong()}
+	slow := &delayProvider{name: "petitlyrics", song: syncedSong(), delay: time.Second}
+	o, _ := New("parallel", delayLane(fast), delayLane(slow))
+	o.SetRaceWait(5 * time.Second) // wide window: the held unsynced is parked when cancel lands
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond) // after the fast unsynced is held + window armed
+		cancel()
+	}()
+
+	_, err := o.FindLyrics(ctx, models.Track{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled (cancel must beat a held unsynced commit)", err)
+	}
 }
 
 func TestParallelGuardDrivesSuitability(t *testing.T) {

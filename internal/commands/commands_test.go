@@ -592,6 +592,53 @@ func TestConfigGuardGetSetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConfigProvidersModeAndRaceWaitGetSetRoundTrip(t *testing.T) {
+	cfg := config.Config{
+		Providers: config.ProvidersConfig{Mode: "parallel", RaceWaitSeconds: 3},
+	}
+	gets := map[string]string{
+		"providers.mode":              "parallel",
+		"providers.race_wait_seconds": "3",
+	}
+	for key, want := range gets {
+		got, ok := configValue(cfg, key)
+		if !ok {
+			t.Fatalf("configValue(%q) ok = false; want true", key)
+		}
+		if got != want {
+			t.Fatalf("configValue(%q) = %q; want %q", key, got, want)
+		}
+		if !slices.Contains(configKeys(), key) {
+			t.Fatalf("configKeys missing %q", key)
+		}
+	}
+
+	// Both modes are settable; an unknown mode is rejected.
+	for _, mode := range []string{"ordered", "parallel"} {
+		if err := setConfigValue(&cfg, "providers.mode", mode); err != nil {
+			t.Fatalf("setConfigValue providers.mode=%q: %v", mode, err)
+		}
+		if cfg.Providers.Mode != mode {
+			t.Fatalf("providers.mode = %q; want %q", cfg.Providers.Mode, mode)
+		}
+	}
+	if err := setConfigValue(&cfg, "providers.mode", "sequential"); err == nil {
+		t.Fatal("setConfigValue accepted an unknown providers.mode")
+	}
+
+	if err := setConfigValue(&cfg, "providers.race_wait_seconds", "5"); err != nil {
+		t.Fatalf("setConfigValue race_wait_seconds: %v", err)
+	}
+	if cfg.Providers.RaceWaitSeconds != 5 {
+		t.Fatalf("race_wait_seconds = %d; want 5", cfg.Providers.RaceWaitSeconds)
+	}
+	for _, bad := range []string{"abc", "0", "-1"} {
+		if err := setConfigValue(&cfg, "providers.race_wait_seconds", bad); err == nil {
+			t.Fatalf("setConfigValue accepted invalid providers.race_wait_seconds %q", bad)
+		}
+	}
+}
+
 func TestConfigBilingualOutputGetSetRoundTrip(t *testing.T) {
 	cfg := config.Config{
 		Output: config.OutputConfig{BilingualOutput: true},

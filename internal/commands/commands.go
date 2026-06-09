@@ -1352,6 +1352,7 @@ func configKeys() []string {
 		"providers.primary",
 		"providers.disabled",
 		"providers.mode",
+		"providers.race_wait_seconds",
 		"verification.enabled",
 		"verification.whisper_url",
 		"verification.ffmpeg_path",
@@ -1399,6 +1400,8 @@ func configValue(cfg config.Config, key string) (string, bool) {
 		return strings.Join(cfg.Providers.Disabled, ","), true
 	case "providers.mode":
 		return cfg.Providers.Mode, true
+	case "providers.race_wait_seconds":
+		return strconv.Itoa(cfg.Providers.RaceWaitSeconds), true
 	case "verification.enabled":
 		return strconv.FormatBool(cfg.Verification.Enabled), true
 	case "verification.whisper_url":
@@ -1492,10 +1495,17 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 	case "providers.disabled":
 		cfg.Providers.Disabled = splitCSV(value)
 	case "providers.mode":
-		if m := strings.ToLower(strings.TrimSpace(value)); m != "ordered" {
-			return fmt.Errorf("providers.mode must be \"ordered\" (only supported mode)")
+		m := strings.ToLower(strings.TrimSpace(value))
+		if m != "ordered" && m != "parallel" {
+			return fmt.Errorf("providers.mode must be \"ordered\" or \"parallel\"")
 		}
-		cfg.Providers.Mode = "ordered"
+		cfg.Providers.Mode = m
+	case "providers.race_wait_seconds":
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("providers.race_wait_seconds must be a positive integer (seconds)")
+		}
+		cfg.Providers.RaceWaitSeconds = n
 	case "verification.enabled":
 		v, err := strconv.ParseBool(value)
 		if err != nil {

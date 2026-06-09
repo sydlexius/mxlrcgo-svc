@@ -67,6 +67,24 @@ func TestProvidersModeDefaultsToOrdered(t *testing.T) {
 	}
 }
 
+// TestSetProvidersModeInvalidRollsBack asserts that an unknown mode (which would
+// fail the orchestrator rebuild) is rolled back, so w.mode never diverges from the
+// live orchestrator and later setters keep working.
+func TestSetProvidersModeInvalidRollsBack(t *testing.T) {
+	w := New(&fakeQueue{}, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	w.SetProvidersMode("parallel")
+	w.SetProvidersMode("sequential") // invalid: rebuild fails, must roll back
+
+	if w.mode != orchestrator.ModeParallel {
+		t.Fatalf("mode = %q; want %q (invalid mode must roll back to the prior valid mode)", w.mode, orchestrator.ModeParallel)
+	}
+	// A subsequent valid setter must still succeed (the orchestrator was not wedged).
+	w.SetFallbackProviders(providers.New(providers.PetitLyrics, &fakeFetcher{}))
+	if len(w.lanes) != 2 {
+		t.Fatalf("lanes = %d; want 2 (later setters must still work after a rejected mode)", len(w.lanes))
+	}
+}
+
 // TestRunOnceParallelSyncedPreemptsUnsynced verifies that in parallel mode a
 // faster unsynced primary result is held long enough for a slower synced fallback
 // to preempt it, so the committed (written) result is the synced one.

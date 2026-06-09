@@ -1501,9 +1501,12 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		}
 		cfg.Providers.Mode = m
 	case "providers.race_wait_seconds":
+		// Accept any integer and let config normalization clamp it: a non-positive
+		// value is the "use the default" sentinel in the config stack, so rejecting
+		// it here would make that contract unreachable from the CLI.
 		n, err := strconv.Atoi(value)
-		if err != nil || n <= 0 {
-			return fmt.Errorf("providers.race_wait_seconds must be a positive integer (seconds)")
+		if err != nil {
+			return fmt.Errorf("providers.race_wait_seconds must be an integer (seconds; non-positive uses the default)")
 		}
 		cfg.Providers.RaceWaitSeconds = n
 	case "verification.enabled":

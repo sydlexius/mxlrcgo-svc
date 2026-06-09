@@ -632,10 +632,17 @@ func TestConfigProvidersModeAndRaceWaitGetSetRoundTrip(t *testing.T) {
 	if cfg.Providers.RaceWaitSeconds != 5 {
 		t.Fatalf("race_wait_seconds = %d; want 5", cfg.Providers.RaceWaitSeconds)
 	}
-	for _, bad := range []string{"abc", "0", "-1"} {
-		if err := setConfigValue(&cfg, "providers.race_wait_seconds", bad); err == nil {
-			t.Fatalf("setConfigValue accepted invalid providers.race_wait_seconds %q", bad)
-		}
+	// Non-positive is the "use the default" sentinel in the config stack (config
+	// load clamps it), so the CLI must accept it rather than reject it.
+	if err := setConfigValue(&cfg, "providers.race_wait_seconds", "0"); err != nil {
+		t.Fatalf("setConfigValue race_wait_seconds=0: %v (non-positive must be accepted; config load clamps it)", err)
+	}
+	if cfg.Providers.RaceWaitSeconds != 0 {
+		t.Fatalf("race_wait_seconds = %d; want 0 stored raw (clamped to the default only at load)", cfg.Providers.RaceWaitSeconds)
+	}
+	// Only a non-integer is rejected.
+	if err := setConfigValue(&cfg, "providers.race_wait_seconds", "abc"); err == nil {
+		t.Fatal("setConfigValue accepted a non-integer providers.race_wait_seconds")
 	}
 }
 

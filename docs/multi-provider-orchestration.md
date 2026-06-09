@@ -202,16 +202,30 @@ only result that exists, so there is nothing per-provider to retain: last (and
 only) suitable writer wins, and that is the served blob. This is the same
 single-slot contract the cache already enforces.
 
-Changing the provider set (adding, removing, or reordering lanes) is handled by
-the reserved `work_queue.providers_version` column, not by a cache schema
-change. The mechanism: a configured providers generation is stamped onto a work
-item, and an item whose stored generation is older than the current
-configuration is treated as a cache miss and re-fetched, so previously-cached
-results from an older provider set are revalidated against the new set. This is
-exactly the "reserved seam for the future multi-source re-check sweep" the field
-was added for. Note that no code path writes `providers_version` today (the
-field is always `0`); wiring its write-and-compare is part of the orchestration
-follow-up, not this design.
+Changing the provider set (adding or removing a provider) is handled by the
+`work_queue.providers_version` column, not by a cache schema change. The
+mechanism (implemented in #175):
+
+- The active provider set (primary plus `providers.fallback_order`) is hashed
+  into a deterministic generation by `providers.Generation` - the sorted,
+  lowercased, comma-joined provider names through FNV-64a, masked to 31 bits so
+  it round-trips safely through a SQLite `INTEGER`. Sorting before hashing makes
+  the generation a function of the provider *set*, so reordering alone does not
+  change it; adding or removing a provider does.
+- `DBQueue.Enqueue` stamps the current generation onto each new `work_queue` row
+  (`DBQueue.SetProvidersVersion`, set once at startup). The stamp is written only
+  on a fresh insert; the `ON CONFLICT` refresh and the `Defer` / `RecheckDeferred`
+  paths leave it untouched, so an item keeps the generation it was first enqueued
+  under.
+- When the worker dequeues an item whose stored `providers_version` differs from
+  the worker's configured generation (`Worker.SetProvidersVersion`), it bypasses
+  the cache lookup and re-fetches against the current lanes, so a result cached
+  under an older provider set is revalidated rather than served stale. A worker
+  generation of `0` (no providers configured) honors the cache unconditionally,
+  preserving single-provider behavior.
+
+This is exactly the "reserved seam for the future multi-source re-check sweep"
+the field was added for, with no `lyrics_cache` schema change.
 
 **When a per-provider cache column would become necessary (explicit future
 work, not added now):** add a `provider` column to `lyrics_cache` (making the

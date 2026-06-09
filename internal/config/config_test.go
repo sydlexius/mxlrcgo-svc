@@ -1192,3 +1192,43 @@ func TestProvidersModeEnvOverrideAndValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestProvidersFallbackOrder(t *testing.T) {
+	t.Run("default is empty", func(t *testing.T) {
+		isolateEnv(t)
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(cfg.Providers.FallbackOrder) != 0 {
+			t.Fatalf("default fallback_order = %v; want empty", cfg.Providers.FallbackOrder)
+		}
+	})
+
+	t.Run("env override normalizes and dedups", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_PROVIDERS_FALLBACK_ORDER", "PetitLyrics, petitlyrics , musixmatch")
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		got := cfg.Providers.FallbackOrder
+		want := []string{"petitlyrics", "musixmatch"}
+		if len(got) != len(want) {
+			t.Fatalf("fallback_order = %v; want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("fallback_order = %v; want %v", got, want)
+			}
+		}
+	})
+
+	t.Run("unknown provider is rejected", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_PROVIDERS_FALLBACK_ORDER", "petitlyrics, bogus")
+		if _, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml")); err == nil {
+			t.Fatal("Load with an unknown fallback provider returned nil error; want a rejection")
+		}
+	})
+}

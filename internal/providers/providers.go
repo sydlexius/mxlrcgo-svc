@@ -68,6 +68,22 @@ func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// Known returns the built-in provider names in their canonical form.
+func Known() []string {
+	return []string{Musixmatch, PetitLyrics}
+}
+
+// IsKnown reports whether name (case-insensitively) matches a built-in provider.
+func IsKnown(name string) bool {
+	name = NormalizeName(name)
+	for _, k := range Known() {
+		if k == name {
+			return true
+		}
+	}
+	return false
+}
+
 func providerDisabled(name string, disabled []string) bool {
 	name = NormalizeName(name)
 	for _, v := range disabled {

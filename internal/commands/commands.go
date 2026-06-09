@@ -629,6 +629,16 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 	w := worker.New(workQ, cache.New(sqlDB), fetcher, writer)
 	w.SetCircuitOpenDuration(time.Duration(cfg.API.CircuitOpenDuration) * time.Second)
 	w.SetCircuitBackoff(time.Duration(cfg.API.CircuitBackoffBase)*time.Second, time.Duration(cfg.API.CircuitOpenDuration)*time.Second)
+	// Register fallback lanes (each with its own breaker) and stamp the active
+	// provider set's generation onto both the queue (write-on-enqueue) and the
+	// worker (compare-on-lookup) so a provider-set change invalidates stale cached
+	// results. Fallbacks are configured after the circuit setters so the lanes
+	// inherit the configured window via the worker's stored parameters.
+	fallbacks := fallbackProviders(cfg, token, fetcher.Name(), newFetcher)
+	w.SetFallbackProviders(fallbacks...)
+	gen := providerGeneration(fetcher.Name(), fallbacks)
+	workQ.SetProvidersVersion(gen)
+	w.SetProvidersVersion(gen)
 	w.SetMissBackoff(time.Duration(cfg.API.MissBackoffBaseHours)*time.Hour, time.Duration(cfg.API.MissBackoffCapHours)*time.Hour)
 	w.SetMaxMissAttempts(cfg.API.MaxMissAttempts)
 	configureWorkerVerification(w, cfg, verifier)
@@ -741,25 +751,34 @@ func normalizeWorkerInterval(interval time.Duration) time.Duration {
 	return interval
 }
 
-func selectedProvider(cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) (providers.LyricsProvider, error) {
-	fetcher := newFetcher(token)
-	// Apply the per-request pacer floor to the concrete Musixmatch client.
-	// Test-injected fake fetchers do not satisfy *musixmatch.Client so this
-	// is a no-op for them, preserving the injection seam unchanged.
-	if mc, ok := fetcher.(*musixmatch.Client); ok {
-		mc.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
+// buildProvider constructs the named provider's adapter with the per-request
+// pacing floor applied, or nil for an unknown name. Test-injected fake fetchers
+// do not satisfy *musixmatch.Client so the pacer is a no-op for them, preserving
+// the injection seam. Petit Lyrics needs no token; it gets the same pacing floor
+// as Musixmatch for now (independent per-provider tuning is future work).
+func buildProvider(name string, cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) providers.LyricsProvider {
+	switch providers.NormalizeName(name) {
+	case providers.Musixmatch:
+		fetcher := newFetcher(token)
+		if mc, ok := fetcher.(*musixmatch.Client); ok {
+			mc.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
+		}
+		return providers.New(providers.Musixmatch, fetcher)
+	case providers.PetitLyrics:
+		petit := petitlyrics.NewClient()
+		petit.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
+		return providers.New(providers.PetitLyrics, petit)
+	default:
+		return nil
 	}
-	// Petit Lyrics needs no token. It gets the same per-request pacing floor as
-	// Musixmatch for now; independent per-provider rate-limit tuning is future
-	// work (the upstreams' limits are independent). The selected provider's
-	// results are screened by the worker's language guard like any other.
-	petit := petitlyrics.NewClient()
-	petit.WithMinInterval(time.Duration(cfg.API.Cooldown) * time.Second)
+}
+
+func selectedProvider(cfg config.Config, token string, newFetcher func(string) musixmatch.Fetcher) (providers.LyricsProvider, error) {
 	p, err := providers.Select(
 		cfg.Providers.Primary,
 		cfg.Providers.Disabled,
-		providers.New(providers.Musixmatch, fetcher),
-		providers.New(providers.PetitLyrics, petit),
+		buildProvider(providers.Musixmatch, cfg, token, newFetcher),
+		buildProvider(providers.PetitLyrics, cfg, token, newFetcher),
 	)
 	if err != nil {
 		return nil, err
@@ -770,6 +789,53 @@ func selectedProvider(cfg config.Config, token string, newFetcher func(string) m
 		return nil, fmt.Errorf("no API token provided for the musixmatch provider: use --token, MUSIXMATCH_TOKEN, MXLRC_API_TOKEN, or config file")
 	}
 	return p, nil
+}
+
+// fallbackProviders builds the ordered fallback lanes from cfg.Providers.
+// FallbackOrder, skipping any entry that is disabled, duplicates the primary, or
+// is a Musixmatch lane with no token (which would only emit 401s). It returns the
+// providers in configured priority order.
+func fallbackProviders(cfg config.Config, token, primaryName string, newFetcher func(string) musixmatch.Fetcher) []providers.LyricsProvider {
+	primaryName = providers.NormalizeName(primaryName)
+	var out []providers.LyricsProvider
+	for _, name := range cfg.Providers.FallbackOrder {
+		n := providers.NormalizeName(name)
+		if n == primaryName {
+			continue // already the primary lane
+		}
+		if providerDisabledIn(n, cfg.Providers.Disabled) {
+			continue
+		}
+		if n == providers.Musixmatch && strings.TrimSpace(token) == "" {
+			slog.Warn("skipping musixmatch fallback lane: no API token configured", "provider", n)
+			continue
+		}
+		if p := buildProvider(n, cfg, token, newFetcher); p != nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// providerGeneration is the cache-invalidation generation for the active lane
+// set (primary + fallbacks), computed over their provider names.
+func providerGeneration(primaryName string, fallbacks []providers.LyricsProvider) int {
+	names := make([]string, 0, len(fallbacks)+1)
+	names = append(names, primaryName)
+	for _, p := range fallbacks {
+		names = append(names, p.Name())
+	}
+	return providers.Generation(names)
+}
+
+func providerDisabledIn(name string, disabled []string) bool {
+	name = providers.NormalizeName(name)
+	for _, d := range disabled {
+		if providers.NormalizeName(d) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func newVerifier(cfg config.Config) (verification.Verifier, error) {

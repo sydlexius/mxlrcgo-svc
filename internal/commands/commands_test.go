@@ -18,6 +18,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/lyrics"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/musixmatch"
+	"github.com/sydlexius/mxlrcgo-svc/internal/providers"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scanner"
@@ -68,6 +69,68 @@ func TestSelectedProviderPetitLyrics(t *testing.T) {
 	}
 	if got.Name() != "petitlyrics" {
 		t.Fatalf("provider name = %q; want petitlyrics", got.Name())
+	}
+}
+
+func names(ps []providers.LyricsProvider) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.Name()
+	}
+	return out
+}
+
+func TestFallbackProviders(t *testing.T) {
+	newFetcher := func(string) musixmatch.Fetcher { return fakeFetcher{} }
+
+	t.Run("builds configured order, skipping the primary", func(t *testing.T) {
+		cfg := config.Config{Providers: config.ProvidersConfig{
+			Primary:       "musixmatch",
+			FallbackOrder: []string{"musixmatch", "petitlyrics"},
+		}}
+		got := fallbackProviders(cfg, "token", "musixmatch", newFetcher)
+		if len(got) != 1 || got[0].Name() != "petitlyrics" {
+			t.Fatalf("fallbacks = %v; want [petitlyrics] (primary excluded)", names(got))
+		}
+	})
+
+	t.Run("excludes disabled providers", func(t *testing.T) {
+		cfg := config.Config{Providers: config.ProvidersConfig{
+			Primary:       "musixmatch",
+			FallbackOrder: []string{"petitlyrics"},
+			Disabled:      []string{"petitlyrics"},
+		}}
+		if got := fallbackProviders(cfg, "token", "musixmatch", newFetcher); len(got) != 0 {
+			t.Fatalf("fallbacks = %v; want empty (petitlyrics disabled)", names(got))
+		}
+	})
+
+	t.Run("skips a musixmatch fallback without a token", func(t *testing.T) {
+		cfg := config.Config{Providers: config.ProvidersConfig{
+			Primary:       "petitlyrics",
+			FallbackOrder: []string{"musixmatch"},
+		}}
+		if got := fallbackProviders(cfg, "  ", "petitlyrics", newFetcher); len(got) != 0 {
+			t.Fatalf("fallbacks = %v; want empty (no token for musixmatch fallback)", names(got))
+		}
+	})
+}
+
+func TestProviderGeneration(t *testing.T) {
+	newFetcher := func(string) musixmatch.Fetcher { return fakeFetcher{} }
+	cfg := config.Config{Providers: config.ProvidersConfig{
+		Primary:       "musixmatch",
+		FallbackOrder: []string{"petitlyrics"},
+	}}
+	fallbacks := fallbackProviders(cfg, "token", "musixmatch", newFetcher)
+	withFallback := providerGeneration("musixmatch", fallbacks)
+	soloPrimary := providerGeneration("musixmatch", nil)
+	if withFallback == soloPrimary {
+		t.Fatal("generation must change when the provider set changes (adding petitlyrics)")
+	}
+	// The generation is a function of the set, so it is stable across calls.
+	if again := providerGeneration("musixmatch", fallbacks); again != withFallback {
+		t.Fatalf("generation not stable: %d vs %d", withFallback, again)
 	}
 }
 

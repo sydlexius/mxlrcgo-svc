@@ -127,6 +127,25 @@ disabled = []
 # observable effect. Override: MXLRC_PROVIDERS_MODE. Default "ordered".
 mode = "ordered"
 
+# Fallback provider order: providers consulted, in order, AFTER `primary` when
+# the primary yields no suitable result (a miss, an unsuitable result, or a
+# provider error). Each lane runs with its own independent circuit breaker, so a
+# throttled primary never pauses a fallback. Each name must be a known provider
+# ("musixmatch", "petitlyrics"); an unknown name is rejected at load. Empty (the
+# default) means no fallback - only the primary lane runs, preserving
+# single-provider behavior. A musixmatch fallback with no api.token is skipped.
+# Example (try Musixmatch first, then Petit Lyrics for the Japanese catalog):
+#   fallback_order = ["petitlyrics"]
+# Override: MXLRC_PROVIDERS_FALLBACK_ORDER (comma-separated). Default [].
+fallback_order = []
+
+# Cache invalidation across provider-set changes: the active provider set
+# (primary + fallback_order) is hashed into a generation stamped onto each
+# queued item. When the set changes (a provider added or removed), items
+# enqueued under the old set are re-fetched against the new set rather than
+# served from a now-stale cache. This needs no configuration and no database
+# migration; it is documented here for operators changing the provider set.
+
 [verification]
 # Optional STT verification for low-confidence scanned audio.
 enabled = false

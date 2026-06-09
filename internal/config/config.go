@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/sydlexius/mxlrcgo-svc/internal/providers"
 )
 
 // Config holds all application configuration.
@@ -156,6 +158,12 @@ type ProvidersConfig struct {
 	// docs/multi-provider-orchestration.md and not yet built. Default "ordered".
 	// Override: MXLRC_PROVIDERS_MODE.
 	Mode string `toml:"mode"`
+	// FallbackOrder lists provider names consulted, in order, AFTER the primary
+	// when the primary yields no suitable result (ordered-fallback dispatch). Each
+	// name must be a known provider; unknown names are rejected at load. Empty (the
+	// default) means no fallback - only the primary lane runs, preserving
+	// single-provider behavior. Override: MXLRC_PROVIDERS_FALLBACK_ORDER (CSV).
+	FallbackOrder []string `toml:"fallback_order"`
 }
 
 // providersModeDefault is the only supported dispatch mode today.
@@ -354,6 +362,9 @@ func Load(path string) (Config, error) {
 	if err := normalizeProvidersMode(&cfg); err != nil {
 		return cfg, err
 	}
+	if err := normalizeProvidersFallback(&cfg); err != nil {
+		return cfg, err
+	}
 	clampCircuitOpenDuration(&cfg)
 	// Must run AFTER clampCircuitOpenDuration: the base is clamped against the
 	// final (clamped) cap value.
@@ -483,6 +494,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MXLRC_PROVIDERS_MODE"); v != "" {
 		cfg.Providers.Mode = v
+	}
+	if v := os.Getenv("MXLRC_PROVIDERS_FALLBACK_ORDER"); v != "" {
+		cfg.Providers.FallbackOrder = splitCSV(v)
 	}
 	if v := os.Getenv("MXLRC_VERIFICATION_ENABLED"); v != "" {
 		enabled, err := strconv.ParseBool(v)
@@ -629,6 +643,34 @@ func normalizeProvidersMode(cfg *Config) error {
 		return fmt.Errorf("config: unsupported providers.mode %q (only %q is supported)", cfg.Providers.Mode, providersModeDefault)
 	}
 	cfg.Providers.Mode = v
+	return nil
+}
+
+// normalizeProvidersFallback lowercases, trims, drops blanks, and de-duplicates
+// the fallback provider list, rejecting any unknown provider name so a typo
+// fails loudly at load rather than silently dropping a lane. Order is preserved
+// (it is the fallback priority). An empty list is valid (no fallback).
+func normalizeProvidersFallback(cfg *Config) error {
+	if len(cfg.Providers.FallbackOrder) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(cfg.Providers.FallbackOrder))
+	normalized := make([]string, 0, len(cfg.Providers.FallbackOrder))
+	for _, name := range cfg.Providers.FallbackOrder {
+		n := providers.NormalizeName(name)
+		if n == "" {
+			continue
+		}
+		if !providers.IsKnown(n) {
+			return fmt.Errorf("config: unknown providers.fallback_order entry %q (known providers: %s)", name, strings.Join(providers.Known(), ", "))
+		}
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		normalized = append(normalized, n)
+	}
+	cfg.Providers.FallbackOrder = normalized
 	return nil
 }
 

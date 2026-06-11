@@ -117,6 +117,17 @@ docker run -d \
 
 See the [User Guide](USER_GUIDE.md#docker) for the full Docker, Compose, and Unraid setup.
 
+### Windows
+
+Download the `.zip` from the [releases page](https://github.com/sydlexius/mxlrcgo-svc/releases), extract `mxlrcgo-svc.exe`, and add it to your `PATH`. For a quick test:
+
+```cmd
+set MUSIXMATCH_TOKEN=YOUR_TOKEN
+mxlrcgo-svc.exe serve --listen 127.0.0.1:3876
+```
+
+For an always-on background service, use NSSM to wrap the binary as a Windows service. See the [User Guide](USER_GUIDE.md#windows) for the full NSSM setup, environment variable configuration, and data paths.
+
 ## Verify
 
 Confirm the build and that work is flowing.

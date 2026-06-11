@@ -6,9 +6,22 @@ and what does not.
 ## Musixmatch (default provider)
 
 **What is sent.** Each lyrics lookup sends an HTTPS request to the Musixmatch
-API. The request includes the track name, artist name, and (where available)
-album name as query parameters. Your API token (`usertoken`) is also transmitted
-as a query parameter in the URL.
+API. The request includes the following as URL query parameters:
+
+- Track name, artist name, and album name (always present; may be empty strings
+  if the audio file lacks those tags).
+- Your API token (`usertoken`).
+- Fixed application parameters (`app_id`, `format`, `namespace`,
+  `subtitle_format`) that identify the client type; these contain no personal
+  data.
+- Recording-level identifiers, sent only when available from the audio file's
+  tags, to help Musixmatch match the exact recording rather than a cover or
+  alternate version:
+  - Track duration in seconds (`q_duration`) - sent when the file's tag
+    reports a non-zero duration.
+  - Recording ISRC (`track_isrc`) - sent when the file carries an ISRC tag.
+  - Spotify track ID (`track_spotify_id`) - sent when the file carries a
+    Spotify ID tag.
 
 **Credentials scope.** The Musixmatch token is read from the CLI flag, the
 `MUSIXMATCH_TOKEN` environment variable, or the TOML config file, in that order
@@ -36,13 +49,16 @@ other than the lyrics providers listed above.
 
 ## Summary
 
-| Data                         | Destination          |
-|------------------------------|----------------------|
-| Track name, artist name      | Active lyrics provider API |
-| Album name (when available)  | Musixmatch API only  |
-| Musixmatch token             | Musixmatch API only  |
-| Lookup results               | Local SQLite cache   |
-| Telemetry / analytics        | Not collected        |
+| Data                                      | Destination                |
+|-------------------------------------------|----------------------------|
+| Track name, artist name                   | Active lyrics provider API |
+| Album name                                | Musixmatch API only        |
+| Track duration (when tag present)         | Musixmatch API only        |
+| Recording ISRC (when tag present)         | Musixmatch API only        |
+| Spotify track ID (when tag present)       | Musixmatch API only        |
+| Musixmatch token                          | Musixmatch API only        |
+| Lookup results                            | Local SQLite cache         |
+| Telemetry / analytics                     | Not collected              |
 
 ## Cross-references
 

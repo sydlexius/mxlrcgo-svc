@@ -79,6 +79,11 @@ A Musixmatch API token is required. Supply it via the `--token` CLI flag, the `M
 - [Spicetify Lyrics Plus](https://github.com/spicetify/spicetify-cli/tree/master/CustomApps/lyrics-plus)
 - Forked from [fashni/mxlrc-go](https://github.com/fashni/mxlrc-go).
 
+## Legal
+
+- [Privacy Policy](https://sydlexius.github.io/mxlrcgo-svc/privacy-policy/) - what data leaves your machine during a lyrics lookup and what does not.
+- [Code Signing Policy](https://sydlexius.github.io/mxlrcgo-svc/code-signing-policy/) - SignPath attribution, team roles, and release approval process.
+
 ## License
 
 [GPL-3.0](LICENSE). This project is a fork of [fashni/mxlrc-go](https://github.com/fashni/mxlrc-go), which is MIT-licensed; the original MIT copyright and permission notice are retained in [NOTICE](NOTICE).

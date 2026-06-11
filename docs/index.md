@@ -20,3 +20,8 @@ New here? Start with the [Getting Started](GETTING_STARTED.md) guide - it picks 
 - [CLI Reference](CLI_REFERENCE.md) - the full usage text, every subcommand and flag, `--version` output, and the library/key-management commands.
 - [Configuration](CONFIGURATION.md) - the complete environment-variable table, the TOML config keys, token precedence, and XDG path defaults.
 - [Developer Guide](DEVELOPER.md) - development setup, make targets, the quality gate, contributing notes, and design decisions.
+
+## Legal
+
+- [Privacy Policy](privacy-policy.md) - what data leaves your machine during a lyrics lookup and what does not.
+- [Code Signing Policy](code-signing-policy.md) - SignPath attribution, team roles, and release approval process.

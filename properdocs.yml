@@ -83,3 +83,6 @@ nav:
       - Overview: DEVELOPER.md
       - Multilingual Output Policy: multilingual-output-policy.md
       - Multi-Provider Orchestration: multi-provider-orchestration.md
+  - Legal:
+      - Privacy Policy: privacy-policy.md
+      - Code Signing Policy: code-signing-policy.md

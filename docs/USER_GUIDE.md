@@ -100,6 +100,98 @@ docker exec mxlrcgo-svc mxlrcgo-svc scan
 
 If your music instead lives in several separate top-level shares, map their common parent once, or add one **Path** mapping per share beneath `/data/media` (for example `/mnt/user/<share>` to `/data/media/<share>`) and register each with `library add`. Lyrics are written next to each audio file, so libraries do not need a shared output root; set `MXLRC_OUTPUT_DIR` only for the webhook metadata-fallback case (step 3 under [Path resolution](#path-resolution-dockerunraid)).
 
+## Windows
+
+Download the signed `.zip` archive for `windows/amd64` from the [GitHub releases page](https://github.com/sydlexius/mxlrcgo-svc/releases). Extract `mxlrcgo-svc.exe` to one of:
+
+- **`%LOCALAPPDATA%\mxlrcgo-svc\`** - user-mode install; no administrator rights required.
+- **`C:\Program Files\mxlrcgo-svc\`** - system-wide install; requires administrator rights.
+
+Add the chosen directory to your `PATH` so `mxlrcgo-svc` is reachable from any shell.
+
+**Manual run.** To start the server from a terminal (useful for initial testing):
+
+```cmd
+set MUSIXMATCH_TOKEN=YOUR_TOKEN
+set MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key
+mxlrcgo-svc serve --listen 127.0.0.1:3876
+```
+
+Or use a config file to keep credentials out of the shell environment:
+
+```cmd
+mxlrcgo-svc serve --config C:\path\to\config.toml
+```
+
+### NSSM service installation
+
+[NSSM (the Non-Sucking Service Manager)](https://nssm.cc) wraps any executable as a Windows service with automatic restart, reliable start/stop, and log capture. Download a release build from [nssm.cc](https://nssm.cc/download) and place `nssm.exe` somewhere on your `PATH`.
+
+**Install the service.** Run the following from an elevated (Administrator) Command Prompt:
+
+```cmd
+nssm install mxlrcgo-svc
+```
+
+NSSM opens a GUI. Fill in the tabs:
+
+- **Application tab:**
+  - *Path*: full path to `mxlrcgo-svc.exe`, for example `C:\Program Files\mxlrcgo-svc\mxlrcgo-svc.exe`
+  - *Arguments*: `serve --listen 0.0.0.0:3876` (or `serve --config C:\path\to\config.toml` if you use a config file)
+  - *Startup directory*: the directory containing `mxlrcgo-svc.exe`
+
+- **Environment tab.** Add one variable per line:
+
+  ```
+  MUSIXMATCH_TOKEN=YOUR_TOKEN
+  MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key
+  MXLRC_DB_PATH=C:\ProgramData\mxlrcgo-svc\mxlrcgo.db
+  ```
+
+  Set `MXLRC_DB_PATH` explicitly so the database lives in a known, writable location rather than depending on the service account's XDG defaults (see [Data location](#data-location) below).
+
+- **I/O tab.** Set *Stdout* and *Stderr* to a log file, for example `C:\ProgramData\mxlrcgo-svc\logs\mxlrcgo-svc.log`. NSSM rotates these automatically.
+
+Click *Install service*, then start it:
+
+```cmd
+nssm start mxlrcgo-svc
+```
+
+**Manage the service:**
+
+```cmd
+nssm start mxlrcgo-svc
+nssm stop mxlrcgo-svc
+nssm restart mxlrcgo-svc
+nssm status mxlrcgo-svc
+nssm remove mxlrcgo-svc confirm   # uninstall
+```
+
+To update the configuration after installation, run `nssm edit mxlrcgo-svc` from an elevated prompt.
+
+### Data location
+
+Without an explicit `MXLRC_DB_PATH`, `mxlrcgo-svc` resolves storage paths via XDG base directories. On Windows these defaults resolve to:
+
+| Item | Default path |
+|------|-------------|
+| Config file | `C:\Users\<user>\.config\mxlrcgo-svc\config.toml` |
+| Database | `C:\Users\<user>\.local\share\mxlrcgo-svc\mxlrcgo.db` |
+
+A service account resolves these under its own profile, which may not be immediately obvious. Set `MXLRC_DB_PATH` (and `--config`) explicitly in the NSSM environment tab to put data in a known, persistent location (for example `C:\ProgramData\mxlrcgo-svc\`).
+
+Removing or uninstalling the NSSM service does **not** delete the database or config file. Remove them manually for a clean uninstall.
+
+### SmartScreen note
+
+Even signed binaries can trigger the "Windows protected your PC" prompt on first launch when the executable's download reputation is too low. If you see this:
+
+1. Click **More info**.
+2. Click **Run anyway**.
+
+This prompt should not appear again after the first run. See [issue #183](https://github.com/sydlexius/mxlrcgo-svc/issues/183) for background on code signing.
+
 ## Filesystem watcher (optional, low-latency scans)
 
 By default, `serve` only scans on the scheduler's tick (`--scan-interval`, default 900s), so a new track dropped into the library waits up to that interval before lyrics are fetched. An optional filesystem watcher reacts within seconds for the common single-host case. It is disabled by default and configured entirely through environment variables:

@@ -29,6 +29,7 @@ type HTTPDetector struct {
 	instrumentalClasses []string
 	ffmpegPath          string
 	ionicePath          string // empty when ionice is not available on this platform
+	nicePath            string // empty when nice is not available on this platform
 	httpClient          *http.Client
 	cooldown            time.Duration
 	mu                  sync.Mutex
@@ -65,10 +66,12 @@ func NewHTTPDetector(classifierURL string, sampleDurationSeconds int, minConfide
 	if cooldownSeconds < 0 {
 		cooldownSeconds = 0
 	}
-	// ionice is Linux-specific (I/O scheduler class control). Use it when
-	// available; skip silently on platforms that lack it (e.g. macOS in
-	// development). nice is available on all POSIX platforms.
+	// ionice is Linux-specific (I/O scheduler class control). nice is POSIX but
+	// not guaranteed to be installed (e.g. a stripped container, or Windows).
+	// Resolve both up front; an empty path means the wrapper is skipped silently
+	// and ffmpeg runs without that priority adjustment.
 	ionicePath, _ := exec.LookPath("ionice")
+	nicePath, _ := exec.LookPath("nice")
 	return &HTTPDetector{
 		baseURL:             strings.TrimRight(classifierURL, "/"),
 		sampleDuration:      sampleDurationSeconds,
@@ -76,6 +79,7 @@ func NewHTTPDetector(classifierURL string, sampleDurationSeconds int, minConfide
 		instrumentalClasses: classes,
 		ffmpegPath:          resolvedFFmpegPath,
 		ionicePath:          ionicePath,
+		nicePath:            nicePath,
 		httpClient:          &http.Client{Timeout: 3 * time.Minute},
 		cooldown:            time.Duration(cooldownSeconds) * time.Second,
 	}, nil
@@ -153,20 +157,17 @@ func (d *HTTPDetector) sample(ctx context.Context, audioPath string) (_ string, 
 	// Run ffmpeg at the lowest CPU and I/O scheduling priority so inference
 	// sampling does not contend with foreground lyrics-fetching work. This
 	// mirrors the maintainer's hard requirement: nice -n 19 / ionice -c3.
-	// ionice is Linux-specific; when absent (e.g. macOS in development) it is
-	// skipped and only nice is applied. Both are best-effort: the hard
-	// enforcement is the container-level cpu_weight cap in production.
-	var cmd *exec.Cmd
+	// Both wrappers are optional: nice and ionice are resolved via LookPath at
+	// construction and skipped silently when absent (e.g. ionice on macOS, or
+	// either in a stripped container), degrading to ffmpeg run directly. They
+	// are best-effort: the hard enforcement is the container-level cpu_weight
+	// cap in production.
+	//
+	// The command is layered inside-out: ffmpeg is the base, wrapped by ionice
+	// (if available), then by nice (if available).
 	ffmpegArgs := ffmpegDetectSampleArgs(audioPath, samplePath, d.sampleDuration)
-	if d.ionicePath != "" {
-		// nice -n 19 ionice -c3 ffmpeg [args...]
-		niceArgs := append([]string{"-n", "19", d.ionicePath, "-c3", d.ffmpegPath}, ffmpegArgs...) //nolint:gosec // ffmpeg and ionice paths are configured and validated; audio path is a scanned user file
-		cmd = exec.CommandContext(ctx, "nice", niceArgs...)                                        //nolint:gosec // nice is a system utility; all paths are validated; audio path is a scanned user file
-	} else {
-		// nice -n 19 ffmpeg [args...]
-		niceArgs := append([]string{"-n", "19", d.ffmpegPath}, ffmpegArgs...) //nolint:gosec // ffmpeg path is configured and validated; audio path is a scanned user file
-		cmd = exec.CommandContext(ctx, "nice", niceArgs...)                   //nolint:gosec // nice is a system utility; ffmpeg path is validated; audio path is a scanned user file
-	}
+	prog, args := wrapWithPriority(d.nicePath, d.ionicePath, d.ffmpegPath, ffmpegArgs)
+	cmd := exec.CommandContext(ctx, prog, args...) //nolint:gosec // prog is ffmpeg/nice/ionice, all resolved via LookPath at construction; audio path is a scanned user file
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -175,6 +176,27 @@ func (d *HTTPDetector) sample(ctx context.Context, audioPath string) (_ string, 
 		return "", fmt.Errorf("detector: sample audio with ffmpeg: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return samplePath, nil
+}
+
+// wrapWithPriority layers the optional nice and ionice scheduling wrappers
+// around the ffmpeg invocation. nicePath and ionicePath are empty when the
+// respective utility is unavailable, in which case that wrapper is skipped.
+// The wrapping is inside-out: ffmpeg is the base, wrapped by ionice (if
+// present), then by nice (if present). With both empty it returns ffmpeg run
+// directly.
+func wrapWithPriority(nicePath, ionicePath, ffmpegPath string, ffmpegArgs []string) (prog string, args []string) {
+	prog, args = ffmpegPath, ffmpegArgs
+	if ionicePath != "" {
+		// ionice -c3 <prog> [args...]
+		args = append([]string{"-c3", prog}, args...)
+		prog = ionicePath
+	}
+	if nicePath != "" {
+		// nice -n 19 <prog> [args...]
+		args = append([]string{"-n", "19", prog}, args...)
+		prog = nicePath
+	}
+	return prog, args
 }
 
 func ffmpegDetectSampleArgs(audioPath, samplePath string, durationSeconds int) []string {

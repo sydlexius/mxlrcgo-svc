@@ -105,8 +105,7 @@ type Worker struct {
 	// instrumental tracks via an external AudioSet classifier sidecar. It is
 	// optional (nil means disabled) and errors from it are non-fatal (the miss
 	// path continues normally). Enabled via EnableAudioDetector.
-	audioDetector       detector.Detector
-	detectMinConfidence float64
+	audioDetector detector.Detector
 	// scriptGuard, when non-nil and Enabled, rejects fetched lyrics whose script
 	// mix falls outside the configured allowlist. Named scriptGuard (not guard)
 	// to avoid colliding with the guardReject helper. Default nil (no guard).
@@ -389,11 +388,10 @@ func (w *Worker) EnableVerification(verifier verification.Verifier, belowConfide
 // EnableAudioDetector configures the optional audio-based instrumental detector.
 // When enabled, the detector is invoked on provider misses (no lyrics found) to
 // determine whether the track is instrumental. A nil detector disables the feature.
-func (w *Worker) EnableAudioDetector(d detector.Detector, minConfidence float64) {
+// The confidence threshold is owned by the detector itself (see NewHTTPDetector),
+// so the worker keeps no copy of it.
+func (w *Worker) EnableAudioDetector(d detector.Detector) {
 	w.audioDetector = d
-	if minConfidence > 0 && minConfidence <= 1 {
-		w.detectMinConfidence = minConfidence
-	}
 }
 
 // EnableGuard configures the language/script guard used to reject lyric

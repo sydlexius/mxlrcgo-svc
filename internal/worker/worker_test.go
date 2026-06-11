@@ -1802,7 +1802,7 @@ func TestRunOnceDetectorInstrumentalWritesMarkerAndCompletes(t *testing.T) {
 	det := &fakeDetector{instrumental: true}
 
 	w := New(q, c, fetcher, writer)
-	w.EnableAudioDetector(det, 0.90)
+	w.EnableAudioDetector(det)
 
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -1859,7 +1859,7 @@ func TestRunOnceDetectorReturnsFalseDefersNormally(t *testing.T) {
 	det := &fakeDetector{instrumental: false}
 
 	w := New(q, c, fetcher, writer)
-	w.EnableAudioDetector(det, 0.90)
+	w.EnableAudioDetector(det)
 
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -1903,7 +1903,7 @@ func TestRunOnceDetectorErrorTreatsAsMiss(t *testing.T) {
 	det := &fakeDetector{err: errors.New("sidecar timeout")}
 
 	w := New(q, c, fetcher, writer)
-	w.EnableAudioDetector(det, 0.90)
+	w.EnableAudioDetector(det)
 
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -1944,7 +1944,7 @@ func TestRunOnceDetectorDisabledWhenNilSourcePath(t *testing.T) {
 	det := &fakeDetector{instrumental: true} // would produce instrumental if called
 
 	w := New(q, c, fetcher, writer)
-	w.EnableAudioDetector(det, 0.90)
+	w.EnableAudioDetector(det)
 
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -1980,7 +1980,7 @@ func TestRunOnceDetectorInstrumentalWriteErrorDefersAsMiss(t *testing.T) {
 	det := &fakeDetector{instrumental: true}
 
 	w := New(q, c, fetcher, writer)
-	w.EnableAudioDetector(det, 0.90)
+	w.EnableAudioDetector(det)
 
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -1996,26 +1996,6 @@ func TestRunOnceDetectorInstrumentalWriteErrorDefersAsMiss(t *testing.T) {
 	// consecutiveFailures must be 0 (write error in instrumental path is non-fatal).
 	if w.consecutiveFailures != 0 {
 		t.Fatalf("consecutiveFailures = %d; want 0", w.consecutiveFailures)
-	}
-}
-
-// TestEnableAudioDetectorConfidenceOutOfRangeIgnored verifies that values
-// outside (0,1] for minConfidence in EnableAudioDetector are ignored (leaving
-// the field at its zero value rather than clamping to an invalid threshold).
-func TestEnableAudioDetectorConfidenceOutOfRangeIgnored(t *testing.T) {
-	w := New(&fakeQueue{}, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
-	det := &fakeDetector{}
-	w.EnableAudioDetector(det, 0) // zero: invalid, must not set
-	if w.detectMinConfidence != 0 {
-		t.Fatalf("detectMinConfidence = %v; want 0 (zero not in (0,1])", w.detectMinConfidence)
-	}
-	w.EnableAudioDetector(det, 1.5) // above 1: invalid, must not set
-	if w.detectMinConfidence != 0 {
-		t.Fatalf("detectMinConfidence = %v; want 0 (1.5 not in (0,1])", w.detectMinConfidence)
-	}
-	w.EnableAudioDetector(det, 0.85) // valid
-	if w.detectMinConfidence != 0.85 {
-		t.Fatalf("detectMinConfidence = %v; want 0.85", w.detectMinConfidence)
 	}
 }
 
@@ -2041,7 +2021,7 @@ func TestRunOnceDetectorNotCalledOnSuccess(t *testing.T) {
 	det := &fakeDetector{instrumental: true} // must never be called
 
 	w := New(q, c, fetcher, writer)
-	w.EnableAudioDetector(det, 0.90)
+	w.EnableAudioDetector(det)
 
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)

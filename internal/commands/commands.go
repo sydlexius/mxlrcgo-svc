@@ -660,7 +660,7 @@ func runServe(ctx context.Context, args ServeCmd, newFetcher func(string) musixm
 		slog.Error("failed to configure instrumental detector", "error", err)
 		return 1
 	}
-	configureWorkerAudioDetector(w, cfg, audioDetector)
+	configureWorkerAudioDetector(w, audioDetector)
 	configureWorkerGuard(w, newGuard(cfg))
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -895,11 +895,11 @@ func newAudioDetector(cfg config.Config) (detector.Detector, error) {
 
 // configureWorkerAudioDetector wires the detector into the worker. It is a
 // no-op when d is nil (detector disabled).
-func configureWorkerAudioDetector(w *worker.Worker, cfg config.Config, d detector.Detector) {
+func configureWorkerAudioDetector(w *worker.Worker, d detector.Detector) {
 	if d == nil {
 		return
 	}
-	w.EnableAudioDetector(d, cfg.InstrumentalDetector.MinConfidence)
+	w.EnableAudioDetector(d)
 }
 
 // newGuard builds the language/script guard from config. It returns an UNTYPED

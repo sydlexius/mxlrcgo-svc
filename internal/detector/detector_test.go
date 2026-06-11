@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -466,5 +467,59 @@ func TestNewHTTPDetectorInvalidURL(t *testing.T) {
 	_, err := NewHTTPDetector("not-a-url", 30, 0.90, nil, ffmpegPath, 0)
 	if err == nil {
 		t.Fatal("NewHTTPDetector returned nil error for invalid URL; want error")
+	}
+}
+
+// TestWrapWithPriority verifies the nice/ionice wrappers are layered when
+// available and skipped (degrading to ffmpeg run directly) when their resolved
+// path is empty.
+func TestWrapWithPriority(t *testing.T) {
+	ffmpegArgs := []string{"-i", "in.flac", "out.wav"}
+	tests := []struct {
+		name       string
+		nicePath   string
+		ionicePath string
+		wantProg   string
+		wantArgs   []string
+	}{
+		{
+			name:       "both available",
+			nicePath:   "/usr/bin/nice",
+			ionicePath: "/usr/bin/ionice",
+			wantProg:   "/usr/bin/nice",
+			wantArgs:   []string{"-n", "19", "/usr/bin/ionice", "-c3", "/usr/bin/ffmpeg", "-i", "in.flac", "out.wav"},
+		},
+		{
+			name:       "nice only (no ionice, e.g. macOS)",
+			nicePath:   "/usr/bin/nice",
+			ionicePath: "",
+			wantProg:   "/usr/bin/nice",
+			wantArgs:   []string{"-n", "19", "/usr/bin/ffmpeg", "-i", "in.flac", "out.wav"},
+		},
+		{
+			name:       "ionice only (no nice)",
+			nicePath:   "",
+			ionicePath: "/usr/bin/ionice",
+			wantProg:   "/usr/bin/ionice",
+			wantArgs:   []string{"-c3", "/usr/bin/ffmpeg", "-i", "in.flac", "out.wav"},
+		},
+		{
+			name:       "neither available (ffmpeg direct)",
+			nicePath:   "",
+			ionicePath: "",
+			wantProg:   "/usr/bin/ffmpeg",
+			wantArgs:   []string{"-i", "in.flac", "out.wav"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prog, args := wrapWithPriority(tc.nicePath, tc.ionicePath, "/usr/bin/ffmpeg", ffmpegArgs)
+			if prog != tc.wantProg {
+				t.Errorf("prog = %q; want %q", prog, tc.wantProg)
+			}
+			if !slices.Equal(args, tc.wantArgs) {
+				t.Errorf("args = %v; want %v", args, tc.wantArgs)
+			}
+		})
 	}
 }

@@ -274,9 +274,7 @@ func TestNewAudioDetectorEnabledWithoutClassifierURLErrors(t *testing.T) {
 // nil detector to configureWorkerAudioDetector is a no-op and does not panic.
 func TestConfigureWorkerAudioDetectorAcceptsNilDetector(t *testing.T) {
 	w := worker.New(nil, nil, fakeFetcher{}, fakeWriter{})
-	configureWorkerAudioDetector(w, config.Config{
-		InstrumentalDetector: config.InstrumentalDetectorConfig{MinConfidence: 0.90},
-	}, nil)
+	configureWorkerAudioDetector(w, nil)
 }
 
 func TestRunSubcommandHelpShowsSelectedCommand(t *testing.T) {

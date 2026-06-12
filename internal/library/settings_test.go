@@ -45,13 +45,31 @@ func TestAddPersistsSettings(t *testing.T) {
 	wantBoolPtr(t, "explicit.EnrichRecording", explicit.EnrichRecording, bp(true))
 	wantBoolPtr(t, "explicit.DetectInstrumental", explicit.DetectInstrumental, bp(false))
 
-	// Values survive a fresh Get and appear in List.
+	// Values survive a fresh Get.
 	got, err := repo.Get(ctx, explicit.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	wantBoolPtr(t, "get.EnrichRecording", got.EnrichRecording, bp(true))
 	wantBoolPtr(t, "get.DetectInstrumental", got.DetectInstrumental, bp(false))
+
+	// List must surface the same settings (exercises the List SELECT/Scan path,
+	// which is distinct from Get's single-row query).
+	libs, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var listed *models.Library
+	for i := range libs {
+		if libs[i].ID == explicit.ID {
+			listed = &libs[i]
+		}
+	}
+	if listed == nil {
+		t.Fatalf("List did not return library %d", explicit.ID)
+	}
+	wantBoolPtr(t, "list.EnrichRecording", listed.EnrichRecording, bp(true))
+	wantBoolPtr(t, "list.DetectInstrumental", listed.DetectInstrumental, bp(false))
 }
 
 func TestUpdatePreservesAndSetsSettings(t *testing.T) {

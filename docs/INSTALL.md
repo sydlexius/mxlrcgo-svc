@@ -35,7 +35,7 @@ sudo apk add --allow-untrusted mxlrcgo-svc_*.apk
 - Installs the binary to `/usr/local/bin/mxlrcgo-svc`.
 - Creates a `mxlrcgo-svc` system user and group (no login shell).
 - Creates `/var/lib/mxlrcgo-svc` (mode `0750`, owned by `mxlrcgo-svc:mxlrcgo-svc`) for the SQLite database and state.
-- Installs a systemd unit (or OpenRC script on Alpine) with hardening (`ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`).
+- Installs a systemd unit with hardening (`ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`), or an OpenRC script on Alpine (manages ownership and permissions via `start_pre`).
 - Places an example config at `/etc/mxlrcgo-svc/config.example.toml`.
 - Does **not** enable or start the service automatically.
 

@@ -21,10 +21,10 @@ Download the `.deb`, `.rpm`, or `.apk` for your distro from the
 
 ```sh
 # Debian / Ubuntu
-sudo dpkg -i mxlrcgo-svc_*.deb
+sudo apt install ./mxlrcgo-svc_*.deb
 
 # RHEL / Fedora / Rocky
-sudo rpm -i mxlrcgo-svc_*.rpm
+sudo dnf install ./mxlrcgo-svc_*.rpm
 
 # Alpine
 sudo apk add --allow-untrusted mxlrcgo-svc_*.apk
@@ -90,12 +90,19 @@ The published image is `ghcr.io/sydlexius/mxlrcgo-svc`. It runs the server on
 port `50705` and stores config and the SQLite database under the `/config`
 volume. Mount your media data parent to `/data`:
 
+Export secrets first so they are not inlined in the command (prevents shell history and `ps` exposure):
+
+```sh
+export MUSIXMATCH_TOKEN=YOUR_TOKEN
+export MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key
+```
+
 ```sh
 docker run -d \
   --name mxlrcgo-svc \
   -p 50705:50705 \
-  -e MUSIXMATCH_TOKEN=YOUR_TOKEN \
-  -e MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key \
+  -e MUSIXMATCH_TOKEN \
+  -e MXLRC_WEBHOOK_API_KEY \
   -e PUID=99 -e PGID=100 \
   -e MXLRC_OUTPUT_DIR=/data/media/music \
   -v mxlrcgo-svc-config:/config \

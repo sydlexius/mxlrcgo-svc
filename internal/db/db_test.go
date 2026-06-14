@@ -398,3 +398,70 @@ func TestOpen_NormalizeKeySQLFunction(t *testing.T) {
 		t.Fatalf("normalize_key SQL result = %q; want %q", got, want)
 	}
 }
+
+// TestMigration017SecretsUpDown drives migration 017 directly: it migrates to
+// v16 (no secrets table), applies 017 and asserts the secrets table exists with
+// a usable upsert, then down-migrates and asserts the table is dropped.
+func TestMigration017SecretsUpDown(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mig017.db")
+	sqlDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+
+	migFS, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		t.Fatalf("sub migrations fs: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, sqlDB, migFS)
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+
+	// At v16 the secrets table does not exist yet.
+	if _, err := provider.UpTo(ctx, 16); err != nil {
+		t.Fatalf("UpTo(16): %v", err)
+	}
+	var present int
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='secrets'`).Scan(&present); err != nil {
+		t.Fatalf("query secrets pre-017: %v", err)
+	}
+	if present != 0 {
+		t.Fatalf("secrets table present before migration 017")
+	}
+
+	// Apply 017 and exercise the upsert + NOT NULL ciphertext.
+	if _, err := provider.UpTo(ctx, 17); err != nil {
+		t.Fatalf("UpTo(17): %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx,
+		`INSERT INTO secrets (name, ciphertext) VALUES (?, ?)
+         ON CONFLICT(name) DO UPDATE SET ciphertext = excluded.ciphertext`,
+		"musixmatch_token", []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("insert secret: %v", err)
+	}
+	var updatedAt string
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT updated_at FROM secrets WHERE name = ?`, "musixmatch_token").Scan(&updatedAt); err != nil {
+		t.Fatalf("query updated_at: %v", err)
+	}
+	if updatedAt == "" {
+		t.Fatal("updated_at default not applied")
+	}
+
+	// Down-migrate 017 and confirm the table is dropped.
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='secrets'`).Scan(&present); err != nil {
+		t.Fatalf("query secrets post-down: %v", err)
+	}
+	if present != 0 {
+		t.Fatalf("secrets table still present after down-migration")
+	}
+}

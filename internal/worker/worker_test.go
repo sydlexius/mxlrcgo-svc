@@ -97,21 +97,22 @@ func hasLog(recs []logRecord, level slog.Level, msgSub string) bool {
 // can assert that an item was returned to the pending pool without a failure
 // being recorded against it.
 type fakeQueue struct {
-	items          []queue.WorkItem
-	processing     []queue.WorkItem
-	completed      []int64
-	failed         []int64
-	released       []int64
-	deferred       []int64
-	retired        []int64
-	failCauses     []error
-	deferCauses    []error
-	deferDurations []time.Duration
-	completeErr    error
-	failErr        error
-	deferErr       error
-	releaseErr     error
-	retireErr      error
+	items              []queue.WorkItem
+	processing         []queue.WorkItem
+	completed          []int64
+	failed             []int64
+	released           []int64
+	deferred           []int64
+	retired            []int64
+	failCauses         []error
+	deferCauses        []error
+	deferDurations     []time.Duration
+	completeErr        error
+	failErr            error
+	deferErr           error
+	releaseErr         error
+	retireErr          error
+	setProviderLaneErr error
 }
 
 func (q *fakeQueue) Dequeue(_ context.Context) (queue.WorkItem, error) {
@@ -172,6 +173,17 @@ func (q *fakeQueue) RetireMiss(_ context.Context, id int64) (queue.WorkItem, err
 	return queue.WorkItem{ID: id, Status: queue.StatusDone}, nil
 }
 
+func (q *fakeQueue) SetInstrumentalResult(_ context.Context, _ int64, _ int) error {
+	return nil
+}
+
+func (q *fakeQueue) SetProviderLane(_ context.Context, _ int64, _ string) error {
+	if q.setProviderLaneErr != nil {
+		return q.setProviderLaneErr
+	}
+	return nil
+}
+
 func (q *fakeQueue) removeFromProcessing(id int64) {
 	for i, item := range q.processing {
 		if item.ID == id {
@@ -220,6 +232,23 @@ func (f *fakeFetcher) FindLyrics(context.Context, models.Track) (models.Song, er
 		return models.Song{}, f.err
 	}
 	return f.song, nil
+}
+
+type fakeProviderRecorder struct {
+	hits    []string
+	misses  []string
+	hitErr  error
+	missErr error
+}
+
+func (r *fakeProviderRecorder) RecordProviderHit(_ context.Context, lane string) error {
+	r.hits = append(r.hits, lane)
+	return r.hitErr
+}
+
+func (r *fakeProviderRecorder) RecordProviderMiss(_ context.Context, lane string) error {
+	r.misses = append(r.misses, lane)
+	return r.missErr
 }
 
 type fakeWriter struct {
@@ -2038,5 +2067,137 @@ func TestRunOnceDetectorNotCalledOnSuccess(t *testing.T) {
 	}
 	if len(q.completed) != 1 || q.completed[0] != 204 {
 		t.Fatalf("completed = %v; want [204]", q.completed)
+	}
+}
+
+func TestRunOnceRecordsProviderHitOnSuccess(t *testing.T) {
+	q := &fakeQueue{items: []queue.WorkItem{{ID: 301, Inputs: models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "T"}}}}}
+	c := &fakeCache{}
+	fetcher := &fakeFetcher{song: models.Song{
+		Track:       models.Track{ArtistName: "A", TrackName: "T"},
+		WinningLane: "musixmatch",
+		Lyrics:      models.Lyrics{LyricsBody: "lyrics"},
+	}}
+	writer := &fakeWriter{}
+	rec := &fakeProviderRecorder{}
+
+	w := New(q, c, fetcher, writer)
+	w.SetProviderRecorder(rec)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if len(rec.hits) != 1 || rec.hits[0] != "musixmatch" {
+		t.Errorf("provider hits = %v; want [musixmatch]", rec.hits)
+	}
+	if len(rec.misses) != 0 {
+		t.Errorf("provider misses = %v; want none", rec.misses)
+	}
+}
+
+func TestRunOnceRecordsProviderMissOnBenignMiss(t *testing.T) {
+	q := &fakeQueue{items: []queue.WorkItem{{ID: 302, Inputs: models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "T"}}}}}
+	c := &fakeCache{}
+	fetcher := &fakeFetcher{err: musixmatch.ErrNoLyrics}
+	writer := &fakeWriter{}
+	rec := &fakeProviderRecorder{}
+
+	w := New(q, c, fetcher, writer)
+	w.SetProviderRecorder(rec)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	// The primary Musixmatch lane must be counted as a miss.
+	if len(rec.misses) != 1 || rec.misses[0] != "musixmatch" {
+		t.Errorf("provider misses = %v; want [musixmatch]", rec.misses)
+	}
+	if len(rec.hits) != 0 {
+		t.Errorf("provider hits = %v; want none on benign miss", rec.hits)
+	}
+	if len(q.deferred) != 1 {
+		t.Errorf("deferred = %v; want [302]", q.deferred)
+	}
+}
+
+func TestRunOnceNoRecorderIsNoop(t *testing.T) {
+	// No SetProviderRecorder: RunOnce must not panic and must complete normally.
+	q := &fakeQueue{items: []queue.WorkItem{{ID: 303, Inputs: models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "T"}}}}}
+	c := &fakeCache{}
+	fetcher := &fakeFetcher{song: models.Song{
+		Track:  models.Track{ArtistName: "A", TrackName: "T"},
+		Lyrics: models.Lyrics{LyricsBody: "lyrics"},
+	}}
+	writer := &fakeWriter{}
+
+	w := New(q, c, fetcher, writer)
+	// No SetProviderRecorder call.
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce without recorder: %v", err)
+	}
+	if len(q.completed) != 1 {
+		t.Errorf("completed = %v; want [303]", q.completed)
+	}
+}
+
+// TestRecordHitEmptyLaneIsNoop verifies that calling recordHit with an empty
+// lane is a no-op: no recorder call, no queue stamp, no error.
+func TestRecordHitEmptyLaneIsNoop(t *testing.T) {
+	q := &fakeQueue{}
+	rec := &fakeProviderRecorder{}
+	w := New(q, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	w.SetProviderRecorder(rec)
+
+	// Call directly; empty lane must short-circuit before any recorder/queue call.
+	w.recordHit(context.Background(), 999, "")
+
+	if len(rec.hits) != 0 {
+		t.Errorf("hits = %v; want none on empty lane", rec.hits)
+	}
+}
+
+// TestRecordHitRecorderErrorIsNonFatal verifies that a RecordProviderHit error
+// is logged but does not propagate (recordHit has no return value and the caller
+// must not crash).
+func TestRecordHitRecorderErrorIsNonFatal(t *testing.T) {
+	q := &fakeQueue{}
+	rec := &fakeProviderRecorder{hitErr: errors.New("recorder down")}
+	w := New(q, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	w.SetProviderRecorder(rec)
+
+	// Must not panic. The error is slog.Warn only.
+	w.recordHit(context.Background(), 1, "musixmatch")
+
+	if len(rec.hits) != 1 || rec.hits[0] != "musixmatch" {
+		t.Errorf("hits = %v; want [musixmatch] (recorder called even if it errors)", rec.hits)
+	}
+}
+
+// TestRecordHitQueueErrorIsNonFatal verifies that a SetProviderLane DB error is
+// logged (slog.Warn) but does not propagate.
+func TestRecordHitQueueErrorIsNonFatal(t *testing.T) {
+	q := &fakeQueue{setProviderLaneErr: errors.New("db down")}
+	rec := &fakeProviderRecorder{}
+	w := New(q, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	w.SetProviderRecorder(rec)
+
+	// Must not panic.
+	w.recordHit(context.Background(), 1, "musixmatch")
+}
+
+// TestRecordMissesRecorderErrorIsNonFatal verifies that a RecordProviderMiss
+// error is logged (slog.Warn) but does not stop iteration or propagate.
+func TestRecordMissesRecorderErrorIsNonFatal(t *testing.T) {
+	q := &fakeQueue{}
+	rec := &fakeProviderRecorder{missErr: errors.New("recorder down")}
+	w := New(q, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
+	w.SetProviderRecorder(rec)
+
+	// Must not panic; the worker has one lane ("musixmatch") via New.
+	w.recordMisses(context.Background())
+
+	// The recorder WAS called (iteration continued despite the error).
+	if len(rec.misses) != 1 || rec.misses[0] != "musixmatch" {
+		t.Errorf("misses = %v; want [musixmatch] (recorder called even if it errors)", rec.misses)
 	}
 }

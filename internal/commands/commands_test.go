@@ -220,6 +220,25 @@ func TestConfigureWorkerGuardAcceptsNilGuard(t *testing.T) {
 	configureWorkerGuard(w, nil)
 }
 
+// TestConfigureWorkerProviderRecorderWiresRecorder guards the serve command
+// wiring: configureWorkerProviderRecorder must install the recorder so that
+// provider outcome events are recorded. This is the testable unit equivalent
+// of the w.SetProviderRecorder(workQ) call in runServe.
+func TestConfigureWorkerProviderRecorderWiresRecorder(t *testing.T) {
+	w := worker.New(nil, nil, fakeFetcher{}, fakeWriter{})
+	// nil recorder is a valid no-op (backward-compatible default).
+	configureWorkerProviderRecorder(w, nil)
+	// A non-nil recorder must also be accepted without panic.
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "wiring.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	workQ := queue.NewDBQueue(sqlDB)
+	configureWorkerProviderRecorder(w, workQ)
+}
+
 // TestNewAudioDetectorDecoupledFromEnableFlag verifies the #218 decoupling: the
 // detector is built whenever a classifier URL is configured, independent of the
 // global Enabled flag, and is nil only when no classifier URL is set.

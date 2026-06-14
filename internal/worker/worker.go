@@ -36,6 +36,22 @@ type Queue interface {
 	// marking the track as terminal. The scan layer will show the track as done
 	// (not pending) so it is not mistaken for an in-flight item.
 	RetireMiss(ctx context.Context, id int64) (queue.WorkItem, error)
+	// SetInstrumentalResult stamps the audio-detection outcome onto a work_queue
+	// row. result=1 means instrumental confirmed; result=0 means not instrumental.
+	// Call before Complete while the row is still in processing status.
+	SetInstrumentalResult(ctx context.Context, id int64, result int) error
+	// SetProviderLane stamps the winning provider lane name onto a work_queue row
+	// for per-track provenance. Call at completion time before Complete so the row
+	// permanently records which provider served it. An empty lane is a no-op.
+	SetProviderLane(ctx context.Context, id int64, lane string) error
+}
+
+// ProviderRecorder records per-lane provider outcome counters. A nil
+// ProviderRecorder is valid and treated as a no-op; recording failures are
+// logged at Warn and do not affect the processing outcome.
+type ProviderRecorder interface {
+	RecordProviderHit(ctx context.Context, lane string) error
+	RecordProviderMiss(ctx context.Context, lane string) error
 }
 
 // ScriptGuard rejects lyric results whose body is dominated by scripts outside
@@ -115,7 +131,12 @@ type Worker struct {
 	// scriptGuard, when non-nil and Enabled, rejects fetched lyrics whose script
 	// mix falls outside the configured allowlist. Named scriptGuard (not guard)
 	// to avoid colliding with the guardReject helper. Default nil (no guard).
-	scriptGuard         ScriptGuard
+	scriptGuard ScriptGuard
+	// providerRecorder, when non-nil, receives per-lane hit and miss events so the
+	// /metrics endpoint can report mxlrcgo_provider_hits_total{lane} and
+	// mxlrcgo_provider_misses_total{lane}. Errors from it are non-fatal (logged at
+	// Warn). Nil means no recording (safe no-op). Set via SetProviderRecorder.
+	providerRecorder    ProviderRecorder
 	consecutiveFailures int
 	// last* record the most recent hard failure so the backoff WARN can name the
 	// track it is throttling on (the failure cause is logged separately, but the
@@ -423,6 +444,46 @@ func (w *Worker) EnableGuard(g ScriptGuard) {
 	_ = w.rebuildOrchestrator()
 }
 
+// SetProviderRecorder installs a recorder that receives per-lane hit and miss
+// events. A nil recorder disables recording (the default, preserving backward
+// compatibility with callers that do not configure metrics).
+func (w *Worker) SetProviderRecorder(r ProviderRecorder) {
+	w.providerRecorder = r
+}
+
+// recordHit increments the provider outcome hit counter for the winning lane and
+// stamps the lane name onto the work_queue row for per-track provenance. Both
+// operations are non-fatal: errors are logged at Warn and do not affect the
+// processing outcome.
+func (w *Worker) recordHit(ctx context.Context, id int64, lane string) {
+	if lane == "" {
+		return
+	}
+	if w.providerRecorder != nil {
+		if err := w.providerRecorder.RecordProviderHit(ctx, lane); err != nil {
+			slog.Warn("worker: record provider hit failed", "lane", lane, "error", err)
+		}
+	}
+	if err := w.queue.SetProviderLane(ctx, id, lane); err != nil {
+		slog.Warn("worker: stamp provider lane failed", "id", id, "lane", lane, "error", err)
+	}
+}
+
+// recordMisses increments the provider outcome miss counter for every active
+// lane via the orchestrator's LaneNames. Called on the benign-miss path (the
+// orchestrator tried all lanes and found nothing). Errors are logged at Warn
+// and do not affect the processing outcome.
+func (w *Worker) recordMisses(ctx context.Context) {
+	if w.providerRecorder == nil {
+		return
+	}
+	for _, name := range w.orch.LaneNames() {
+		if err := w.providerRecorder.RecordProviderMiss(ctx, name); err != nil {
+			slog.Warn("worker: record provider miss failed", "lane", name, "error", err)
+		}
+	}
+}
+
 // guardReject reports whether the script guard rejects this song. It returns
 // (false, "") when no guard is configured or the guard is disabled, so the
 // caller can treat a nil/disabled guard as a no-op.
@@ -562,6 +623,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		// otherwise healthily reaching the provider and getting clean misses.
 		if musixmatch.IsBenignMiss(err) {
 			slog.Debug("worker no lyrics match; requeuing deferred", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "reason", err)
+			// Every active lane was tried and none returned lyrics: record a miss for
+			// each. Errors are non-fatal; recording happens before the Defer/Complete
+			// so the queue state is clean regardless of the recording outcome.
+			w.recordMisses(context.WithoutCancel(ctx))
 			// Optional audio-based instrumental detection. Only runs on provider
 			// misses (no lyrics and not already flagged instrumental). Errors are
 			// non-fatal: starvation of the detector sidecar is acceptable; the miss
@@ -572,6 +637,12 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			}
 			if instrumental {
 				slog.Info("worker audio detector: instrumental track confirmed; writing marker", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "kind", "instrumental")
+				// Stamp the audio-detection result (1 = instrumental) on the queue row
+				// before Complete so the /metrics gauge reflects the outcome durably.
+				// Errors are non-fatal: a failed stamp is not worth aborting the write.
+				if stampErr := w.queue.SetInstrumentalResult(context.WithoutCancel(ctx), item.ID, 1); stampErr != nil {
+					slog.Warn("worker instrumental detection: stamp result failed; continuing", "id", item.ID, "error", stampErr)
+				}
 				instrumentalSong := models.Song{
 					Track: models.Track{
 						ArtistName:   resolvedTrack.ArtistName,
@@ -611,6 +682,19 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 				w.consecutiveFailures = 0
 				return nil
 			}
+			// Detection ran but the track is not instrumental: stamp result=0 so the
+			// row is distinguishable from "never detected" (NULL).
+			if detErr == nil {
+				detect := w.detectInstrumentalDefault
+				if item.DetectInstrumental != nil {
+					detect = *item.DetectInstrumental
+				}
+				if detect && w.audioDetector != nil && strings.TrimSpace(item.Inputs.SourcePath) != "" {
+					if stampErr := w.queue.SetInstrumentalResult(context.WithoutCancel(ctx), item.ID, 0); stampErr != nil {
+						slog.Warn("worker instrumental detection: stamp non-instrumental result failed; continuing", "id", item.ID, "error", stampErr)
+					}
+				}
+			}
 			if derr := w.requeueDeferred(ctx, item, err); derr != nil {
 				return derr
 			}
@@ -628,11 +712,14 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	confidence := Confidence(item.Inputs.Track, song.Track)
 	slog.Debug("worker lyrics match", "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "cache_hit", cacheHit)
 	if !cacheHit {
-		// A non-cache provider fetch succeeded: the lane already recorded the
-		// success and recovered its breaker inside FindLyrics (before any
-		// downstream step), so a later bare 401 is correctly read as throttling
-		// rather than a dead token, and a verify/guard/store failure below does not
-		// make the breaker forget the fetch itself worked.
+		// A non-cache provider fetch succeeded: record the hit and stamp the winning
+		// lane on the queue row before any downstream step so the counter and the
+		// per-track provenance are always written when the provider round-trip
+		// succeeds, even if verify/guard/store fails later.
+		w.recordHit(context.WithoutCancel(ctx), item.ID, song.WinningLane)
+		// The lane already recorded the circuit success and recovered its breaker
+		// inside FindLyrics, so a later bare 401 is correctly read as throttling
+		// rather than a dead token.
 		if err := w.verify(ctx, item, song, confidence); err != nil {
 			slog.Warn("worker verification failed", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "confidence", confidence, "error", err)
 			return w.fail(ctx, item, err)

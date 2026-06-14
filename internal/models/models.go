@@ -56,6 +56,11 @@ type Song struct {
 	// Subtitles. Zero value (empty Lines) means absent. Not interleaved by
 	// default; reserved for a future romanization output flag.
 	RomanizationSubtitles Synced
+	// WinningLane is the provider lane name that returned this song. It is set by
+	// the orchestrator for both suitable results and best-available fallbacks.
+	// Empty on cache hits and zero-value songs. Used by the worker write-path to
+	// record per-lane hit counters without changing the Fetcher interface.
+	WinningLane string `json:"-"`
 }
 
 // Inputs represents a single work item in the processing queue.

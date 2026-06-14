@@ -70,6 +70,18 @@ func New(mode string, lanes ...*Lane) (*Orchestrator, error) {
 // whether the orchestrator advances to the next lane.
 func (o *Orchestrator) SetGuard(g ScriptGuard) { o.guard = g }
 
+// LaneNames returns the names of all lanes the orchestrator dispatches over, in
+// priority order. Used by the worker miss-recording path to increment the miss
+// counter for every active lane without touching the orchestrator's internal
+// lane slice directly.
+func (o *Orchestrator) LaneNames() []string {
+	names := make([]string, len(o.lanes))
+	for i, l := range o.lanes {
+		names[i] = l.Name()
+	}
+	return names
+}
+
 // SetRaceWait sets the parallel-mode upgrade window read once per dispatch. A
 // non-positive value is ignored so the constructed DefaultRaceWait is preserved.
 // It has no effect in ordered mode.
@@ -122,9 +134,10 @@ func (o *Orchestrator) findOrdered(ctx context.Context, track models.Track) (mod
 
 		if err == nil {
 			if IsSuitable(song, o.guard) {
+				song.WinningLane = lane.Name()
 				return song, nil
 			}
-			r.retain(song)
+			r.retain(song, lane.Name())
 			continue
 		}
 
@@ -140,6 +153,7 @@ func (o *Orchestrator) findOrdered(ctx context.Context, track models.Track) (mod
 // use (QualityNone, OutcomeSuccess).
 type dispatchResult struct {
 	bestSong    models.Song
+	bestLane    string // lane name that provided bestSong
 	haveBest    bool
 	bestQuality Quality
 	topErr      error
@@ -148,9 +162,9 @@ type dispatchResult struct {
 }
 
 // retain keeps song as the best-available fallback if it outranks the current one.
-func (r *dispatchResult) retain(song models.Song) {
+func (r *dispatchResult) retain(song models.Song, laneName string) {
 	if q := QualityOf(song); !r.haveBest || q > r.bestQuality {
-		r.bestSong, r.bestQuality, r.haveBest = song, q, true
+		r.bestSong, r.bestQuality, r.haveBest, r.bestLane = song, q, true, laneName
 	}
 }
 
@@ -170,6 +184,7 @@ func (r *dispatchResult) rankErr(err error, class OutcomeClass) {
 // was canceled, in which case its error wins.
 func (o *Orchestrator) resolve(ctx context.Context, r *dispatchResult) (models.Song, error) {
 	if r.haveBest {
+		r.bestSong.WinningLane = r.bestLane
 		return r.bestSong, nil
 	}
 	if r.consulted == 0 && len(o.lanes) > 0 {

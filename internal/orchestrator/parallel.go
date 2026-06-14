@@ -13,6 +13,7 @@ import (
 type laneResult struct {
 	song models.Song
 	err  error
+	name string // lane name, for WinningLane tagging
 }
 
 // findParallel dispatches every lane concurrently and races the results:
@@ -42,13 +43,14 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 		lane := lane
 		go func() {
 			song, err := lane.FindLyrics(childCtx, track)
-			results <- laneResult{song: song, err: err}
+			results <- laneResult{song: song, err: err, name: lane.Name()}
 		}()
 	}
 
 	var (
 		r        dispatchResult
 		heldSong models.Song
+		heldLane string
 		haveHeld bool // a suitable unsynced result is held, pending a synced upgrade
 		upgrade  <-chan time.Time
 		pending  = len(o.lanes)
@@ -74,19 +76,20 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 				switch {
 				case res.err == nil && IsSuitable(res.song, o.guard):
 					if QualityOf(res.song) >= QualitySynced {
+						res.song.WinningLane = res.name
 						return res.song, nil // synced: commit now; defer cancels the losers.
 					}
 					// Suitable but unsynced: hold the first such result. Arm the upgrade
 					// window only while another lane could still deliver a synced upgrade;
 					// if this was the last lane, the pending == 0 check below commits it.
 					if !haveHeld {
-						heldSong, haveHeld = res.song, true
+						heldSong, haveHeld, heldLane = res.song, true, res.name
 					}
 					if upgrade == nil && pending > 0 {
 						upgrade = time.After(o.raceWait)
 					}
 				case res.err == nil:
-					r.retain(res.song)
+					r.retain(res.song, res.name)
 				default:
 					r.rankErr(res.err, class)
 				}
@@ -96,6 +99,7 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 					return models.Song{}, err
 				}
 				if haveHeld {
+					heldSong.WinningLane = heldLane
 					return heldSong, nil
 				}
 				return o.resolve(ctx, &r)
@@ -106,6 +110,7 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 			if err := ctx.Err(); err != nil {
 				return models.Song{}, err
 			}
+			heldSong.WinningLane = heldLane
 			return heldSong, nil
 		}
 	}

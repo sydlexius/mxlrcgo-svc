@@ -1004,6 +1004,137 @@ func (q *DBQueue) CountByStatus(ctx context.Context) (map[string]int64, error) {
 	return counts, nil
 }
 
+// RecordProviderHit atomically increments the hit counter for the named provider
+// lane. If no row exists for lane yet it is created with hits=1, misses=0.
+func (q *DBQueue) RecordProviderHit(ctx context.Context, lane string) error {
+	if lane == "" {
+		return nil
+	}
+	_, err := q.db.ExecContext(ctx,
+		`INSERT INTO provider_outcomes(lane, hits, misses) VALUES(?, 1, 0)
+         ON CONFLICT(lane) DO UPDATE SET hits = hits + 1`,
+		lane,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: record provider hit for %q: %w", lane, err)
+	}
+	return nil
+}
+
+// RecordProviderMiss atomically increments the miss counter for the named
+// provider lane. If no row exists for lane yet it is created with hits=0,
+// misses=1.
+func (q *DBQueue) RecordProviderMiss(ctx context.Context, lane string) error {
+	if lane == "" {
+		return nil
+	}
+	_, err := q.db.ExecContext(ctx,
+		`INSERT INTO provider_outcomes(lane, hits, misses) VALUES(?, 0, 1)
+         ON CONFLICT(lane) DO UPDATE SET misses = misses + 1`,
+		lane,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: record provider miss for %q: %w", lane, err)
+	}
+	return nil
+}
+
+// SetProviderLane stamps the winning provider lane name onto a work_queue row.
+// Call at completion time (before Complete) so the row permanently records which
+// provider served it. A NULL provider_lane means not-yet-completed, retired
+// without a match, or a row that predates this column.
+func (q *DBQueue) SetProviderLane(ctx context.Context, id int64, lane string) error {
+	if lane == "" {
+		return nil
+	}
+	_, err := q.db.ExecContext(ctx,
+		`UPDATE work_queue SET provider_lane = ? WHERE id = ?`,
+		lane, id,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: set provider lane for id %d: %w", id, err)
+	}
+	return nil
+}
+
+// SetInstrumentalResult stamps the audio-detection outcome onto a work_queue row.
+// result=1 means the audio detector confirmed instrumental; result=0 means the
+// detector ran but the track is not instrumental. Call before Complete so the row
+// is still in 'processing' status (the UPDATE is a no-op on any other status,
+// which is benign).
+func (q *DBQueue) SetInstrumentalResult(ctx context.Context, id int64, result int) error {
+	_, err := q.db.ExecContext(ctx,
+		`UPDATE work_queue SET instrumental_result = ? WHERE id = ?`,
+		result, id,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: set instrumental result for id %d: %w", id, err)
+	}
+	return nil
+}
+
+// ProviderHits returns a map from lane name to cumulative hit count. Lanes that
+// have never recorded a hit are omitted.
+func (q *DBQueue) ProviderHits(ctx context.Context) (map[string]int64, error) {
+	rows, err := q.db.QueryContext(ctx,
+		`SELECT lane, hits FROM provider_outcomes WHERE hits > 0`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("queue: provider hits: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	counts := make(map[string]int64)
+	for rows.Next() {
+		var lane string
+		var n int64
+		if err := rows.Scan(&lane, &n); err != nil {
+			return nil, fmt.Errorf("queue: scan provider hits: %w", err)
+		}
+		counts[lane] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue: provider hits rows: %w", err)
+	}
+	return counts, nil
+}
+
+// ProviderMisses returns a map from lane name to cumulative miss count. Lanes
+// that have never recorded a miss are omitted.
+func (q *DBQueue) ProviderMisses(ctx context.Context) (map[string]int64, error) {
+	rows, err := q.db.QueryContext(ctx,
+		`SELECT lane, misses FROM provider_outcomes WHERE misses > 0`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("queue: provider misses: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	counts := make(map[string]int64)
+	for rows.Next() {
+		var lane string
+		var n int64
+		if err := rows.Scan(&lane, &n); err != nil {
+			return nil, fmt.Errorf("queue: scan provider misses: %w", err)
+		}
+		counts[lane] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue: provider misses rows: %w", err)
+	}
+	return counts, nil
+}
+
+// CountInstrumental returns the number of work_queue rows where the audio
+// detector confirmed the track as instrumental (instrumental_result = 1).
+func (q *DBQueue) CountInstrumental(ctx context.Context) (int64, error) {
+	var n int64
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM work_queue WHERE instrumental_result = 1`,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("queue: count instrumental: %w", err)
+	}
+	return n, nil
+}
+
 // CancelByLibrary rebuilds or deletes pending/failed/deferred work_queue rows whose
 // output_paths derive from libraryID. Each affected row's output_paths JSON is
 // filtered to retain only entries that appear in scan_results from libraries

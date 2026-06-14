@@ -2898,6 +2898,182 @@ func TestDBQueue_CountFailuresByReason(t *testing.T) {
 	}
 }
 
+// TestDBQueue_ProviderOutcomes verifies RecordProviderHit, RecordProviderMiss,
+// ProviderHits, and ProviderMisses round-trip correctly through the DB.
+func TestDBQueue_ProviderOutcomes(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+
+	// Empty table: both maps should be empty.
+	hits, err := q.ProviderHits(ctx)
+	if err != nil {
+		t.Fatalf("ProviderHits empty: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("ProviderHits: want empty map, got %v", hits)
+	}
+	misses, err := q.ProviderMisses(ctx)
+	if err != nil {
+		t.Fatalf("ProviderMisses empty: %v", err)
+	}
+	if len(misses) != 0 {
+		t.Fatalf("ProviderMisses: want empty map, got %v", misses)
+	}
+
+	// Record hits and misses for two lanes.
+	for i := 0; i < 3; i++ {
+		if err := q.RecordProviderHit(ctx, "musixmatch"); err != nil {
+			t.Fatalf("RecordProviderHit musixmatch[%d]: %v", i, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := q.RecordProviderHit(ctx, "petitlyrics"); err != nil {
+			t.Fatalf("RecordProviderHit petitlyrics[%d]: %v", i, err)
+		}
+	}
+	if err := q.RecordProviderMiss(ctx, "musixmatch"); err != nil {
+		t.Fatalf("RecordProviderMiss musixmatch: %v", err)
+	}
+	if err := q.RecordProviderMiss(ctx, "petitlyrics"); err != nil {
+		t.Fatalf("RecordProviderMiss petitlyrics: %v", err)
+	}
+	if err := q.RecordProviderMiss(ctx, "petitlyrics"); err != nil {
+		t.Fatalf("RecordProviderMiss petitlyrics[2]: %v", err)
+	}
+
+	hits, err = q.ProviderHits(ctx)
+	if err != nil {
+		t.Fatalf("ProviderHits: %v", err)
+	}
+	if hits["musixmatch"] != 3 {
+		t.Errorf("musixmatch hits = %d; want 3", hits["musixmatch"])
+	}
+	if hits["petitlyrics"] != 2 {
+		t.Errorf("petitlyrics hits = %d; want 2", hits["petitlyrics"])
+	}
+
+	misses, err = q.ProviderMisses(ctx)
+	if err != nil {
+		t.Fatalf("ProviderMisses: %v", err)
+	}
+	if misses["musixmatch"] != 1 {
+		t.Errorf("musixmatch misses = %d; want 1", misses["musixmatch"])
+	}
+	if misses["petitlyrics"] != 2 {
+		t.Errorf("petitlyrics misses = %d; want 2", misses["petitlyrics"])
+	}
+}
+
+// TestDBQueue_RecordProviderHitEmptyLane verifies that an empty lane name is a
+// no-op (no row inserted, no error).
+func TestDBQueue_RecordProviderHitEmptyLane(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	if err := q.RecordProviderHit(ctx, ""); err != nil {
+		t.Fatalf("RecordProviderHit empty lane: %v", err)
+	}
+	if err := q.RecordProviderMiss(ctx, ""); err != nil {
+		t.Fatalf("RecordProviderMiss empty lane: %v", err)
+	}
+	hits, _ := q.ProviderHits(ctx)
+	misses, _ := q.ProviderMisses(ctx)
+	if len(hits) != 0 || len(misses) != 0 {
+		t.Errorf("empty lane should not insert rows; hits=%v misses=%v", hits, misses)
+	}
+}
+
+// TestDBQueue_SetInstrumentalResultAndCount verifies SetInstrumentalResult and
+// CountInstrumental work together through a real SQLite DB.
+func TestDBQueue_SetInstrumentalResultAndCount(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.SetRandomized(false)
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	// Enqueue and dequeue three items.
+	enqDeq := func(artist, title string) WorkItem {
+		t.Helper()
+		if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: artist, TrackName: title}}, PriorityScan); err != nil {
+			t.Fatalf("Enqueue %s/%s: %v", artist, title, err)
+		}
+		item, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("Dequeue %s/%s: %v", artist, title, err)
+		}
+		return item
+	}
+
+	item1 := enqDeq("Artist A", "Track 1")
+	item2 := enqDeq("Artist B", "Track 2")
+	item3 := enqDeq("Artist C", "Track 3")
+
+	// Initially no instrumental rows.
+	n, err := q.CountInstrumental(ctx)
+	if err != nil {
+		t.Fatalf("CountInstrumental: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("initial count = %d; want 0", n)
+	}
+
+	// Stamp item1 as instrumental (result=1), item2 as not (result=0).
+	if err := q.SetInstrumentalResult(ctx, item1.ID, 1); err != nil {
+		t.Fatalf("SetInstrumentalResult item1: %v", err)
+	}
+	if err := q.SetInstrumentalResult(ctx, item2.ID, 0); err != nil {
+		t.Fatalf("SetInstrumentalResult item2: %v", err)
+	}
+	// item3: leave NULL (detection not run).
+	_ = item3
+
+	n, err = q.CountInstrumental(ctx)
+	if err != nil {
+		t.Fatalf("CountInstrumental after stamps: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("count = %d; want 1 (only item1 is instrumental)", n)
+	}
+}
+
+// TestDBQueue_SetProviderLane verifies SetProviderLane persists the winning lane
+// on a work_queue row and that empty lane is a no-op.
+func TestDBQueue_SetProviderLane(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.SetRandomized(false)
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "T"}}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+
+	// Empty lane must be a no-op (no error, no row update).
+	if err := q.SetProviderLane(ctx, item.ID, ""); err != nil {
+		t.Fatalf("SetProviderLane empty: %v", err)
+	}
+
+	// Stamp a real lane and verify it is stored.
+	if err := q.SetProviderLane(ctx, item.ID, "musixmatch"); err != nil {
+		t.Fatalf("SetProviderLane: %v", err)
+	}
+
+	var lane *string
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT provider_lane FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&lane); err != nil {
+		t.Fatalf("read provider_lane: %v", err)
+	}
+	if lane == nil || *lane != "musixmatch" {
+		t.Errorf("provider_lane = %v; want musixmatch", lane)
+	}
+}
+
 // TestDBQueue_RecheckClosedDB verifies the recheck methods return a wrapped
 // error (rather than panicking) when the underlying handle is closed.
 func TestDBQueue_RecheckClosedDB(t *testing.T) {
@@ -2921,5 +3097,40 @@ func TestDBQueue_RecheckClosedDB(t *testing.T) {
 	}
 	if _, err := q.CountRecheckRetired(ctx, nil); err == nil {
 		t.Fatal("CountRecheckRetired on closed db: want error, got nil")
+	}
+}
+
+// TestDBQueue_ProviderMethodsClosedDB verifies that the new provider-outcome
+// and instrumental methods return wrapped errors (not panics) when the
+// underlying DB handle is closed.
+func TestDBQueue_ProviderMethodsClosedDB(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "closed2.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	_ = sqlDB.Close()
+	q := NewDBQueue(sqlDB)
+
+	if err := q.RecordProviderHit(ctx, "musixmatch"); err == nil {
+		t.Fatal("RecordProviderHit on closed db: want error, got nil")
+	}
+	if err := q.RecordProviderMiss(ctx, "musixmatch"); err == nil {
+		t.Fatal("RecordProviderMiss on closed db: want error, got nil")
+	}
+	if err := q.SetProviderLane(ctx, 1, "musixmatch"); err == nil {
+		t.Fatal("SetProviderLane on closed db: want error, got nil")
+	}
+	if err := q.SetInstrumentalResult(ctx, 1, 1); err == nil {
+		t.Fatal("SetInstrumentalResult on closed db: want error, got nil")
+	}
+	if _, err := q.ProviderHits(ctx); err == nil {
+		t.Fatal("ProviderHits on closed db: want error, got nil")
+	}
+	if _, err := q.ProviderMisses(ctx); err == nil {
+		t.Fatal("ProviderMisses on closed db: want error, got nil")
+	}
+	if _, err := q.CountInstrumental(ctx); err == nil {
+		t.Fatal("CountInstrumental on closed db: want error, got nil")
 	}
 }

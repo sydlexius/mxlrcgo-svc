@@ -184,3 +184,64 @@ func TestOrderedGuardRejectionIsUnsuitable(t *testing.T) {
 
 // Ensure the orchestrator satisfies providers.Fetcher (drop-in for the worker).
 var _ providers.Fetcher = (*Orchestrator)(nil)
+
+func TestLaneNamesReturnsAllLanesInOrder(t *testing.T) {
+	p1 := &stubProvider{name: "musixmatch"}
+	p2 := &stubProvider{name: "petitlyrics"}
+	o, err := New("ordered", laneFor(p1), laneFor(p2))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	names := o.LaneNames()
+	if len(names) != 2 {
+		t.Fatalf("LaneNames len = %d; want 2", len(names))
+	}
+	if names[0] != "musixmatch" {
+		t.Errorf("names[0] = %q; want musixmatch", names[0])
+	}
+	if names[1] != "petitlyrics" {
+		t.Errorf("names[1] = %q; want petitlyrics", names[1])
+	}
+}
+
+func TestWinningLaneSetOnOrderedHit(t *testing.T) {
+	synced := models.Song{Subtitles: models.Synced{Lines: []models.Lines{{Text: "lyric"}}}}
+	p1 := &stubProvider{name: "musixmatch", song: synced}
+	o, _ := New("ordered", laneFor(p1))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if err != nil {
+		t.Fatalf("FindLyrics: %v", err)
+	}
+	if song.WinningLane != "musixmatch" {
+		t.Errorf("WinningLane = %q; want musixmatch", song.WinningLane)
+	}
+}
+
+func TestWinningLaneSetOnBestAvailable(t *testing.T) {
+	// An unsuitable (instrumental) result from the only lane is returned as
+	// best-available; WinningLane must still be set.
+	instrumental := models.Song{Track: models.Track{Instrumental: 1}}
+	p1 := &stubProvider{name: "musixmatch", song: instrumental}
+	o, _ := New("ordered", laneFor(p1))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if err != nil {
+		t.Fatalf("FindLyrics: %v", err)
+	}
+	if song.WinningLane != "musixmatch" {
+		t.Errorf("WinningLane = %q; want musixmatch on best-available", song.WinningLane)
+	}
+}
+
+func TestWinningLaneEmptyOnBenignMiss(t *testing.T) {
+	p1 := &stubProvider{name: "musixmatch", err: musixmatch.ErrNoLyrics}
+	o, _ := New("ordered", laneFor(p1))
+
+	_, err := o.FindLyrics(context.Background(), models.Track{})
+	if !musixmatch.IsBenignMiss(err) {
+		t.Fatalf("err = %v; want benign miss", err)
+	}
+	// On a miss the orchestrator returns an error, not a song, so WinningLane
+	// is inaccessible - this test just verifies no panic and the correct error.
+}

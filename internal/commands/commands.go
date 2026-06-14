@@ -817,6 +817,10 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 	configureWorkerAudioDetector(w, audioDetector)
 	w.SetInstrumentalDetectionDefault(cfg.InstrumentalDetector.Enabled)
 	configureWorkerGuard(w, newGuard(cfg))
+	// Wire the DB-backed provider outcome recorder so hits and misses are persisted
+	// and exposed via GET /metrics (mxlrcgo_provider_hits_total{lane},
+	// mxlrcgo_provider_misses_total{lane}).
+	configureWorkerProviderRecorder(w, workQ)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
@@ -1075,6 +1079,12 @@ func configureWorkerGuard(w *worker.Worker, g worker.ScriptGuard) {
 		return
 	}
 	w.EnableGuard(g)
+}
+
+// configureWorkerProviderRecorder installs the provider-outcome recorder on the
+// worker. A nil recorder is valid and leaves the worker in no-op mode (default).
+func configureWorkerProviderRecorder(w *worker.Worker, r worker.ProviderRecorder) {
+	w.SetProviderRecorder(r)
 }
 
 // configureWriterBilingual enables interleaved bilingual output on an LRC writer

@@ -20,3 +20,7 @@ ignore:
   # internal/testutil.GenerateLibrary; main.go is just flag wiring and is not
   # shipped (excluded from GoReleaser's build allowlist).
   - "cmd/genlib/main.go"
+  # Generated templ output (make ui / `templ generate`). Authored from the
+  # *.templ sources and CI-verified current via `make ui-check`; the rendered
+  # behavior is covered by internal/web tests, not by counting generated lines.
+  - "web/templates/*_templ.go"

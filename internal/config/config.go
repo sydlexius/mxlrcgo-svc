@@ -176,6 +176,10 @@ type ServerConfig struct {
 	// Default 0, which means "fall back to api.cooldown". The effective interval
 	// is clamped to a 15-second floor at runtime.
 	WorkIntervalSeconds int `toml:"work_interval_seconds"`
+	// WebUIEnabled gates the read-only browser UI (serve mode). Defaults to false.
+	// Do NOT enable until the auth/onboarding layer (#204) ships -- enabling this
+	// before auth lands exposes an unauthenticated UI on the serve listener.
+	WebUIEnabled bool `toml:"web_ui_enabled"`
 }
 
 // defaultScanIntervalSeconds is the built-in scheduler scan interval (15 min).

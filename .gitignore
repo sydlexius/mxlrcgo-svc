@@ -26,6 +26,11 @@ dist/
 # Docs build output
 /site/
 
+# Playwright MCP rendered-evidence artifacts (local UI UAT only)
+.playwright-mcp/
+/m55-ref-*.png
+/mx-210-*.png
+
 # Failed lyrics fetch logs
 *_failed.txt
 

@@ -1,0 +1,163 @@
+/* Tailwind v4 entrypoint for the serve-mode web UI.
+ *
+ * Build (dev-time only, no node runtime): `make ui` runs the Tailwind
+ * standalone CLI to compile this file to output.css, which is go:embed'd and
+ * served at /static/css/output.css. Tailwind v4 auto-detects source files
+ * (including the generated *_templ.go), so the @source hint below is belt-and-
+ * suspenders for the templ sources.
+ */
+@import "tailwindcss";
+@import "./design-tokens.css";
+
+@source "../../templates";
+
+/* The UI is dark-only (issue #210): paint the document surface from the tokens
+   and bind the base font so first paint matches the runtime. */
+html {
+  background-color: var(--mx-content-bg);
+  color: var(--mx-content-text);
+  font-family: var(--mx-font-sans);
+  font-size: var(--mx-font-size-base);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* -- App shell ------------------------------------------------------------- */
+.mx-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* -- Sidebar --------------------------------------------------------------- */
+.mx-sidebar {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: var(--mx-sidebar-width);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--mx-sidebar-bg);
+  border-inline-end: 1px solid var(--mx-sidebar-border);
+  padding: 1rem 0.75rem;
+  z-index: 10;
+}
+
+.mx-sidebar-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.5rem 1.25rem;
+}
+
+.mx-sidebar-wordmark {
+  font-family: var(--mx-font-sans);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #f1f5f9; /* slate-100 */
+}
+
+.mx-sidebar-version {
+  font-family: var(--mx-font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--mx-sidebar-text);
+}
+
+.mx-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mx-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--mx-radius-sm);
+  color: var(--mx-sidebar-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.mx-nav-link:hover {
+  color: var(--mx-sidebar-text-hover);
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.mx-nav-link[aria-current="page"] {
+  color: var(--mx-sidebar-active-text);
+  background-color: var(--mx-sidebar-active-bg);
+}
+
+.mx-nav-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+}
+
+/* -- Content area ---------------------------------------------------------- */
+.mx-content {
+  flex: 1;
+  margin-inline-start: var(--mx-sidebar-width);
+  padding: 2rem 2.5rem;
+  max-width: var(--mx-content-max-width);
+}
+
+.mx-page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f1f5f9;
+  margin: 0 0 0.375rem;
+}
+
+.mx-page-subtitle {
+  font-size: 0.9rem;
+  color: var(--mx-content-text-secondary);
+  margin: 0 0 1.75rem;
+}
+
+/* -- Config view ----------------------------------------------------------- */
+.mx-code-block {
+  font-family: var(--mx-font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  color: var(--mx-content-text);
+  background-color: var(--mx-surface-bg);
+  border: 1px solid var(--mx-surface-border);
+  border-radius: var(--mx-radius-md);
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+/* -- Empty / placeholder state -------------------------------------------- */
+.mx-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 18rem;
+  border: 1px dashed var(--mx-surface-border);
+  border-radius: var(--mx-radius-lg);
+  color: var(--mx-content-text-secondary);
+  text-align: center;
+}
+
+.mx-empty-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--mx-content-text);
+}

@@ -5,6 +5,8 @@
 extend-exclude = [
     "go.sum",
     ".opencode/",
+    "web/static/fonts/",
+    "web/static/css/output.css",
 ]
 
 [default]

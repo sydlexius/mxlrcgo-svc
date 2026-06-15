@@ -1,0 +1,13 @@
+package templates
+
+// ConfigPage renders the effective configuration as a read-only, copy-friendly
+// monospace block. toml is produced by config.FormatConfigText, which redacts
+// every secret-bearing field (api.token, server.webhook_api_keys) before it
+// ever reaches this template, so the view has no secret to leak.
+templ ConfigPage(version string, toml string) {
+	@Layout("Config", "/config", version) {
+		<h1 class="mx-page-title">Configuration</h1>
+		<p class="mx-page-subtitle">Effective settings after merging file, environment, and CLI sources. Secrets are redacted.</p>
+		<pre class="mx-code-block" aria-label="Effective configuration">{ toml }</pre>
+	}
+}

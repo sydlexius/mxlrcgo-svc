@@ -1,0 +1,29 @@
+// Package templates holds the templ source for the serve-mode web UI shell.
+// Generated *_templ.go files are committed and CI-verified (make ui-check); the
+// binary renders them with no runtime template parsing.
+package templates
+
+// Layout is the base HTML document for every page. It links the embedded
+// design-tokens + Tailwind output, mounts the fixed Sidebar (with the active
+// nav path and the app version), and renders page content into the main column.
+// The UI is dark-only in v1, so the surface colors come straight from the
+// tokens with no theme class to toggle.
+templ Layout(title string, active string, version string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } - mxlrcgo-svc</title>
+			<link rel="stylesheet" href="/static/css/output.css"/>
+		</head>
+		<body>
+			<div class="mx-shell">
+				@Sidebar(active, version)
+				<main class="mx-content">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}

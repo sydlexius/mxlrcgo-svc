@@ -1,0 +1,81 @@
+/* Design tokens for the mxlrcgo-svc serve-mode web UI.
+ *
+ * Ported from the stillwater M55 design system (web/static/css/design-tokens.css)
+ * and deliberately pared to this project's v1 constraints (issue #210):
+ *
+ *   - dark theme only (no light theme, no theme toggle, no dual-token pairs)
+ *   - exactly two font families: Inter (UI) and JetBrains Mono (code/IDs/timestamps)
+ *
+ * Components reference these custom properties instead of hard-coding colors or
+ * sizes. The --mx- prefix keeps the tokens project-native rather than carrying
+ * stillwater's sw- namespace.
+ */
+
+/* -- Self-hosted fonts ----------------------------------------------------- */
+/* Inter: variable font covering all weights (100-900). Vendored from          */
+/* https://github.com/rsms/inter (SIL Open Font License 1.1).                  */
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* JetBrains Mono: variable font. Vendored from                                */
+/* https://github.com/JetBrains/JetBrainsMono (SIL Open Font License 1.1).     */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../fonts/JetBrainsMono.woff2') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* -- Typography ---------------------------------------------------------- */
+  /* Exposed as single swappable tokens (global <=3-font-family rule). Every
+     sans-bound role reads --mx-font-sans; every mono role reads --mx-font-mono. */
+  --mx-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mx-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --mx-font-size-base: 14px;
+
+  /* -- Accents (issue #210 palette) ---------------------------------------- */
+  --mx-primary: #2563eb;        /* blue-600: brand / primary actions          */
+  --mx-accent: #3b82f6;         /* blue-500: active highlights                */
+  --mx-accent-glow: rgba(59, 130, 246, 0.3);
+
+  /* -- Sidebar ------------------------------------------------------------- */
+  --mx-sidebar-bg: #0f172a;     /* slate-900                                  */
+  --mx-sidebar-text: #94a3b8;   /* slate-400                                  */
+  --mx-sidebar-text-hover: #cbd5e1; /* slate-300                              */
+  --mx-sidebar-active-bg: rgba(59, 130, 246, 0.15);
+  /* a11y: blue-300 lifts the active nav label to WCAG AA over the translucent
+     active-bg (mirrors stillwater's a11y note). */
+  --mx-sidebar-active-text: #93c5fd; /* blue-300                              */
+  --mx-sidebar-border: rgba(255, 255, 255, 0.06);
+  --mx-sidebar-width: 220px;
+
+  /* -- Content ------------------------------------------------------------- */
+  --mx-content-bg: #0b1120;     /* deeper navy: recesses the content well     */
+  --mx-content-text: #e2e8f0;   /* slate-200                                  */
+  --mx-content-text-secondary: #94a3b8; /* slate-400                          */
+  --mx-surface-bg: #0f172a;     /* slate-900: cards / code blocks             */
+  --mx-surface-border: rgba(255, 255, 255, 0.08);
+
+  /* -- Layout -------------------------------------------------------------- */
+  --mx-content-max-width: 1200px;
+  --mx-radius-sm: 6px;
+  --mx-radius-md: 10px;
+  --mx-radius-lg: 14px;
+}
+
+/* Reduced motion: honor the OS preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

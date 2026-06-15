@@ -13,11 +13,13 @@ import (
 	"strings"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/auth"
+	"github.com/sydlexius/mxlrcgo-svc/internal/config"
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 	"github.com/sydlexius/mxlrcgo-svc/internal/normalize"
 	"github.com/sydlexius/mxlrcgo-svc/internal/pathutil"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
+	"github.com/sydlexius/mxlrcgo-svc/internal/web"
 )
 
 const maxWebhookBody = 1 << 20 // 1 MiB
@@ -79,6 +81,7 @@ type Handler struct {
 	inventory    Inventory
 	allowedRoots []string
 	pathChecker  func(string) error
+	webui        *web.UI
 	mux          *http.ServeMux
 }
 
@@ -132,6 +135,23 @@ func WithPathChecker(check func(string) error) Option {
 	return func(h *Handler) { h.pathChecker = check }
 }
 
+// WithWebUI mounts the serve-mode web UI (sidebar shell, Reports placeholder,
+// and the read-only Config view) onto the handler. cfg is rendered (redacted)
+// by the Config view and version labels the sidebar. Omitting this option
+// leaves the handler serving only the JSON API.
+func WithWebUI(cfg config.Config, version string) Option {
+	return func(h *Handler) { h.webui = web.NewUI(cfg, version) }
+}
+
+// WithWebUIIf conditionally mounts the web UI. When enabled is false it
+// returns a no-op option so callers do not need an inline if-branch.
+func WithWebUIIf(enabled bool, cfg config.Config, version string) Option {
+	if !enabled {
+		return func(*Handler) {}
+	}
+	return WithWebUI(cfg, version)
+}
+
 // NewHandler creates an HTTP API handler.
 func NewHandler(a Authenticator, q WorkQueue, outdir string, opts ...Option) *Handler {
 	h := &Handler{
@@ -150,6 +170,9 @@ func NewHandler(a Authenticator, q WorkQueue, outdir string, opts ...Option) *Ha
 	h.mux.HandleFunc("GET /readyz", h.handleReadyz)
 	h.mux.HandleFunc("GET /api/v1/status", h.handleStatus)
 	h.mux.HandleFunc("GET /metrics", h.handleMetrics)
+	if h.webui != nil {
+		h.webui.Register(h.mux)
+	}
 	return h
 }
 

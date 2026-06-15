@@ -1,0 +1,16 @@
+package templates
+
+// ReportsPage is the v1 placeholder for the Reports workspace. The full
+// two-pane workspace (the five canned reports from the #186 design of record)
+// lands in #211, which builds on this foundation; this page keeps the nav
+// destination live and reachable in the meantime.
+templ ReportsPage(version string) {
+	@Layout("Reports", "/reports", version) {
+		<h1 class="mx-page-title">Reports</h1>
+		<p class="mx-page-subtitle">Read-only observability for the serve-mode queue and provider lanes.</p>
+		<div class="mx-empty">
+			<span class="mx-empty-title">Reports workspace coming soon</span>
+			<span>Queue summary, recent outcomes, provider effectiveness, instrumental inventory, and failure analysis will appear here.</span>
+		</div>
+	}
+}

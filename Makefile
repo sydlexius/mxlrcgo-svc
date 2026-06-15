@@ -1,9 +1,14 @@
 .PHONY: build run test test-shuffle test-cover patch-cover gate scan vulncheck \
         doctor sync-tool-versions coverage-floor smoke lint fmt hooks clean help \
-        docs docs-serve docs-deps
+        docs docs-serve docs-deps templ tailwind ui ui-check
 
 # Binary name
 BINARY=mxlrcgo-svc
+
+# Tailwind standalone CLI (v4). Override with `make ui TAILWIND=/path/to/tailwindcss`.
+# Install the single, node-free binary from
+# https://github.com/tailwindlabs/tailwindcss/releases (or `brew install tailwindcss`).
+TAILWIND ?= tailwindcss
 
 # Pinned govulncheck version for reproducible vulnerability scans. Manual pin:
 # scripts/check-tool-versions.sh currently asserts only the golangci-lint pin.
@@ -97,6 +102,24 @@ docs-serve:
 ## docs: Build the documentation site strictly into ./site
 docs:
 	properdocs build --strict
+
+## templ: Generate Go from web/templates/*.templ (pinned via go.mod tool directive)
+templ:
+	go tool templ generate
+
+## tailwind: Compile the web UI CSS (Tailwind v4 standalone CLI, no node runtime)
+tailwind:
+	$(TAILWIND) -i web/static/css/input.css -o web/static/css/output.css --minify
+
+## ui: Regenerate all web UI assets (templ + Tailwind)
+ui: templ tailwind
+
+## ui-check: Fail if committed web UI assets are stale or untracked vs their sources (CI gate)
+ui-check: ui
+	@{ git diff --exit-code -- web/ && test -z "$$(git ls-files --others --exclude-standard -- web/)"; } || { \
+		echo "Generated web UI assets are stale or untracked. Run 'make ui' and commit the result."; \
+		exit 1; \
+	}
 
 ## clean: Remove build artifacts
 clean:

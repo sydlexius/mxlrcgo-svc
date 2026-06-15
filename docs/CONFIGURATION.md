@@ -129,9 +129,12 @@ addr = "127.0.0.1:3876"
 # webhook_api_keys = ["mxlrc_your-webhook-key"]
 # scan_interval_seconds = 900
 # work_interval_seconds = 0
+# web_ui_enabled = false
 ```
 
 HTTP listen address, webhook keys, and the scheduler scan/worker poll intervals (env: `MXLRC_SERVER_ADDR`, `MXLRC_WEBHOOK_API_KEY`, `MXLRC_SCAN_INTERVAL`, `MXLRC_WORK_INTERVAL`; CLI: `--listen`, `--scan-interval`, `--work-interval`).
+
+`web_ui_enabled` (default `false`) gates the read-only browser UI on the serve listener. **Do not enable before auth ships (#204)** - enabling it on an unprotected listener exposes an unauthenticated web interface to any client that can reach the port. Secret values (API token, webhook keys) are always redacted in the UI, but the endpoint itself is open.
 
 ### `[secrets]`
 

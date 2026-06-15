@@ -845,6 +845,12 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 			server.WithMetricsReporter(workQ),
 			server.WithInventory(scan.New(sqlDB)),
 			server.WithAllowedRoots(allowedRoots),
+			// Mount the read-only web UI only when explicitly enabled (#210).
+			// Default is OFF: enabling before auth (#204) ships exposes an
+			// unauthenticated UI. bannerCfg is the effective config snapshot
+			// (resolved token/webhook keys/outdir/addr) so the Config view matches
+			// the startup banner.
+			server.WithWebUIIf(cfg.Server.WebUIEnabled, bannerCfg, version),
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

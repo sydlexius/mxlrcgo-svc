@@ -157,6 +157,22 @@ func WithTrustedNetworks(p *trustnet.Policy) Option {
 	}
 }
 
+// WithWebUIAuth mounts the serve-mode web UI with session authentication: the
+// page routes are gated by RequireSession and the /login + /logout endpoints are
+// registered (issue #204, lane 3). auth supplies credential/session validation,
+// the trusted-network bypass, and cookie management. A nil auth degrades to an
+// unauthenticated UI (equivalent to WithWebUI), so callers fail safe to the
+// existing behavior rather than panicking.
+func WithWebUIAuth(cfg config.Config, version string, auth *web.Auth) Option {
+	return func(h *Handler) {
+		if auth == nil {
+			h.webui = web.NewUI(cfg, version)
+			return
+		}
+		h.webui = web.NewUI(cfg, version, web.WithAuth(auth))
+	}
+}
+
 // WithWebUIIf conditionally mounts the web UI. When enabled is false it
 // returns a no-op option so callers do not need an inline if-branch.
 func WithWebUIIf(enabled bool, cfg config.Config, version string) Option {

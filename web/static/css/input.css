@@ -105,6 +105,28 @@ body {
   flex: none;
 }
 
+/* Sidebar footer holds the sign-out control, pushed to the bottom of the column
+   so it sits apart from the page nav (issue #204, lane 4). */
+.mx-sidebar-footer {
+  margin-top: auto;
+  padding-top: 0.5rem;
+}
+
+.mx-logout-form {
+  margin: 0;
+}
+
+/* A nav entry rendered as a <button> (the POST /logout submit). Resets the
+   native button chrome so it matches .mx-nav-link exactly. */
+.mx-nav-button {
+  width: 100%;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
 /* -- Content area ---------------------------------------------------------- */
 .mx-content {
   flex: 1;
@@ -252,6 +274,42 @@ body {
   font-size: 0.75rem;
   color: var(--mx-content-text-secondary);
   margin: 0;
+}
+
+/* Secondary helper copy under a field or below the title (issue #204, lane 4
+   onboarding). Smaller and dimmer than the body text so it reads as guidance. */
+.mx-auth-hint {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--mx-content-text-secondary);
+}
+
+/* Grouping header that separates the optional runtime-secret fields from the
+   required admin-credential fields on the setup form. */
+.mx-auth-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-top: 0.5rem;
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--mx-surface-border);
+}
+
+.mx-auth-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--mx-content-text);
+}
+
+/* Inline help link (e.g. "How do I get a token?") rendered inside a hint. Uses
+   the accent token so it reads as a link against the dark surface. */
+.mx-auth-link {
+  color: var(--mx-accent);
+  text-decoration: none;
+}
+
+.mx-auth-link:hover {
+  text-decoration: underline;
 }
 
 .mx-auth-version {

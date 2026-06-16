@@ -83,6 +83,7 @@ type Handler struct {
 	allowedRoots []string
 	pathChecker  func(string) error
 	webui        *web.UI
+	onboarding   *web.Onboarding
 	trusted      *trustnet.Policy
 	mux          *http.ServeMux
 }
@@ -173,6 +174,16 @@ func WithWebUIAuth(cfg config.Config, version string, auth *web.Auth) Option {
 	}
 }
 
+// WithOnboarding attaches the first-run onboarding flow (issue #204, lane 4) to
+// the authenticated web UI: the /setup endpoints and the redirect of the UI
+// routes to /setup until an admin exists. It is meaningful only alongside
+// WithWebUIAuth (the UI must be mounted to attach onboarding); a nil onboarding,
+// or the absence of a mounted UI (web UI disabled), is a no-op. This is correct,
+// not a silent failure: with no web UI there is nowhere to onboard.
+func WithOnboarding(o *web.Onboarding) Option {
+	return func(h *Handler) { h.onboarding = o }
+}
+
 // WithWebUIIf conditionally mounts the web UI. When enabled is false it
 // returns a no-op option so callers do not need an inline if-branch.
 func WithWebUIIf(enabled bool, cfg config.Config, version string) Option {
@@ -202,6 +213,9 @@ func NewHandler(a Authenticator, q WorkQueue, outdir string, opts ...Option) *Ha
 	h.mux.HandleFunc("GET /api/v1/status", h.handleStatus)
 	h.mux.HandleFunc("GET /metrics", h.handleMetrics)
 	if h.webui != nil {
+		if h.onboarding != nil {
+			h.webui.AttachOnboarding(h.onboarding)
+		}
 		h.webui.Register(h.mux)
 	}
 	return h

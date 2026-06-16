@@ -60,6 +60,8 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_DOCKER` | `false` | When `true`, storage defaults resolve under `/config`. Set automatically in the images. |
 | `MXLRC_MASTER_KEY` | (none) | Optional. Base64 of 32 random bytes; overrides the auto-generated key file as the master key for encrypted-at-rest secrets. When set, no key file is read or written. Use for key/data separation (recommended Docker hardening when the threat model includes whole-volume theft). Generate with `openssl rand -base64 32`. See the [Encrypted secrets](USER_GUIDE.md#encrypted-secrets) guide. |
 | `MXLRC_SECRETS_KEY_FILE` | XDG / `/config/.mxlrcgo.key` | Override for the auto-generated `0600` key-file location (the native-install default; used only when `MXLRC_MASTER_KEY` is unset). Point it at a separate mount to keep the key off the data volume. |
+| `MXLRC_WEBAUTH_ADMIN_USER` | (none) | Bootstrap-only. With `MXLRC_WEBAUTH_ADMIN_PASSWORD`, creates the first web-UI admin on startup when none exists (skipped otherwise). Both must be set; an existing admin is never overwritten. Rotate the password after first run and remove these vars. See [Web UI access](#web-ui-access). |
+| `MXLRC_WEBAUTH_ADMIN_PASSWORD` | (none) | Bootstrap-only. The first web-UI admin password (at least 8 characters; a shorter value is a fatal startup error). Never logged. Pairs with `MXLRC_WEBAUTH_ADMIN_USER`. |
 | `MXLRC_API_COOLDOWN` | `15` | Seconds between Musixmatch requests. `MXLRC_COOLDOWN` is a lower-precedence alias. |
 | `MXLRC_API_CIRCUIT_OPEN_DURATION` | `1800` | Cap (seconds) for the worker circuit-breaker window; the window ramps geometrically up to this ceiling, and a token-renewal signal opens for the full cap (floor 300). |
 | `MXLRC_API_CIRCUIT_BACKOFF_BASE` | `60` | Trip-1 circuit-breaker window (seconds); doubles each consecutive throttle up to `MXLRC_API_CIRCUIT_OPEN_DURATION`, resets on a successful fetch or clean miss (floor 15, capped at the open-duration). |
@@ -134,7 +136,13 @@ addr = "127.0.0.1:3876"
 
 HTTP listen address, webhook keys, and the scheduler scan/worker poll intervals (env: `MXLRC_SERVER_ADDR`, `MXLRC_WEBHOOK_API_KEY`, `MXLRC_SCAN_INTERVAL`, `MXLRC_WORK_INTERVAL`; CLI: `--listen`, `--scan-interval`, `--work-interval`).
 
-`web_ui_enabled` (default `false`) gates the read-only browser UI on the serve listener. **Do not enable before auth ships (#204)** - enabling it on an unprotected listener exposes an unauthenticated web interface to any client that can reach the port. Secret values (API token, webhook keys) are always redacted in the UI, but the endpoint itself is open.
+`web_ui_enabled` (default `false`) gates the browser UI on the serve listener. When enabled, the UI pages require a session login (a single admin account, separate from the webhook API key), or a request from a trusted network (the `[server.trusted_networks]` CIDR allowlist). Secret values (API token, webhook keys) are always redacted in the Config view. See [Web UI access](#web-ui-access) for the first-run onboarding flow.
+
+#### Web UI access
+
+The first time the UI is enabled there is no admin yet, so every UI page redirects to `/setup`. The onboarding form creates the admin account and can optionally store the Musixmatch token and webhook API key in the encrypted secret store. `/setup` is reachable only from loopback or a configured trusted-network CIDR, so a fresh daemon on a LAN port does not let the first stranger claim the admin account; once an admin exists, `/setup` is closed. The webhook API and health endpoints are unaffected before onboarding - an existing deployment with a webhook key and no admin keeps processing the queue and serving webhooks; only the browsable UI is gated.
+
+For headless/Docker deployments, set both `MXLRC_WEBAUTH_ADMIN_USER` and `MXLRC_WEBAUTH_ADMIN_PASSWORD` to bootstrap the admin at startup instead of using the form. This is idempotent (an existing admin is never overwritten), the password (minimum 8 characters) is never logged, and a too-short password is a fatal startup error. Treat them as bootstrap-only: sign in and rotate the password after first run, then drop the variables.
 
 ### `[secrets]`
 

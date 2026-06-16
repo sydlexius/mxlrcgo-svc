@@ -41,6 +41,8 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/trustnet"
 	"github.com/sydlexius/mxlrcgo-svc/internal/verification"
 	"github.com/sydlexius/mxlrcgo-svc/internal/watcher"
+	"github.com/sydlexius/mxlrcgo-svc/internal/web"
+	"github.com/sydlexius/mxlrcgo-svc/internal/webauth"
 	"github.com/sydlexius/mxlrcgo-svc/internal/worker"
 )
 
@@ -828,6 +830,18 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 		return 1
 	}
 
+	// Build the authenticated web UI subsystem (#204, lane 4) only when the UI is
+	// enabled. It backs both the browser-session login and the first-run
+	// onboarding flow, and bootstraps an env-provided admin (#259). When the UI
+	// is disabled all returns are nil and serve mode keeps its pre-#204 behavior
+	// (webhook + health only).
+	webAuthSvc, webAuth, onboarding, err := buildWebAuth(ctx, cfg, sqlDB, store, trustPolicy, version)
+	if err != nil {
+		_ = sqlDB.Close()
+		slog.Error("failed to initialize web authentication", "error", err)
+		return 1
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -846,26 +860,42 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 			runWatcher(runCtx, sqlDB, args, watchCfg, cfg)
 		}()
 	}
+	// Background session sweeper: periodically delete expired/revoked sessions,
+	// mirroring the worker/scheduler goroutine + context-cancel pattern. Only
+	// runs when the authenticated UI is mounted (there are no sessions otherwise).
+	if webAuthSvc != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runSessionSweeper(runCtx, webAuthSvc)
+		}()
+	}
 
+	handlerOpts := []server.Option{
+		server.WithReadiness(sqlDB),
+		server.WithStatusReporter(workQ),
+		// WithMetricsReporter is required: omitting it causes GET /metrics to return 500.
+		server.WithMetricsReporter(workQ),
+		// GET /metrics is gated by the trusted-network allowlist (loopback
+		// implicitly trusted); no API key or session is required (#204, S3).
+		server.WithTrustedNetworks(trustPolicy),
+		server.WithInventory(scan.New(sqlDB)),
+		server.WithAllowedRoots(allowedRoots),
+	}
+	if cfg.Server.WebUIEnabled {
+		// Mount the authenticated web UI (#204, lane 4): session login gates the
+		// page routes, and onboarding redirects them to /setup until an admin
+		// exists. bannerCfg is the effective config snapshot (resolved
+		// token/webhook keys/outdir/addr) so the Config view matches the startup
+		// banner. Default is OFF (the #210 gate is unchanged).
+		handlerOpts = append(handlerOpts,
+			server.WithWebUIAuth(bannerCfg, version, webAuth),
+			server.WithOnboarding(onboarding),
+		)
+	}
 	srv := &http.Server{
-		Addr: addr,
-		Handler: server.NewHandler(authSvc, workQ, outdir,
-			server.WithReadiness(sqlDB),
-			server.WithStatusReporter(workQ),
-			// WithMetricsReporter is required: omitting it causes GET /metrics to return 500.
-			server.WithMetricsReporter(workQ),
-			// GET /metrics is gated by the trusted-network allowlist (loopback
-			// implicitly trusted); no API key or session is required (#204, S3).
-			server.WithTrustedNetworks(trustPolicy),
-			server.WithInventory(scan.New(sqlDB)),
-			server.WithAllowedRoots(allowedRoots),
-			// Mount the read-only web UI only when explicitly enabled (#210).
-			// Default is OFF: enabling before auth (#204) ships exposes an
-			// unauthenticated UI. bannerCfg is the effective config snapshot
-			// (resolved token/webhook keys/outdir/addr) so the Config view matches
-			// the startup banner.
-			server.WithWebUIIf(cfg.Server.WebUIEnabled, bannerCfg, version),
-		),
+		Addr:              addr,
+		Handler:           server.NewHandler(authSvc, workQ, outdir, handlerOpts...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -891,6 +921,115 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 		slog.Warn("failed to close database", "error", err)
 	}
 	return code
+}
+
+// buildWebAuth constructs the authenticated web UI subsystem for serve mode
+// (#204, lane 4): the session/onboarding service over the DB, the auth
+// middleware, and the onboarding flow. It also bootstraps an env-provided admin
+// (#259) before returning. When the web UI is disabled it is a no-op returning
+// all-nil components (and no error), so the caller keeps the pre-#204 behavior.
+// A bootstrap failure (e.g. a too-short env password) is returned as a fatal
+// error.
+func buildWebAuth(ctx context.Context, cfg config.Config, sqlDB *sql.DB, store secrets.Store, policy *trustnet.Policy, version string) (*webauth.Service, *web.Auth, *web.Onboarding, error) {
+	if !cfg.Server.WebUIEnabled {
+		return nil, nil, nil, nil
+	}
+	svc := webauth.NewService(webauth.NewSQLUserStore(sqlDB), webauth.NewSQLSessionStore(sqlDB))
+	// #259: bootstrap the first admin from the environment before serving so a
+	// Docker deployment can come up with credentials and no interactive setup.
+	if err := bootstrapAdminFromEnv(ctx, svc); err != nil {
+		return nil, nil, nil, fmt.Errorf("bootstrap web admin from environment: %w", err)
+	}
+	auth := web.NewAuth(svc, policy, version)
+	onboarding := web.NewOnboarding(svc, store, auth, policy, version)
+	return svc, auth, onboarding, nil
+}
+
+// Environment variables for the #259 web-admin bootstrap. Both must be set for a
+// bootstrap to occur; the password is read directly here and never copied into
+// the Config struct (keeping it isolated, per the #259 plan).
+const (
+	envWebAdminUser = "MXLRC_WEBAUTH_ADMIN_USER"
+	envWebAdminPass = "MXLRC_WEBAUTH_ADMIN_PASSWORD" //nolint:gosec // G101: this is an env var NAME, not a hardcoded credential
+)
+
+// bootstrapAdminFromEnv creates the first web-UI admin from MXLRC_WEBAUTH_ADMIN_USER
+// and MXLRC_WEBAUTH_ADMIN_PASSWORD when no admin exists yet (#259). It is:
+//   - opt-in: a no-op when neither var is set;
+//   - idempotent: a no-op (never an overwrite) when an admin already exists;
+//   - strict: only one var set logs a warning and skips; a too-short password is
+//     a fatal startup error (returned), never a silent skip.
+//
+// The password is never logged. On success it logs a non-sensitive line naming
+// only the username.
+func bootstrapAdminFromEnv(ctx context.Context, svc *webauth.Service) error {
+	user := strings.TrimSpace(os.Getenv(envWebAdminUser))
+	pass := os.Getenv(envWebAdminPass)
+	if user == "" && pass == "" {
+		return nil // not requested
+	}
+	if user == "" || pass == "" {
+		slog.Warn("web admin env-bootstrap skipped: both " + envWebAdminUser + " and " + envWebAdminPass + " are required")
+		return nil
+	}
+	has, err := svc.HasUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("check for existing admin: %w", err)
+	}
+	if has {
+		slog.Info("web admin env-bootstrap skipped: an admin account already exists")
+		return nil
+	}
+	if len(pass) < webauth.MinPasswordLength {
+		return fmt.Errorf("%s must be at least %d characters", envWebAdminPass, webauth.MinPasswordLength)
+	}
+	if _, err := svc.Setup(ctx, user, pass); err != nil {
+		if errors.Is(err, webauth.ErrUserExists) {
+			// Lost a race to another bootstrap path; the account now exists.
+			slog.Info("web admin env-bootstrap skipped: an admin account already exists")
+			return nil
+		}
+		return fmt.Errorf("create admin: %w", err)
+	}
+	slog.Info("bootstrapped web admin from environment", "user", user)
+	return nil
+}
+
+// sessionSweepInterval is how often the background sweeper deletes expired and
+// revoked sessions.
+const sessionSweepInterval = time.Hour
+
+// runSessionSweeper periodically purges expired/revoked sessions until ctx is
+// canceled, reusing the worker/scheduler goroutine cadence pattern. It sweeps
+// once at startup so a long-running process does not wait a full interval to
+// reclaim sessions that expired while it was down.
+func runSessionSweeper(ctx context.Context, svc *webauth.Service) {
+	sweepSessions(ctx, svc)
+	ticker := time.NewTicker(sessionSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweepSessions(ctx, svc)
+		}
+	}
+}
+
+// sweepSessions runs one cleanup pass, logging a non-fatal warning on failure
+// (a canceled context during shutdown is expected and not warned).
+func sweepSessions(ctx context.Context, svc *webauth.Service) {
+	n, err := svc.CleanExpiredSessions(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Warn("session sweep failed", "error", err)
+		}
+		return
+	}
+	if n > 0 {
+		slog.Info("cleaned expired sessions", "count", n)
+	}
 }
 
 func runWorkerLoop(ctx context.Context, w *worker.Worker, interval time.Duration) {

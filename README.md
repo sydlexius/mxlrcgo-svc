@@ -100,6 +100,14 @@ A Musixmatch API token is required. Supply it via the `--token` CLI flag, the `M
 
 The Musixmatch token and the webhook API key can be stored encrypted at rest in the SQLite database (AES-256-GCM) instead of as plaintext in config and environment variables. It is opt-in and backward compatible: the encrypted store is the lowest-precedence source, so existing env/TOML setups are unchanged. Import the current plaintext with `mxlrcgo-svc secrets import`, set one by name from stdin with `mxlrcgo-svc secrets set <name>`, and list stored names (never values) with `mxlrcgo-svc secrets list`. The 32-byte master key is auto-generated as a `0600` key file on first use (the universal zero-setup default on all platforms including Docker). Set `MXLRC_MASTER_KEY` to an optional base64-encoded override for key/data separation (recommended when the threat model includes whole-volume theft). Losing the key makes the encrypted secrets unrecoverable by design; the remedy is to re-import or re-set them with the original plaintext. See the [Encrypted secrets guide](https://sydlexius.github.io/mxlrcgo-svc/USER_GUIDE/#encrypted-secrets).
 
+## Web UI access (serve mode)
+
+The serve-mode browser UI is gated by a single admin account (session login, separate from the webhook API key). It is off by default; enable it with `web_ui_enabled = true` under `[server]`.
+
+First run is interactive. With no admin yet, every UI page redirects to `/setup`, an onboarding form that creates the admin account and (optionally) stores the Musixmatch token and webhook API key encrypted at rest. `/setup` is reachable only from loopback or a configured trusted network (`[server.trusted_networks].cidrs`), so a stranger on the network cannot claim the admin account. After the admin exists, `/setup` is closed.
+
+For headless deployments (Docker), you can skip the interactive form by setting both `MXLRC_WEBAUTH_ADMIN_USER` and `MXLRC_WEBAUTH_ADMIN_PASSWORD` in the environment. On startup, if no admin exists yet, the daemon creates one from these values (password must be at least 8 characters). It is idempotent (an existing admin is never overwritten) and the password is never logged. Treat these as bootstrap-only credentials: after first run, sign in and rotate the password, then remove the variables from the environment.
+
 ## Credits
 
 - [Spicetify Lyrics Plus](https://github.com/spicetify/spicetify-cli/tree/master/CustomApps/lyrics-plus)

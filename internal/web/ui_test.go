@@ -111,6 +111,31 @@ func TestActiveNavHighlight(t *testing.T) {
 	}
 }
 
+// TestShellRendersLogoutControl verifies the shared sidebar shell renders a
+// sign-out control that POSTs to /logout on every authed page (issue #204, lane
+// 4 UAT). /logout is POST-only, so a GET anchor would be unreachable; the
+// control must be a form submit.
+func TestShellRendersLogoutControl(t *testing.T) {
+	mux := newUIServer(config.Config{}, "dev")
+
+	for _, path := range []string{"/config", "/reports"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s status = %d, want 200", path, rec.Code)
+			}
+			body := rec.Body.String()
+			for _, want := range []string{`method="post"`, `action="/logout"`, "Sign out", `type="submit"`} {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s: shell missing logout control fragment %q", path, want)
+				}
+			}
+		})
+	}
+}
+
 // TestRootRedirectsToConfig checks the bare root sends operators to the Config
 // view (the v1 landing page).
 func TestRootRedirectsToConfig(t *testing.T) {

@@ -137,6 +137,9 @@ func (a *Auth) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 // enumeration-safe error. A hard-locked IP is refused with 429 before any
 // credential check.
 func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !enforceSameOrigin(w, r) {
+		return
+	}
 	ip := a.clientKey(r)
 	if ok, retryAfter := a.limiter.allow(ip); !ok {
 		w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
@@ -174,6 +177,9 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 // handleLogout revokes the session server-side and clears the cookie
 // (POST /logout), then redirects to the login page.
 func (a *Auth) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !enforceSameOrigin(w, r) {
+		return
+	}
 	if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
 		// Best-effort revoke; a failure here must not prevent clearing the cookie.
 		_ = a.service.Logout(r.Context(), cookie.Value)

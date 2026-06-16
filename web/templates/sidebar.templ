@@ -25,6 +25,18 @@ templ Sidebar(active string, version string) {
 				}
 			</li>
 		</ul>
+		<div class="mx-sidebar-footer">
+			// /logout is POST-only (it revokes the session server-side and clears the
+			// cookie), so this is a real form submit, not a GET anchor. Rendered on
+			// every shell page; clicking while already logged out simply redirects to
+			// /login, which is harmless.
+			<form class="mx-logout-form" method="post" action="/logout">
+				<button type="submit" class="mx-nav-link mx-nav-button">
+					@iconLogout()
+					<span>Sign out</span>
+				</button>
+			</form>
+		</div>
 	</nav>
 }
 
@@ -51,6 +63,15 @@ templ iconReports() {
 		<rect x="7" y="12" width="3" height="6"></rect>
 		<rect x="12" y="8" width="3" height="10"></rect>
 		<rect x="17" y="4" width="3" height="14"></rect>
+	</svg>
+}
+
+// iconLogout: a door-with-arrow glyph for the Sign out control.
+templ iconLogout() {
+	<svg class="mx-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+		<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+		<polyline points="16 17 21 12 16 7"></polyline>
+		<line x1="21" y1="12" x2="9" y2="12"></line>
 	</svg>
 }
 

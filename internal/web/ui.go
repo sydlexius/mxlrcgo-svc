@@ -17,9 +17,10 @@ import (
 // lane 3) the UI routes are gated by RequireSession and the /login + /logout
 // endpoints are registered; without it the routes are public (the #210 default).
 type UI struct {
-	cfg     config.Config
-	version string
-	auth    *Auth
+	cfg        config.Config
+	version    string
+	auth       *Auth
+	onboarding *Onboarding
 }
 
 // UIOption customizes a UI.
@@ -31,6 +32,20 @@ type UIOption func(*UI)
 func WithAuth(a *Auth) UIOption {
 	return func(u *UI) { u.auth = a }
 }
+
+// WithOnboarding attaches the first-run onboarding flow (issue #204, lane 4): it
+// registers the /setup endpoints and redirects the UI routes to /setup until an
+// admin exists. It is meaningful only alongside WithAuth (onboarding feeds the
+// login session); without auth it is ignored.
+func WithOnboarding(o *Onboarding) UIOption {
+	return func(u *UI) { u.onboarding = o }
+}
+
+// AttachOnboarding wires the onboarding flow onto an already-constructed UI. It
+// is the post-construction equivalent of WithOnboarding, used by the server
+// layer where the UI is built first (WithWebUIAuth) and onboarding attached
+// after.
+func (u *UI) AttachOnboarding(o *Onboarding) { u.onboarding = o }
 
 // NewUI builds the web UI renderer from the effective config and build version.
 func NewUI(cfg config.Config, version string, opts ...UIOption) *UI {
@@ -53,7 +68,20 @@ func (u *UI) Register(mux *http.ServeMux) {
 		mux.HandleFunc("GET /login", u.auth.handleLoginForm)
 		mux.HandleFunc("POST /login", u.auth.handleLogin)
 		mux.HandleFunc("POST /logout", u.auth.handleLogout)
-		guard := u.auth.RequireSession
+		if u.onboarding != nil {
+			mux.HandleFunc("GET /setup", u.onboarding.handleSetupForm)
+			mux.HandleFunc("POST /setup", u.onboarding.handleSetup)
+		}
+		// The page guard is RequireSession, wrapped (when onboarding is present)
+		// by FirstRunGate so an un-onboarded daemon redirects to /setup before the
+		// session check runs.
+		guard := func(h http.Handler) http.Handler {
+			sess := u.auth.RequireSession(h)
+			if u.onboarding != nil {
+				return u.onboarding.FirstRunGate(sess)
+			}
+			return sess
+		}
 		mux.Handle("GET /{$}", guard(http.HandlerFunc(u.handleRoot)))
 		mux.Handle("GET /reports", guard(http.HandlerFunc(u.handleReports)))
 		mux.Handle("GET /config", guard(http.HandlerFunc(u.handleConfig)))

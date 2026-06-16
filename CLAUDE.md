@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **On resume / handoff, read the gitignored `SESSION-STATE.md` at the repo root FIRST.** It is the running orchestration checkpoint (current main SHA, in-flight PRs/worktrees, ordered NEXT ACTIONS, standing directives). Transient session state lives there, never in this file or the auto-memory.
+
 ## Project Overview
 
 `mxlrcgo-svc` (module `github.com/sydlexius/mxlrcgo-svc`) is a Go CLI tool that fetches synced lyrics from the Musixmatch API and saves them as `.lrc` files. It has been restructured to eliminate global state, externalize the API token, and add stateful features (TOML config, SQLite cache).

@@ -192,6 +192,58 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// TestRemoteAddrIPZoneID verifies that remoteAddrIP correctly strips an IPv6
+// zone identifier (the %iface suffix) before parsing, so link-local addresses
+// like fe80::1%eth0 are not rejected by net.ParseIP.
+func TestRemoteAddrIPZoneID(t *testing.T) {
+	cases := []struct {
+		name string
+		addr string
+		want string // expected IP string, "" means nil
+	}{
+		{"bracketed zone addr", "[fe80::1%eth0]:8080", "fe80::1"},
+		{"bare zone addr", "fe80::1%eth0", "fe80::1"},
+		{"bracketed no zone", "[fe80::1]:8080", "fe80::1"},
+		{"bare no zone", "fe80::1", "fe80::1"},
+		{"ipv4 port", "192.0.2.1:8080", "192.0.2.1"},
+		{"bare ipv4", "192.0.2.1", "192.0.2.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := remoteAddrIP(tc.addr)
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("remoteAddrIP(%q) = %v, want nil", tc.addr, got)
+				}
+				return
+			}
+			want := net.ParseIP(tc.want)
+			if !got.Equal(want) {
+				t.Fatalf("remoteAddrIP(%q) = %v, want %v", tc.addr, got, want)
+			}
+		})
+	}
+}
+
+// TestClientIPZoneIDRemoteAddr verifies that a request whose RemoteAddr is a
+// bracketed IPv6 address with a zone identifier is handled correctly end-to-end
+// by ClientIP (the zone suffix must be stripped so the IP is parseable and can
+// match a CIDR).
+func TestClientIPZoneIDRemoteAddr(t *testing.T) {
+	// fe80::/10 covers all link-local IPv6 addresses.
+	proxies := mustParseCIDRs(t, "fe80::/10")
+
+	r := httptestNewRequest("[fe80::1%eth0]:8080")
+	r.Header.Set("X-Forwarded-For", "203.0.113.5")
+
+	// fe80::1 falls inside fe80::/10, so it is a trusted proxy and XFF is used.
+	got := ClientIP(r, proxies)
+	want := net.ParseIP("203.0.113.5")
+	if !got.Equal(want) {
+		t.Fatalf("ClientIP with zone-id RemoteAddr: got %v, want %v", got, want)
+	}
+}
+
 // TestClientIPMultiLineXFFAdversarial verifies that an attacker who sends a
 // forged X-Forwarded-For header line cannot spoof a trusted IP when the
 // upstream proxy appends the real client IP as a SEPARATE header line (not

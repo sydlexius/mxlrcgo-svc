@@ -61,7 +61,11 @@ func remoteAddrIP(remoteAddr string) net.IP {
 		// No port present (or otherwise unsplittable); try the raw value.
 		host = remoteAddr
 	}
-	return net.ParseIP(strings.TrimSpace(host))
+	host = strings.TrimSpace(host)
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	return net.ParseIP(host)
 }
 
 // ClientIP determines the real client IP for a request.

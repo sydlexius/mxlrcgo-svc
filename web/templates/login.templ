@@ -1,0 +1,63 @@
+package templates
+
+// LoginPage renders the serve-mode sign-in screen (issue #204, lane 3). It is a
+// standalone centered card rather than the sidebar shell, so an unauthenticated
+// visitor sees no navigation, but it loads the same design tokens and fonts as
+// the rest of the UI for visual consistency.
+//
+// errMsg, when non-empty, is a generic, enumeration-safe message: it never
+// reveals whether the username or the password was wrong. next is a
+// server-validated local return path carried through the POST so a deep link
+// resumes after login. username is echoed back on a failed attempt as a
+// convenience (the password never is).
+templ LoginPage(version string, errMsg string, next string, username string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Sign in - mxlrcgo-svc</title>
+			<link rel="stylesheet" href="/static/css/output.css"/>
+		</head>
+		<body class="mx-auth-body">
+			<main class="mx-auth-card">
+				<div class="mx-auth-brand">
+					<span class="mx-auth-wordmark">mxlrcgo</span>
+				</div>
+				<h1 class="mx-auth-title">Sign in</h1>
+				if errMsg != "" {
+					<div class="mx-auth-error" role="alert">{ errMsg }</div>
+				}
+				<form class="mx-auth-form" method="post" action="/login">
+					<input type="hidden" name="next" value={ next }/>
+					<div class="mx-auth-field">
+						<label class="mx-auth-label" for="username">Username</label>
+						<input
+							class="mx-auth-input"
+							id="username"
+							name="username"
+							type="text"
+							value={ username }
+							autocomplete="username"
+							autofocus
+							required
+						/>
+					</div>
+					<div class="mx-auth-field">
+						<label class="mx-auth-label" for="password">Password</label>
+						<input
+							class="mx-auth-input"
+							id="password"
+							name="password"
+							type="password"
+							autocomplete="current-password"
+							required
+						/>
+					</div>
+					<button class="mx-auth-button" type="submit">Sign in</button>
+				</form>
+				<p class="mx-auth-footer">mxlrcgo-svc <span class="mx-auth-version">{ version }</span></p>
+			</main>
+		</body>
+	</html>
+}

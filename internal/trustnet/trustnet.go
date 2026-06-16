@@ -190,6 +190,16 @@ func (p *Policy) ClientIP(r *http.Request) net.IP {
 	return ClientIP(r, p.proxies)
 }
 
+// FromTrustedProxy reports whether the immediate TCP peer (RemoteAddr) is itself
+// a configured trusted proxy. It is used to decide whether proxy-set forwarding
+// headers (e.g. X-Forwarded-Proto, to detect TLS terminated upstream) may be
+// believed; like ClientIP it never trusts a header to make this decision, only
+// the peer address. A nil/unparsable RemoteAddr or an empty trusted-proxy list
+// yields false.
+func (p *Policy) FromTrustedProxy(r *http.Request) bool {
+	return ipInAny(remoteAddrIP(r.RemoteAddr), p.proxies)
+}
+
 // Trusted reports whether r originates from a trusted network. It resolves the
 // real client IP (proxy-aware, spoof-resistant) and checks it against the
 // allowlist (loopback implicitly trusted).

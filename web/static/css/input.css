@@ -142,6 +142,122 @@ body {
   margin: 0;
 }
 
+/* -- Sign-in (login) screen ------------------------------------------------ */
+/* A standalone centered card (no sidebar shell) that reuses the design tokens
+   so it matches the rest of the UI. Issue #204, lane 3. */
+.mx-auth-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+.mx-auth-card {
+  width: 100%;
+  max-width: 22rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 2rem 1.75rem;
+  background-color: var(--mx-surface-bg);
+  border: 1px solid var(--mx-surface-border);
+  border-radius: var(--mx-radius-lg);
+}
+
+.mx-auth-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.mx-auth-wordmark {
+  font-family: var(--mx-font-sans);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #f1f5f9; /* slate-100 */
+}
+
+.mx-auth-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f1f5f9;
+  margin: 0;
+}
+
+.mx-auth-error {
+  font-size: 0.85rem;
+  color: #fecaca; /* red-200: legible over the dark surface */
+  background-color: rgba(220, 38, 38, 0.12); /* red-600 @ 12% */
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  border-radius: var(--mx-radius-sm);
+  padding: 0.625rem 0.75rem;
+}
+
+.mx-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.mx-auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.mx-auth-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--mx-content-text-secondary);
+}
+
+.mx-auth-input {
+  font-family: var(--mx-font-sans);
+  font-size: 0.9rem;
+  color: var(--mx-content-text);
+  background-color: var(--mx-content-bg);
+  border: 1px solid var(--mx-surface-border);
+  border-radius: var(--mx-radius-sm);
+  padding: 0.5rem 0.625rem;
+}
+
+.mx-auth-input:focus {
+  outline: none;
+  border-color: var(--mx-accent);
+  box-shadow: 0 0 0 3px var(--mx-accent-glow);
+}
+
+.mx-auth-button {
+  font-family: var(--mx-font-sans);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #f8fafc;
+  background-color: var(--mx-primary);
+  border: 1px solid transparent;
+  border-radius: var(--mx-radius-sm);
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  margin-top: 0.25rem;
+  transition: background-color 0.12s ease;
+}
+
+.mx-auth-button:hover {
+  background-color: var(--mx-accent);
+}
+
+.mx-auth-footer {
+  font-size: 0.75rem;
+  color: var(--mx-content-text-secondary);
+  margin: 0;
+}
+
+.mx-auth-version {
+  font-family: var(--mx-font-mono);
+}
+
 /* -- Empty / placeholder state -------------------------------------------- */
 .mx-empty {
   display: flex;

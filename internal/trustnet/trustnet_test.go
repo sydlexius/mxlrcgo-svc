@@ -367,3 +367,28 @@ func TestPolicy(t *testing.T) {
 		}
 	})
 }
+
+// TestPolicyFromTrustedProxy verifies FromTrustedProxy reports whether the
+// immediate peer (RemoteAddr) is a configured trusted proxy, independent of any
+// forwarding header (it is used to decide whether X-Forwarded-Proto may be
+// believed for the Secure-cookie decision).
+func TestPolicyFromTrustedProxy(t *testing.T) {
+	p, err := NewPolicy(nil, []string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("NewPolicy error: %v", err)
+	}
+	if !p.FromTrustedProxy(req("10.1.2.3:443", "")) {
+		t.Error("peer inside trusted-proxy CIDR should report FromTrustedProxy=true")
+	}
+	if p.FromTrustedProxy(req("203.0.113.9:443", "")) {
+		t.Error("peer outside trusted-proxy CIDR must report FromTrustedProxy=false")
+	}
+	// A spoofed header cannot make an untrusted peer count as a proxy.
+	if p.FromTrustedProxy(req("203.0.113.9:443", "10.0.0.1")) {
+		t.Error("X-Forwarded-For must not influence FromTrustedProxy")
+	}
+	// No proxies configured (default): nothing is a trusted proxy.
+	if LoopbackOnly().FromTrustedProxy(req("10.1.2.3:443", "")) {
+		t.Error("with no trusted proxies configured, FromTrustedProxy must be false")
+	}
+}

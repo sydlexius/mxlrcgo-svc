@@ -17,8 +17,16 @@ import (
 //     "same-origin" and "none" (a user-initiated navigation); reject "cross-site"
 //     and "same-site".
 //   - else Origin: allow only when its host:port equals the request Host.
-//   - else (neither header, e.g. curl or another non-browser client): allow,
-//     because there is no browser-driven CSRF vector to defend against.
+//   - else Referer: allow only when its host:port equals the request Host
+//     (reject on a parse error or empty host).
+//   - else if a session cookie is present: reject. A browser carrying a session
+//     but stripped of every provenance header (privacy tooling, a very old
+//     client) is treated as untrusted, so a cross-site POST cannot ride the
+//     victim's session to a state-changing endpoint. This closes the CSRF bypass
+//     the unconditional allow used to leave open.
+//   - else (no provenance headers and no session, e.g. curl or another
+//     non-browser client): allow, because there is no browser-driven CSRF vector
+//     to defend against.
 func isSameOriginRequest(r *http.Request) bool {
 	if site := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")); site != "" {
 		return site == "same-origin" || site == "none"
@@ -29,6 +37,16 @@ func isSameOriginRequest(r *http.Request) bool {
 			return false
 		}
 		return u.Host == r.Host
+	}
+	if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
+		u, err := url.Parse(referer)
+		if err != nil || u.Host == "" {
+			return false
+		}
+		return u.Host == r.Host
+	}
+	if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
+		return false
 	}
 	return true
 }

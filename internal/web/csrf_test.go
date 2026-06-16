@@ -105,6 +105,13 @@ func TestIsSameOriginRequest(t *testing.T) {
 		{name: "origin port mismatch", host: "example.com:8080", headers: map[string]string{"Origin": "http://example.com:9090"}, want: false},
 		{name: "unparsable origin", host: "example.com", headers: map[string]string{"Origin": "://nohost"}, want: false},
 		{name: "origin with empty host", host: "example.com", headers: map[string]string{"Origin": "not-a-url"}, want: false},
+		// Referer fallback (no Sec-Fetch-Site, no Origin).
+		{name: "referer host match", host: "example.com", headers: map[string]string{"Referer": "http://example.com/setup"}, want: true},
+		{name: "referer port match", host: "example.com:8080", headers: map[string]string{"Referer": "http://example.com:8080/login"}, want: true},
+		{name: "referer host mismatch", host: "example.com", headers: map[string]string{"Referer": "http://evil.example/x"}, want: false},
+		{name: "referer port mismatch", host: "example.com:8080", headers: map[string]string{"Referer": "http://example.com:9090/x"}, want: false},
+		{name: "referer empty host", host: "example.com", headers: map[string]string{"Referer": "not-a-url"}, want: false},
+		{name: "origin wins over referer", host: "example.com", headers: map[string]string{"Origin": "http://evil.example", "Referer": "http://example.com/x"}, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,6 +122,79 @@ func TestIsSameOriginRequest(t *testing.T) {
 			}
 			if got := isSameOriginRequest(req); got != tc.want {
 				t.Errorf("isSameOriginRequest = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsSameOriginRequestSessionFallback covers the security fix: with no
+// provenance headers (no Sec-Fetch-Site, Origin, or Referer), a request
+// carrying a session cookie is treated as untrusted (the CSRF bypass that used
+// to allow it), while a request with no session cookie is allowed (a
+// non-browser client with no CSRF vector).
+func TestIsSameOriginRequestSessionFallback(t *testing.T) {
+	cases := []struct {
+		name   string
+		cookie *http.Cookie
+		want   bool
+	}{
+		{name: "no headers, session cookie present (the closed bypass)", cookie: &http.Cookie{Name: SessionCookieName, Value: "some-session-token"}, want: false},
+		{name: "no headers, empty session cookie value", cookie: &http.Cookie{Name: SessionCookieName, Value: ""}, want: true},
+		{name: "no headers, unrelated cookie only", cookie: &http.Cookie{Name: "other", Value: "x"}, want: true},
+		{name: "no headers, no cookie (non-browser)", cookie: nil, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+			req.Host = "example.com"
+			if tc.cookie != nil {
+				req.AddCookie(tc.cookie)
+			}
+			if got := isSameOriginRequest(req); got != tc.want {
+				t.Errorf("isSameOriginRequest = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnforceSameOriginSessionFallback proves the fallback rejection surfaces as
+// a 403 through enforceSameOrigin (the single entry point wired into the
+// state-changing POST handlers).
+func TestEnforceSameOriginSessionFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers map[string]string
+		cookie  *http.Cookie
+		want403 bool
+	}{
+		{name: "referer match allowed", headers: map[string]string{"Referer": "http://example.com/logout"}, want403: false},
+		{name: "referer cross-host rejected", headers: map[string]string{"Referer": "http://evil.example/logout"}, want403: true},
+		{name: "no headers + session cookie rejected", cookie: &http.Cookie{Name: SessionCookieName, Value: "some-session-token"}, want403: true},
+		{name: "no headers, no session allowed", want403: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+			req.Host = "example.com"
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			if tc.cookie != nil {
+				req.AddCookie(tc.cookie)
+			}
+			rec := httptest.NewRecorder()
+			ok := enforceSameOrigin(rec, req)
+			if tc.want403 {
+				if ok {
+					t.Fatalf("enforceSameOrigin allowed %s, want rejected", tc.name)
+				}
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("enforceSameOrigin %s = %d, want 403", tc.name, rec.Code)
+				}
+			} else {
+				if !ok {
+					t.Fatalf("enforceSameOrigin rejected %s, want allowed", tc.name)
+				}
 			}
 		})
 	}

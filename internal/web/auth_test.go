@@ -354,6 +354,9 @@ func TestHandleLogoutRevokesAndClears(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+	// A real browser logout carries Fetch Metadata; without a provenance header a
+	// session-bearing POST is now refused as a CSRF (see internal/web/csrf.go).
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	rec := httptest.NewRecorder()
 	a.handleLogout(rec, req)
 

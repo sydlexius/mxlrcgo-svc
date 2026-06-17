@@ -400,6 +400,10 @@ mxlrcgo-svc completion fish > ~/.config/fish/completions/mxlrcgo-svc.fish
 
 The scripts call a hidden `__complete` handler; library-name completion never creates the database.
 
+## Security considerations
+
+**Session cookie and TLS.** The browser session cookie (`mxlrc_session`) has its `Secure` flag set automatically when the connection is TLS - either a direct TLS listener or a trusted reverse proxy that sets `X-Forwarded-Proto: https`. On a plain-HTTP deployment the `Secure` flag is off and the cookie is sent in cleartext, which exposes it to network interception. If the web UI is reachable from outside your local machine, run it behind a TLS-terminating reverse proxy (nginx, Caddy, Traefik) or enable the built-in TLS listener (`[server.tls]` in `config.toml`). See `README.md` for TLS configuration options.
+
 ## Inspection commands
 
 The `queue` and `scan` subcommands expose the durable work queue and persisted

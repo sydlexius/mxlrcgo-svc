@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,6 +298,8 @@ func TestResolveWebhookKeysWithStore_BlankDBValue(t *testing.T) {
 // nonexistent ffmpeg causes exit code 1 there. The key-file stat after the call
 // is the actual proof that the store initialized and created the file.
 func TestRunServe_DockerAutoKeyFile(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	t.Setenv("MXLRC_DOCKER", "true")
 	t.Setenv("MXLRC_MASTER_KEY", "")
 	// In Docker mode xdgDataPath returns /config/... which is not writable in tests.
@@ -339,6 +342,8 @@ func TestRunServe_DockerAutoKeyFile(t *testing.T) {
 // verifier construction (verification enabled with a nonexistent ffmpeg) so the
 // HTTP server never starts. Exit code 1.
 func TestRunServe_DBSecretsThenVerifierFailure(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	t.Setenv("MXLRC_DOCKER", "")
 	key, err := secrets.GenerateKey()
 	if err != nil {

@@ -51,7 +51,7 @@ func (r *Repo) QueueSummary(ctx context.Context) (QueueSummary, error) {
 	if err != nil {
 		return QueueSummary{}, fmt.Errorf("reports: queue summary: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var status string
@@ -146,7 +146,7 @@ func (r *Repo) RecentOutcomes(ctx context.Context, limit int) ([]RecentOutcome, 
 	if err != nil {
 		return nil, fmt.Errorf("reports: recent outcomes: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	defer func() { _ = rows.Close() }()
 
 	var out []RecentOutcome
 	for rows.Next() {
@@ -160,9 +160,9 @@ func (r *Repo) RecentOutcomes(ctx context.Context, limit int) ([]RecentOutcome, 
 			return nil, fmt.Errorf("reports: scan recent outcome: %w", err)
 		}
 		if completedAt.Valid && completedAt.String != "" {
-			t, perr := time.Parse(timeFormat, completedAt.String)
-			if perr != nil {
-				return nil, fmt.Errorf("reports: parse completed_at %q: %w", completedAt.String, perr)
+			t, err := time.Parse(timeFormat, completedAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("reports: parse completed_at %q: %w", completedAt.String, err)
 			}
 			o.CompletedAt = t
 		}
@@ -217,7 +217,7 @@ func (r *Repo) ProviderEffectiveness(ctx context.Context) ([]ProviderEffectivene
 	if err != nil {
 		return nil, fmt.Errorf("reports: provider effectiveness: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	defer func() { _ = rows.Close() }()
 
 	var out []ProviderEffectiveness
 	for rows.Next() {
@@ -275,7 +275,7 @@ func (r *Repo) InstrumentalInventory(ctx context.Context) ([]InstrumentalTrack, 
 	if err != nil {
 		return nil, fmt.Errorf("reports: instrumental inventory: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	defer func() { _ = rows.Close() }()
 
 	var out []InstrumentalTrack
 	for rows.Next() {
@@ -323,7 +323,7 @@ func (r *Repo) FailureAnalysis(ctx context.Context) ([]FailureGroup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reports: failure analysis: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only query; close error is not actionable
+	defer func() { _ = rows.Close() }()
 
 	var out []FailureGroup
 	for rows.Next() {

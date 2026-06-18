@@ -598,7 +598,7 @@ func tableProviders(rows []ProviderRow) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<div class=\"mx-table-wrap\"><table class=\"mx-table\"><thead><tr><th scope=\"col\">Lane</th><th scope=\"col\">Hits</th><th scope=\"col\">Misses</th><th scope=\"col\">Hit-rate (approx.)</th></tr></thead> <tbody>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<div class=\"mx-table-wrap\"><table class=\"mx-table\"><thead><tr><th scope=\"col\">Lane</th><th scope=\"col\">Hits</th><th scope=\"col\">Misses</th><th scope=\"col\">Hit-rate</th></tr></thead> <tbody>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

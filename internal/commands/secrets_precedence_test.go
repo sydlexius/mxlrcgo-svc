@@ -372,8 +372,8 @@ func TestRunServe_DBSecretsThenVerifierFailure(t *testing.T) {
 	}
 
 	cfgPath := filepath.Join(dir, "config.toml")
-	// Verification enabled with a nonexistent ffmpeg -> newVerifier fails after
-	// the banner and provider selection, before the server starts.
+	// Verification enabled with a nonexistent ffmpeg -> ffmpeg resolution fails
+	// (an explicit override that is missing is a hard error), before the server starts.
 	writeServeConfig(t, cfgPath, dbPath, true, filepath.Join(dir, "no-such-ffmpeg"))
 
 	var out bytes.Buffer

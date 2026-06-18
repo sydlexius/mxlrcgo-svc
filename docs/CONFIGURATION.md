@@ -175,7 +175,22 @@ min_confidence = 0.85
 min_similarity = 0.35
 ```
 
-Optional Whisper-based speech-to-text verification for low-confidence scanned audio. When enabled, `ffmpeg` must be installed or `ffmpeg_path` must point to an executable ffmpeg binary. The worker extracts a bounded mono 16 kHz WAV sample using `sample_duration_seconds`, then sends it to a Whisper-compatible `/v1/audio/transcriptions` sidecar for audio whose Musixmatch metadata confidence is below `min_confidence`. The transcript must overlap the candidate lyrics by at least `min_similarity`. Environment variables override the TOML keys (`MXLRC_VERIFICATION_*`); `MXLRC_WHISPER_URL` and `MXLRC_VERIFICATION_SAMPLE_DURATION` remain accepted as legacy aliases.
+Optional Whisper-based speech-to-text verification for low-confidence scanned audio. When enabled, the worker extracts a bounded mono 16 kHz WAV sample using `sample_duration_seconds`, then sends it to a Whisper-compatible `/v1/audio/transcriptions` sidecar for audio whose Musixmatch metadata confidence is below `min_confidence`. The transcript must overlap the candidate lyrics by at least `min_similarity`. Environment variables override the TOML keys (`MXLRC_VERIFICATION_*`); `MXLRC_WHISPER_URL` and `MXLRC_VERIFICATION_SAMPLE_DURATION` remain accepted as legacy aliases.
+
+ffmpeg (used to extract the audio sample) is resolved automatically: see [ffmpeg resolution](#ffmpeg-resolution) below. Set `ffmpeg_path` only to pin a specific binary.
+
+### ffmpeg resolution
+
+Both verification and the instrumental detector need `ffmpeg` to extract an audio sample. You do not have to install or locate it yourself: when verification is enabled or a classifier URL is configured, the service resolves ffmpeg in this order:
+
+1. an explicit configured path (`ffmpeg_path`), if set - a missing configured binary is a hard error, never a silent download (air-gapped installs get a clear failure);
+2. a previously auto-provisioned binary in the cache;
+3. an `ffmpeg` already on your `PATH`;
+4. otherwise, a checksum-pinned static `ffmpeg` build is downloaded over HTTPS, verified against a pinned SHA256, and cached.
+
+The auto-download is available for Linux (amd64/arm64) and Windows (amd64). On macOS there is no published static build, so install ffmpeg yourself (`brew install ffmpeg`) or set `ffmpeg_path`. The cached binary lives next to the database (the same data directory, or `/config` under Docker), under `ffmpeg-<version>/`.
+
+Licensing: we do not bundle ffmpeg. The auto-downloaded build is a GPL static build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), fetched at runtime only when needed. The official Docker images already include Alpine's `ffmpeg` package, so containers resolve it on `PATH` (step 3) and never download.
 
 ### `[guard]`
 

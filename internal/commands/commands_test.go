@@ -172,7 +172,7 @@ func TestConfigureWriterBilingual(t *testing.T) {
 func TestNewVerifierRequiresURLWhenEnabled(t *testing.T) {
 	_, err := newVerifier(config.Config{
 		Verification: config.VerificationConfig{Enabled: true},
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("newVerifier returned nil error; want missing URL error")
 	}
@@ -180,11 +180,8 @@ func TestNewVerifierRequiresURLWhenEnabled(t *testing.T) {
 
 func TestNewVerifierDisabledDoesNotRequireFFmpeg(t *testing.T) {
 	got, err := newVerifier(config.Config{
-		Verification: config.VerificationConfig{
-			Enabled:    false,
-			FFmpegPath: "/path/that/does/not/exist",
-		},
-	})
+		Verification: config.VerificationConfig{Enabled: false},
+	}, "/path/that/does/not/exist")
 	if err != nil {
 		t.Fatalf("newVerifier: %v", err)
 	}
@@ -246,10 +243,9 @@ func TestNewAudioDetectorDecoupledFromEnableFlag(t *testing.T) {
 	// Enabled=false but no classifier URL -> nil (no classifier configured).
 	got, err := newAudioDetector(config.Config{
 		InstrumentalDetector: config.InstrumentalDetectorConfig{
-			Enabled:    false,
-			FFmpegPath: "/path/that/does/not/exist",
+			Enabled: false,
 		},
-	})
+	}, "/path/that/does/not/exist")
 	if err != nil {
 		t.Fatalf("newAudioDetector (no URL): %v", err)
 	}
@@ -268,12 +264,11 @@ func TestNewAudioDetectorDecoupledFromEnableFlag(t *testing.T) {
 		InstrumentalDetector: config.InstrumentalDetectorConfig{
 			Enabled:               false,
 			ClassifierURL:         "http://yamnet:8080",
-			FFmpegPath:            stubFFmpeg,
 			SampleDurationSeconds: 30,
 			MinConfidence:         0.90,
 			InstrumentalClasses:   []string{"Music"},
 		},
-	})
+	}, stubFFmpeg)
 	if err != nil {
 		t.Fatalf("newAudioDetector (URL set, Enabled=false): %v", err)
 	}
@@ -289,13 +284,12 @@ func TestNewAudioDetectorEnabledWithoutFFmpegErrors(t *testing.T) {
 		InstrumentalDetector: config.InstrumentalDetectorConfig{
 			Enabled:               true,
 			ClassifierURL:         "http://yamnet:8080",
-			FFmpegPath:            filepath.Join(t.TempDir(), "nonexistent-ffmpeg"),
 			SampleDurationSeconds: 30,
 			MinConfidence:         0.90,
 			InstrumentalClasses:   []string{"Music"},
 			CooldownSeconds:       5,
 		},
-	})
+	}, filepath.Join(t.TempDir(), "nonexistent-ffmpeg"))
 	if err == nil {
 		t.Fatal("newAudioDetector with missing ffmpeg returned nil error; want error")
 	}
@@ -315,7 +309,7 @@ func TestNewAudioDetectorBlankClassifierURLReturnsNil(t *testing.T) {
 			MinConfidence:         0.90,
 			InstrumentalClasses:   []string{"Music"},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("newAudioDetector with blank ClassifierURL returned error %v; want nil", err)
 	}

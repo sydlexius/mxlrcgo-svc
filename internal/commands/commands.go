@@ -26,6 +26,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/config"
 	"github.com/sydlexius/mxlrcgo-svc/internal/db"
 	"github.com/sydlexius/mxlrcgo-svc/internal/detector"
+	"github.com/sydlexius/mxlrcgo-svc/internal/ffmpeg"
 	"github.com/sydlexius/mxlrcgo-svc/internal/langguard"
 	"github.com/sydlexius/mxlrcgo-svc/internal/library"
 	"github.com/sydlexius/mxlrcgo-svc/internal/logging"
@@ -767,7 +768,21 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 		slog.Error("failed to configure lyrics provider", "error", err)
 		return 1
 	}
-	verifier, err := newVerifier(cfg)
+	// Resolve ffmpeg once for both the verifier and the instrumental detector.
+	// Resolution auto-provisions a checksum-pinned static build when ffmpeg is
+	// neither configured nor on PATH; it is skipped entirely unless verification
+	// is enabled or a classifier is configured (the nil-guards below also short-
+	// circuit, but resolving here avoids a redundant download per constructor).
+	var ffmpegPath string
+	if cfg.Verification.Enabled || strings.TrimSpace(cfg.InstrumentalDetector.ClassifierURL) != "" {
+		ffmpegPath, err = resolveFFmpeg(ctx, cfg)
+		if err != nil {
+			_ = sqlDB.Close()
+			slog.Error("failed to resolve ffmpeg", "error", err)
+			return 1
+		}
+	}
+	verifier, err := newVerifier(cfg, ffmpegPath)
 	if err != nil {
 		_ = sqlDB.Close()
 		slog.Error("failed to configure verification", "error", err)
@@ -812,7 +827,7 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 	w.SetMissBackoff(time.Duration(cfg.API.MissBackoffBaseHours)*time.Hour, time.Duration(cfg.API.MissBackoffCapHours)*time.Hour)
 	w.SetMaxMissAttempts(cfg.API.MaxMissAttempts)
 	configureWorkerVerification(w, cfg, verifier)
-	audioDetector, err := newAudioDetector(cfg)
+	audioDetector, err := newAudioDetector(cfg, ffmpegPath)
 	if err != nil {
 		slog.Error("failed to configure instrumental detector", "error", err)
 		return 1
@@ -1250,7 +1265,22 @@ func providerDisabledIn(name string, disabled []string) bool {
 	return false
 }
 
-func newVerifier(cfg config.Config) (verification.Verifier, error) {
+// resolveFFmpeg picks the ffmpeg override from the existing config keys
+// (verification's path takes precedence, then the detector's) and resolves it
+// to an absolute executable path, auto-provisioning a pinned static build when
+// neither a configured path nor a PATH ffmpeg is available. The provisioned
+// cache lives beside the database so it inherits the same data directory
+// (including the Docker /config short-circuit).
+func resolveFFmpeg(ctx context.Context, cfg config.Config) (string, error) {
+	override := strings.TrimSpace(cfg.Verification.FFmpegPath)
+	if override == "" {
+		override = strings.TrimSpace(cfg.InstrumentalDetector.FFmpegPath)
+	}
+	cacheDir := filepath.Join(filepath.Dir(cfg.DB.Path), "ffmpeg")
+	return ffmpeg.Resolve(ctx, override, ffmpeg.Options{CacheDir: cacheDir})
+}
+
+func newVerifier(cfg config.Config, ffmpegPath string) (verification.Verifier, error) {
 	if !cfg.Verification.Enabled {
 		return nil, nil
 	}
@@ -1258,7 +1288,7 @@ func newVerifier(cfg config.Config) (verification.Verifier, error) {
 		cfg.Verification.WhisperURL,
 		cfg.Verification.SampleDurationSeconds,
 		cfg.Verification.MinSimilarity,
-		cfg.Verification.FFmpegPath,
+		ffmpegPath,
 	)
 }
 
@@ -1275,7 +1305,7 @@ func configureWorkerVerification(w *worker.Worker, cfg config.Config, verifier v
 // global default and per-item decisions gate whether the worker actually calls it.
 // Returns (nil, nil) when no classifier URL is set; callers treat a nil return as
 // "no classifier configured".
-func newAudioDetector(cfg config.Config) (detector.Detector, error) {
+func newAudioDetector(cfg config.Config, ffmpegPath string) (detector.Detector, error) {
 	if strings.TrimSpace(cfg.InstrumentalDetector.ClassifierURL) == "" {
 		return nil, nil
 	}
@@ -1284,7 +1314,7 @@ func newAudioDetector(cfg config.Config) (detector.Detector, error) {
 		cfg.InstrumentalDetector.SampleDurationSeconds,
 		cfg.InstrumentalDetector.MinConfidence,
 		cfg.InstrumentalDetector.InstrumentalClasses,
-		cfg.InstrumentalDetector.FFmpegPath,
+		ffmpegPath,
 		cfg.InstrumentalDetector.CooldownSeconds,
 	)
 }

@@ -183,37 +183,38 @@ type ProviderEffectiveness struct {
 	Hits   int64
 	Misses int64
 	// HitRate is Hits / (Hits + Misses), in [0,1]; 0 when the lane has no
-	// recorded outcomes. APPROXIMATE: the underlying counters are
-	// attempt-weighted, not clean per-track, so this can over-state lanes that
-	// were tried but lost to a later winning lane. A true per-track hit-rate is
-	// a deferred follow-up (see #282); the UI layer should surface this value
-	// with an "approximate" label.
+	// recorded attempts. This is a TRUE per-track hit-rate (issue #282): Hits and
+	// Misses are per-track attempt outcomes from lane_attempts, so a lane that was
+	// tried but lost to a later winning lane is correctly counted as a miss.
 	HitRate float64
 }
 
-// ProviderEffectiveness returns per-lane hit/miss counts and hit-rate.
+// ProviderEffectiveness returns per-lane hit/miss counts and a TRUE per-track
+// hit-rate (issue #282).
 //
-// Source-of-truth decision: the provider_outcomes table (migration 018), NOT
-// aggregation over work_queue.provider_lane. provider_outcomes is the
-// worker-maintained aggregate; work_queue.provider_lane only records the winning
-// lane of a completed row (per-track provenance) and has no miss signal, so a
-// hit-rate cannot be computed from it.
+// Source-of-truth decision: the lane_attempts table (migration 022), NOT the
+// attempt-weighted provider_outcomes aggregate (migration 018). lane_attempts
+// records one row per (track, lane) for every ATTEMPTED lane: hit=1 for the lane
+// that served the track and hit=0 for every other attempted lane, INCLUDING a
+// lane that lost to a later winning lane. That is the exact case provider_outcomes
+// cannot express (it records a miss only on the all-lanes-benign-miss path), so a
+// hit-rate derived from it over-states tried-but-not-winning lanes. provider_outcomes
+// is intentionally kept in parallel (still maintained by the worker and read by
+// /metrics); this report no longer reads it.
 //
-// HitRate caveat (attempt-weighted, APPROXIMATE): the counters are NOT a clean
-// per-track tally. internal/worker.recordHit records a hit only for the WINNING
-// lane (worker.go: w.recordHit(..., song.WinningLane)), and
-// internal/worker.recordMisses records a miss for every active lane only on the
-// all-lanes-benign-miss path (worker.go: w.recordMisses on musixmatch.
-// IsBenignMiss). So a lane that was tried but lost to a later winning lane
-// records neither a hit nor a miss, and HitRate over-states such tried-but-not-
-// winning lanes. A true per-track hit-rate is a deferred follow-up (issue #282);
-// this report intentionally surfaces the approximate aggregate unchanged and
-// labels it (see the HitRate field doc) rather than re-deriving it here. The
-// hit-rate is computed in Go to keep integer-vs-float division explicit and
-// avoid SQL NULL-on-zero-divisor edge cases.
+// NO BACKFILL: lane_attempts is empty for all traffic that predates migration 022
+// (the per-lane history did not exist before, so it cannot be reconstructed). Until
+// new attempts accrue, this query returns no rows and Report 3 shows its empty
+// state. The hit-rate is computed in Go to keep integer-vs-float division explicit
+// and avoid SQL NULL-on-zero-divisor edge cases.
 func (r *Repo) ProviderEffectiveness(ctx context.Context) ([]ProviderEffectiveness, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT lane, hits, misses FROM provider_outcomes ORDER BY lane`)
+		`SELECT lane,
+		        SUM(CASE WHEN hit = 1 THEN 1 ELSE 0 END) AS hits,
+		        SUM(CASE WHEN hit = 0 THEN 1 ELSE 0 END) AS misses
+		   FROM lane_attempts
+		  GROUP BY lane
+		  ORDER BY lane`)
 	if err != nil {
 		return nil, fmt.Errorf("reports: provider effectiveness: %w", err)
 	}

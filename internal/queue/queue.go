@@ -1039,6 +1039,47 @@ func (q *DBQueue) RecordProviderMiss(ctx context.Context, lane string) error {
 	return nil
 }
 
+// RecordLaneAttempts persists the per-track, per-lane attempt outcomes for one
+// work_queue row into lane_attempts (migration 022) for a true per-track
+// hit-rate (issue #282). attempts holds one entry per ATTEMPTED lane: Hit true
+// for the lane that served the track, false for every other attempted lane
+// (including a lane that lost to a later winner). An empty attempts slice is a
+// no-op. The whole batch is written in one transaction so a row's attempts are
+// all-or-nothing. UNIQUE(queue_id, lane) makes re-fetches idempotent: an
+// --upgrade re-run upserts the latest outcome (and refreshes attempted_at)
+// rather than violating the constraint.
+func (q *DBQueue) RecordLaneAttempts(ctx context.Context, queueID int64, attempts []models.LaneAttempt) error {
+	if len(attempts) == 0 {
+		return nil
+	}
+	at := formatTime(q.now())
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("queue: record lane attempts begin for id %d: %w", queueID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, a := range attempts {
+		if a.Lane == "" {
+			continue
+		}
+		hit := 0
+		if a.Hit {
+			hit = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO lane_attempts(queue_id, lane, hit, attempted_at) VALUES(?, ?, ?, ?)
+             ON CONFLICT(queue_id, lane) DO UPDATE SET hit = excluded.hit, attempted_at = excluded.attempted_at`,
+			queueID, a.Lane, hit, at,
+		); err != nil {
+			return fmt.Errorf("queue: record lane attempt for id %d lane %q: %w", queueID, a.Lane, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("queue: record lane attempts commit for id %d: %w", queueID, err)
+	}
+	return nil
+}
+
 // SetProviderLane stamps the winning provider lane name onto a work_queue row.
 // Call at completion time (before Complete) so the row permanently records which
 // provider served it. A NULL provider_lane means not-yet-completed, retired

@@ -63,11 +63,27 @@ type Song struct {
 	// Empty on cache hits and zero-value songs. Used by the worker write-path to
 	// record per-lane hit counters without changing the Fetcher interface.
 	WinningLane string `json:"-"`
+	// LaneAttempts carries the per-lane hit/miss attribution for THIS track out of
+	// the orchestrator so the worker can persist a true per-track hit-rate (issue
+	// #282). One entry per ATTEMPTED lane: Hit is true for the winning lane and
+	// false for every other attempted lane (including lanes that lost to a later
+	// winner). Empty on cache hits and zero-value songs. Transient: not persisted
+	// as part of the song and never serialized.
+	LaneAttempts []LaneAttempt `json:"-"`
 	// FetchedAt is the time the song was fetched from the provider. Set by the
 	// worker immediately after a successful fetch and before any write path so
 	// all output formats share one consistent timestamp. Zero on cache hits
 	// (timestamp not available without a live fetch). Transient: not persisted.
 	FetchedAt time.Time `json:"-"`
+}
+
+// LaneAttempt is one provider lane's outcome for a single track: the lane name
+// and whether it served the track (Hit) or was attempted and lost (miss). The
+// orchestrator emits one per attempted lane on Song.LaneAttempts; the worker
+// persists them to lane_attempts (migration 022) for a true per-track hit-rate.
+type LaneAttempt struct {
+	Lane string
+	Hit  bool
 }
 
 // Inputs represents a single work item in the processing queue.

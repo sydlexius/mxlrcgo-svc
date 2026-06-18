@@ -2964,6 +2964,70 @@ func TestDBQueue_ProviderOutcomes(t *testing.T) {
 	}
 }
 
+// TestDBQueue_RecordLaneAttempts verifies the per-track, per-lane attempt rows
+// round-trip, that an empty slice is a no-op, that an empty lane name within a
+// batch is skipped, and that a re-fetch of the same (queue_id, lane) upserts
+// (idempotent under the UNIQUE constraint) rather than erroring.
+func TestDBQueue_RecordLaneAttempts(t *testing.T) {
+	ctx := context.Background()
+	db := openQueueTestDB(t)
+	q := NewDBQueue(db)
+
+	countRows := func() int {
+		t.Helper()
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM lane_attempts`).Scan(&n); err != nil {
+			t.Fatalf("count lane_attempts: %v", err)
+		}
+		return n
+	}
+
+	// Empty slice: no-op.
+	if err := q.RecordLaneAttempts(ctx, 1, nil); err != nil {
+		t.Fatalf("RecordLaneAttempts empty: %v", err)
+	}
+	if got := countRows(); got != 0 {
+		t.Fatalf("after empty batch: %d rows, want 0", got)
+	}
+
+	// One track, two lanes: winner hit, loser miss. An empty lane is skipped.
+	attempts := []models.LaneAttempt{
+		{Lane: "musixmatch", Hit: true},
+		{Lane: "petitlyrics", Hit: false},
+		{Lane: "", Hit: false},
+	}
+	if err := q.RecordLaneAttempts(ctx, 42, attempts); err != nil {
+		t.Fatalf("RecordLaneAttempts: %v", err)
+	}
+	if got := countRows(); got != 2 {
+		t.Fatalf("after batch: %d rows, want 2 (empty lane skipped)", got)
+	}
+
+	var hit int
+	if err := db.QueryRowContext(ctx,
+		`SELECT hit FROM lane_attempts WHERE queue_id = 42 AND lane = 'musixmatch'`).Scan(&hit); err != nil {
+		t.Fatalf("select winner: %v", err)
+	}
+	if hit != 1 {
+		t.Errorf("musixmatch hit = %d; want 1", hit)
+	}
+
+	// Re-fetch the same row with a flipped outcome: upsert, not a UNIQUE violation.
+	if err := q.RecordLaneAttempts(ctx, 42, []models.LaneAttempt{{Lane: "musixmatch", Hit: false}}); err != nil {
+		t.Fatalf("RecordLaneAttempts upsert: %v", err)
+	}
+	if got := countRows(); got != 2 {
+		t.Fatalf("after upsert: %d rows, want 2 (no duplicate)", got)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT hit FROM lane_attempts WHERE queue_id = 42 AND lane = 'musixmatch'`).Scan(&hit); err != nil {
+		t.Fatalf("select winner after upsert: %v", err)
+	}
+	if hit != 0 {
+		t.Errorf("musixmatch hit after upsert = %d; want 0 (refreshed)", hit)
+	}
+}
+
 // TestDBQueue_RecordProviderHitEmptyLane verifies that an empty lane name is a
 // no-op (no row inserted, no error).
 func TestDBQueue_RecordProviderHitEmptyLane(t *testing.T) {
@@ -3117,6 +3181,9 @@ func TestDBQueue_ProviderMethodsClosedDB(t *testing.T) {
 	}
 	if err := q.RecordProviderMiss(ctx, "musixmatch"); err == nil {
 		t.Fatal("RecordProviderMiss on closed db: want error, got nil")
+	}
+	if err := q.RecordLaneAttempts(ctx, 1, []models.LaneAttempt{{Lane: "musixmatch", Hit: true}}); err == nil {
+		t.Fatal("RecordLaneAttempts on closed db: want error, got nil")
 	}
 	if err := q.SetProviderLane(ctx, 1, "musixmatch"); err == nil {
 		t.Fatal("SetProviderLane on closed db: want error, got nil")

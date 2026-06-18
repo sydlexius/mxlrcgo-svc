@@ -465,3 +465,78 @@ func TestMigration017SecretsUpDown(t *testing.T) {
 		t.Fatalf("secrets table still present after down-migration")
 	}
 }
+
+func TestMigration022LaneAttemptsUpDown(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mig022.db")
+	sqlDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+
+	migFS, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		t.Fatalf("sub migrations fs: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, sqlDB, migFS)
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+
+	countMaster := func(typ, name string) int {
+		t.Helper()
+		var n int
+		if err := sqlDB.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sqlite_master WHERE type=? AND name=?`, typ, name).Scan(&n); err != nil {
+			t.Fatalf("query sqlite_master %s %s: %v", typ, name, err)
+		}
+		return n
+	}
+
+	// At v21 the lane_attempts table does not exist yet.
+	if _, err := provider.UpTo(ctx, 21); err != nil {
+		t.Fatalf("UpTo(21): %v", err)
+	}
+	if countMaster("table", "lane_attempts") != 0 {
+		t.Fatal("lane_attempts table present before migration 022")
+	}
+
+	// Apply 022 and exercise the table + UNIQUE upsert + index.
+	if _, err := provider.UpTo(ctx, 22); err != nil {
+		t.Fatalf("UpTo(22): %v", err)
+	}
+	if countMaster("table", "lane_attempts") != 1 {
+		t.Fatal("lane_attempts table missing after migration 022")
+	}
+	if countMaster("index", "idx_lane_attempts_lane") != 1 {
+		t.Fatal("idx_lane_attempts_lane missing after migration 022")
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := sqlDB.ExecContext(ctx,
+			`INSERT INTO lane_attempts (queue_id, lane, hit, attempted_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(queue_id, lane) DO UPDATE SET hit = excluded.hit, attempted_at = excluded.attempted_at`,
+			int64(1), "musixmatch", int64(i), "2026-06-18T00:00:00Z"); err != nil {
+			t.Fatalf("upsert lane_attempts[%d]: %v", i, err)
+		}
+	}
+	var rows, hit int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT COUNT(*), MAX(hit) FROM lane_attempts`).Scan(&rows, &hit); err != nil {
+		t.Fatalf("query lane_attempts: %v", err)
+	}
+	if rows != 1 || hit != 1 {
+		t.Fatalf("after upsert: rows=%d hit=%d; want 1/1 (UNIQUE upsert refreshed in place)", rows, hit)
+	}
+
+	// Down-migrate 022 and confirm the index and table are dropped.
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if countMaster("table", "lane_attempts") != 0 {
+		t.Fatal("lane_attempts table still present after down-migration")
+	}
+	if countMaster("index", "idx_lane_attempts_lane") != 0 {
+		t.Fatal("idx_lane_attempts_lane still present after down-migration")
+	}
+}

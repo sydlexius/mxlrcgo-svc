@@ -163,9 +163,8 @@ templ tableRecentOutcomes(rows []RecentOutcomeRow) {
 }
 
 templ tableProviders(rows []ProviderRow) {
-	<p class="mx-approx">Hit-rate is approximate (attempt-weighted, not a clean per-track tally). A true per-track rate is a deferred follow-up (#282).</p>
 	if len(rows) == 0 {
-		@reportEmpty("No provider outcomes recorded yet.")
+		@reportEmpty("No provider attempts recorded yet. This populates as tracks are processed.")
 	} else {
 		<div class="mx-table-wrap">
 			<table class="mx-table">

@@ -116,6 +116,12 @@ func (o *Orchestrator) FindLyrics(ctx context.Context, track models.Track) (mode
 //   - If every available lane's breaker was open, return ErrLaneUnavailable.
 func (o *Orchestrator) findOrdered(ctx context.Context, track models.Track) (models.Song, error) {
 	var r dispatchResult
+	// attempted accumulates the names of lanes actually CONSULTED (the provider was
+	// called), in order, so per-track hit/miss attribution counts only lanes that
+	// were tried. Ordered mode stops at the first suitable result, so lanes after
+	// the winner are never consulted and never appear here. Skipped (breaker-open)
+	// lanes are excluded too: the provider was not called, so it was not attempted.
+	var attempted []string
 	for _, lane := range o.lanes {
 		if err := ctx.Err(); err != nil {
 			return models.Song{}, err
@@ -131,10 +137,12 @@ func (o *Orchestrator) findOrdered(ctx context.Context, track models.Track) (mod
 			continue
 		}
 		r.consulted++
+		attempted = append(attempted, lane.Name())
 
 		if err == nil {
 			if IsSuitable(song, o.guard) {
 				song.WinningLane = lane.Name()
+				song.LaneAttempts = laneAttemptsFor(attempted, lane.Name())
 				return song, nil
 			}
 			r.retain(song, lane.Name())
@@ -144,7 +152,28 @@ func (o *Orchestrator) findOrdered(ctx context.Context, track models.Track) (mod
 		r.rankErr(err, class)
 	}
 
-	return o.resolve(ctx, &r)
+	song, err := o.resolve(ctx, &r)
+	// Attach per-track attribution to whatever resolve returns: a best-available
+	// fallback names its serving lane as the hit; an error (benign miss / transport)
+	// returns no winner, so every attempted lane is recorded as a miss. The worker
+	// persists these only on the success and benign-miss paths (not on hard
+	// failures), so carrying them on the error song here is harmless.
+	song.LaneAttempts = laneAttemptsFor(attempted, song.WinningLane)
+	return song, err
+}
+
+// laneAttemptsFor builds the per-track attribution for the given attempted lane
+// names: Hit is true for the lane equal to winner (the empty string means no
+// winner -> all misses) and false for every other attempted lane.
+func laneAttemptsFor(attempted []string, winner string) []models.LaneAttempt {
+	if len(attempted) == 0 {
+		return nil
+	}
+	out := make([]models.LaneAttempt, len(attempted))
+	for i, name := range attempted {
+		out[i] = models.LaneAttempt{Lane: name, Hit: name == winner}
+	}
+	return out
 }
 
 // dispatchResult accumulates the cross-lane outcome state shared by both dispatch

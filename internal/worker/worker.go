@@ -52,6 +52,11 @@ type Queue interface {
 type ProviderRecorder interface {
 	RecordProviderHit(ctx context.Context, lane string) error
 	RecordProviderMiss(ctx context.Context, lane string) error
+	// RecordLaneAttempts persists the per-track, per-lane hit/miss attribution for
+	// one work_queue row so a TRUE per-track hit-rate can be derived (issue #282),
+	// distinct from the attempt-weighted RecordProviderHit/Miss aggregate. An empty
+	// slice is a no-op.
+	RecordLaneAttempts(ctx context.Context, queueID int64, attempts []models.LaneAttempt) error
 }
 
 // ScriptGuard rejects lyric results whose body is dominated by scripts outside
@@ -484,6 +489,20 @@ func (w *Worker) recordMisses(ctx context.Context) {
 	}
 }
 
+// recordLaneAttempts persists the per-track, per-lane hit/miss attribution carried
+// out of the orchestrator on song.LaneAttempts, for a true per-track hit-rate
+// (issue #282), alongside the attempt-weighted provider_outcomes counters. An
+// empty attempts slice (cache hit, or no lane consulted) is a no-op. Errors are
+// logged at Warn and do not affect the processing outcome.
+func (w *Worker) recordLaneAttempts(ctx context.Context, id int64, attempts []models.LaneAttempt) {
+	if w.providerRecorder == nil || len(attempts) == 0 {
+		return
+	}
+	if err := w.providerRecorder.RecordLaneAttempts(ctx, id, attempts); err != nil {
+		slog.Warn("worker: record lane attempts failed", "id", id, "error", err)
+	}
+}
+
 // guardReject reports whether the script guard rejects this song. It returns
 // (false, "") when no guard is configured or the guard is disabled, so the
 // caller can treat a nil/disabled guard as a no-op.
@@ -627,6 +646,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			// each. Errors are non-fatal; recording happens before the Defer/Complete
 			// so the queue state is clean regardless of the recording outcome.
 			w.recordMisses(context.WithoutCancel(ctx))
+			// Also persist the per-track attribution (all attempted lanes missed this
+			// track) for the true per-track hit-rate (#282). The orchestrator carries
+			// the attempts on the returned song even on the benign-miss error path.
+			w.recordLaneAttempts(context.WithoutCancel(ctx), item.ID, song.LaneAttempts)
 			// Optional audio-based instrumental detection. Only runs on provider
 			// misses (no lyrics and not already flagged instrumental). Errors are
 			// non-fatal: starvation of the detector sidecar is acceptable; the miss
@@ -719,6 +742,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		// per-track provenance are always written when the provider round-trip
 		// succeeds, even if verify/guard/store fails later.
 		w.recordHit(context.WithoutCancel(ctx), item.ID, song.WinningLane)
+		// Persist the per-track attribution (winning lane hit, every other attempted
+		// lane a miss) for the true per-track hit-rate (#282), alongside the
+		// attempt-weighted provider_outcomes counter recorded above.
+		w.recordLaneAttempts(context.WithoutCancel(ctx), item.ID, song.LaneAttempts)
 		// The lane already recorded the circuit success and recovered its breaker
 		// inside FindLyrics, so a later bare 401 is correctly read as throttling
 		// rather than a dead token.
@@ -845,7 +872,12 @@ func (w *Worker) song(ctx context.Context, track models.Track, bypassCache bool)
 	// fallback exactly as before.
 	song, err := w.orch.FindLyrics(ctx, track)
 	if err != nil {
-		return models.Song{}, false, err
+		// Propagate the orchestrator's song even on error: on the benign-miss path
+		// it carries song.LaneAttempts (every attempted lane missed this track),
+		// which the worker persists for the true per-track hit-rate (#282). The
+		// caller only reads LaneAttempts on the benign-miss branch; other error
+		// branches ignore the song, so carrying it here is harmless.
+		return song, false, err
 	}
 	return song, false, nil
 }

@@ -123,19 +123,24 @@ func TestReportFragmentRecentOutcomes(t *testing.T) {
 	}
 }
 
-// TestProviderEffectivenessApproxLabel asserts the hit-rate is rendered with the
-// required "approximate" caveat (the underlying counter is attempt-weighted).
-func TestProviderEffectivenessApproxLabel(t *testing.T) {
+// TestProviderEffectivenessTrueRate asserts the hit-rate renders from the true
+// per-track lane_attempts source (issue #282) and no longer carries the old
+// "approximate" caveat.
+func TestProviderEffectivenessTrueRate(t *testing.T) {
 	sqlDB := openReportsTestDB(t)
-	if _, err := sqlDB.ExecContext(context.Background(),
-		`INSERT INTO provider_outcomes (lane, hits, misses) VALUES ('musixmatch', 3, 1)`); err != nil {
-		t.Fatalf("insert provider_outcomes: %v", err)
+	// 3 hits + 1 miss for musixmatch -> 75.0%, as distinct per-track rows.
+	for i, hit := range []int64{1, 1, 1, 0} {
+		if _, err := sqlDB.ExecContext(context.Background(),
+			`INSERT INTO lane_attempts (queue_id, lane, hit, attempted_at) VALUES (?, 'musixmatch', ?, '2026-06-18T00:00:00Z')`,
+			int64(i+1), hit); err != nil {
+			t.Fatalf("insert lane_attempts: %v", err)
+		}
 	}
 	mux := newReportsUIServer(t, sqlDB)
 
 	body := getFragment(t, mux, "provider-effectiveness").Body.String()
-	if !strings.Contains(strings.ToLower(body), "approximate") {
-		t.Error("provider-effectiveness must label the hit-rate approximate")
+	if strings.Contains(strings.ToLower(body), "approximate") {
+		t.Error("provider-effectiveness must no longer label the hit-rate approximate")
 	}
 	if !strings.Contains(body, "75.0%") {
 		t.Errorf("expected hit-rate 75.0%% for 3 hits / 1 miss; body:\n%s", body)

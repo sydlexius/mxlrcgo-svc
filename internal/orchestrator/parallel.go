@@ -54,6 +54,15 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 		haveHeld bool // a suitable unsynced result is held, pending a synced upgrade
 		upgrade  <-chan time.Time
 		pending  = len(o.lanes)
+		// consulted accumulates the names of lanes that ACTUALLY ran the provider
+		// (everything that increments r.consulted), so per-track attribution counts
+		// only attempted lanes -- mirroring ordered mode. A breaker-open lane
+		// (OutcomeUnavailable, provider not called) and a canceled loser are
+		// excluded, so neither is recorded as a spurious miss. On an early synced
+		// win, lanes still in flight have not reported and so get no row: we do not
+		// know their outcome, and recording them as misses would be the very
+		// over-count this table exists to avoid.
+		consulted []string
 	)
 
 	for {
@@ -73,10 +82,18 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 				// Breaker open, provider not called: skip (matters only if ALL unavailable).
 			default:
 				r.consulted++
+				consulted = append(consulted, res.name)
 				switch {
 				case res.err == nil && IsSuitable(res.song, o.guard):
 					if QualityOf(res.song) >= QualitySynced {
 						res.song.WinningLane = res.name
+						// Attribute over the lanes consulted SO FAR (the winner plus any
+						// lane that already reported a non-unavailable result): the winner
+						// is the hit, every consulted loser a miss. This is the over-count
+						// fix -- a lane that reported a miss before this synced winner is
+						// recorded as a miss -- without inventing misses for breaker-open
+						// or still-in-flight lanes that were never consulted.
+						res.song.LaneAttempts = laneAttemptsFor(consulted, res.name)
 						return res.song, nil // synced: commit now; defer cancels the losers.
 					}
 					// Suitable but unsynced: hold the first such result. Arm the upgrade
@@ -100,9 +117,18 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 				}
 				if haveHeld {
 					heldSong.WinningLane = heldLane
+					heldSong.LaneAttempts = laneAttemptsFor(consulted, heldLane)
 					return heldSong, nil
 				}
-				return o.resolve(ctx, &r)
+				song, err := o.resolve(ctx, &r)
+				// Every lane has now reported, so consulted holds exactly the attempted
+				// lanes (unavailable / canceled lanes excluded). A best-available
+				// fallback names its serving lane as the hit; an error returns no
+				// winner, so every consulted lane is a miss. The worker persists only on
+				// the success and benign-miss paths, so attaching on the error song is
+				// harmless.
+				song.LaneAttempts = laneAttemptsFor(consulted, song.WinningLane)
+				return song, err
 			}
 		case <-upgrade:
 			// The window elapsed with no synced upgrade: commit the held unsynced,
@@ -111,6 +137,7 @@ func (o *Orchestrator) findParallel(ctx context.Context, track models.Track) (mo
 				return models.Song{}, err
 			}
 			heldSong.WinningLane = heldLane
+			heldSong.LaneAttempts = laneAttemptsFor(consulted, heldLane)
 			return heldSong, nil
 		}
 	}

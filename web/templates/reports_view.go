@@ -50,7 +50,7 @@ type RecentOutcomeRow struct {
 	CompletedAt string
 }
 
-// ProviderRow is one provider lane's hit/miss tally and approximate hit-rate.
+// ProviderRow is one provider lane's hit/miss tally and true per-track hit-rate.
 type ProviderRow struct {
 	Lane    string
 	Hits    string

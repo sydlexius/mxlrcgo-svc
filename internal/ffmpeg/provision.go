@@ -137,6 +137,14 @@ func extractBinary(art artifact, archivePath, dest string) error {
 		return fmt.Errorf("ffmpeg: close binary: %w", err)
 	}
 	if err := os.Rename(tmpBinPath, dest); err != nil {
+		// A concurrent provision installed the binary first (on Windows os.Rename
+		// errors if dest already exists; there is no atomic replace). If dest is
+		// now a live non-empty file, the race was benign: drop our temp and
+		// treat the install as successful.
+		if info, statErr := os.Stat(dest); statErr == nil && info.Size() > 0 {
+			_ = os.Remove(tmpBinPath)
+			return nil
+		}
 		_ = os.Remove(tmpBinPath)
 		return fmt.Errorf("ffmpeg: install binary: %w", err)
 	}

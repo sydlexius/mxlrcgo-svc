@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -165,6 +166,76 @@ func TestProvision_SuccessExtractsCachesAndReuses(t *testing.T) {
 				t.Fatalf("after cache hit, download hits = %d, want 1 (no re-fetch)", hits)
 			}
 		})
+	}
+}
+
+// barrierDownloader serves the fixture archive but blocks each Download until
+// `parties` concurrent callers have arrived, then releases them together. This
+// forces every racer past Resolve's cache-miss check before any one finishes
+// provisioning, so they extract and os.Rename into the same dest concurrently -
+// exercising the benign concurrent-install race the J1 fix handles.
+type barrierDownloader struct {
+	payload []byte
+	hits    int32
+	arrived *sync.WaitGroup
+	release <-chan struct{}
+}
+
+func (d *barrierDownloader) Download(_ context.Context, _ string) (io.ReadCloser, error) {
+	atomic.AddInt32(&d.hits, 1)
+	d.arrived.Done() // signal arrival, then wait for the whole cohort
+	<-d.release
+	return io.NopCloser(bytes.NewReader(d.payload)), nil
+}
+
+func TestProvision_ConcurrentResolveRace(t *testing.T) {
+	const parties = 4
+	payload := buildTarXz(t)
+	useFixtureArtifact(t, artifact{
+		URL:              "https://example.invalid/ffmpeg.archive",
+		SHA256:           sha256Hex(payload),
+		BinPathInArchive: archiveBinPath(),
+		kind:             archiveTarXz,
+	})
+
+	var arrived sync.WaitGroup
+	arrived.Add(parties)
+	release := make(chan struct{})
+	go func() { arrived.Wait(); close(release) }() // release all once the cohort assembles
+
+	dl := &barrierDownloader{payload: payload, arrived: &arrived, release: release}
+	cacheDir := t.TempDir()
+	opts := Options{CacheDir: cacheDir, Downloader: dl}
+
+	var wg sync.WaitGroup
+	paths := make([]string, parties)
+	errs := make([]error, parties)
+	for i := 0; i < parties; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			paths[i], errs[i] = Resolve(context.Background(), "", opts)
+		}(i)
+	}
+	wg.Wait()
+
+	want := cachedPath(cacheDir)
+	for i := 0; i < parties; i++ {
+		if errs[i] != nil {
+			t.Fatalf("racer %d: Resolve error: %v", i, errs[i])
+		}
+		if paths[i] != want {
+			t.Fatalf("racer %d: path = %q, want %q", i, paths[i], want)
+		}
+	}
+
+	// Every racer must agree on a single valid cached binary holding the fixture.
+	content, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("read cached binary: %v", err)
+	}
+	if !bytes.Equal(content, fixtureBinary) {
+		t.Fatalf("cached content = %q, want fixture", content)
 	}
 }
 

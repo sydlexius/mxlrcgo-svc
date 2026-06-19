@@ -97,12 +97,27 @@ func linkScanResult(t *testing.T, sqlDB *sql.DB, workQueueID, scanResultID int64
 	}
 }
 
-func insertProviderOutcome(t *testing.T, sqlDB *sql.DB, lane string, hits, misses int64) {
+// insertLaneAttempts seeds lane_attempts with `hits` hit rows and `misses` miss
+// rows for the named lane, one per-track row each. queue_id is unique within the
+// lane (the UNIQUE constraint is (queue_id, lane), so different lanes may reuse
+// the same ids). This is the true per-track source for Report 3 (issue #282).
+func insertLaneAttempts(t *testing.T, sqlDB *sql.DB, lane string, hits, misses int64) {
 	t.Helper()
-	if _, err := sqlDB.ExecContext(context.Background(),
-		`INSERT INTO provider_outcomes (lane, hits, misses) VALUES (?, ?, ?)`,
-		lane, hits, misses); err != nil {
-		t.Fatalf("insert provider_outcomes: %v", err)
+	insert := func(qid, hit int64) {
+		if _, err := sqlDB.ExecContext(context.Background(),
+			`INSERT INTO lane_attempts (queue_id, lane, hit, attempted_at) VALUES (?, ?, ?, ?)`,
+			qid, lane, hit, "2026-06-18T00:00:00Z"); err != nil {
+			t.Fatalf("insert lane_attempts: %v", err)
+		}
+	}
+	var qid int64
+	for i := int64(0); i < hits; i++ {
+		qid++
+		insert(qid, 1)
+	}
+	for i := int64(0); i < misses; i++ {
+		qid++
+		insert(qid, 0)
 	}
 }
 
@@ -246,26 +261,25 @@ func TestProviderEffectiveness(t *testing.T) {
 	sqlDB := openTestDB(t)
 	repo := reports.New(sqlDB)
 
-	insertProviderOutcome(t, sqlDB, "musixmatch", 75, 25) // 0.75
-	insertProviderOutcome(t, sqlDB, "petitlyrics", 0, 0)  // no outcomes -> 0
-	insertProviderOutcome(t, sqlDB, "aaa", 1, 3)          // 0.25, sorts first
+	// Per-track attempt rows in lane_attempts (the true source, issue #282).
+	insertLaneAttempts(t, sqlDB, "musixmatch", 75, 25) // 0.75
+	insertLaneAttempts(t, sqlDB, "aaa", 1, 3)          // 0.25, sorts first
 
 	got, err := repo.ProviderEffectiveness(ctx)
 	if err != nil {
 		t.Fatalf("ProviderEffectiveness: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d lanes, want 3", len(got))
+	// petitlyrics has no attempts, so it does not appear (GROUP BY lane over
+	// lane_attempts only yields lanes with at least one recorded attempt).
+	if len(got) != 2 {
+		t.Fatalf("got %d lanes, want 2", len(got))
 	}
-	// ORDER BY lane: aaa, musixmatch, petitlyrics.
-	if got[0].Lane != "aaa" || got[0].HitRate != 0.25 {
-		t.Errorf("got[0] = %+v, want aaa/0.25", got[0])
+	// ORDER BY lane: aaa, musixmatch.
+	if got[0].Lane != "aaa" || got[0].Hits != 1 || got[0].Misses != 3 || got[0].HitRate != 0.25 {
+		t.Errorf("got[0] = %+v, want aaa hits=1 misses=3 rate=0.25", got[0])
 	}
-	if got[1].Lane != "musixmatch" || got[1].HitRate != 0.75 {
-		t.Errorf("got[1] = %+v, want musixmatch/0.75", got[1])
-	}
-	if got[2].Lane != "petitlyrics" || got[2].HitRate != 0 {
-		t.Errorf("got[2] = %+v, want petitlyrics/0 (no divide-by-zero)", got[2])
+	if got[1].Lane != "musixmatch" || got[1].Hits != 75 || got[1].Misses != 25 || got[1].HitRate != 0.75 {
+		t.Errorf("got[1] = %+v, want musixmatch hits=75 misses=25 rate=0.75", got[1])
 	}
 }
 

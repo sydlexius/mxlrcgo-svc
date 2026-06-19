@@ -235,10 +235,12 @@ func (f *fakeFetcher) FindLyrics(context.Context, models.Track) (models.Song, er
 }
 
 type fakeProviderRecorder struct {
-	hits    []string
-	misses  []string
-	hitErr  error
-	missErr error
+	hits        []string
+	misses      []string
+	attempts    map[int64][]models.LaneAttempt
+	hitErr      error
+	missErr     error
+	attemptsErr error
 }
 
 func (r *fakeProviderRecorder) RecordProviderHit(_ context.Context, lane string) error {
@@ -249,6 +251,14 @@ func (r *fakeProviderRecorder) RecordProviderHit(_ context.Context, lane string)
 func (r *fakeProviderRecorder) RecordProviderMiss(_ context.Context, lane string) error {
 	r.misses = append(r.misses, lane)
 	return r.missErr
+}
+
+func (r *fakeProviderRecorder) RecordLaneAttempts(_ context.Context, queueID int64, attempts []models.LaneAttempt) error {
+	if r.attempts == nil {
+		r.attempts = make(map[int64][]models.LaneAttempt)
+	}
+	r.attempts[queueID] = append(r.attempts[queueID], attempts...)
+	return r.attemptsErr
 }
 
 type fakeWriter struct {
@@ -2117,6 +2127,50 @@ func TestRunOnceRecordsProviderMissOnBenignMiss(t *testing.T) {
 	}
 	if len(q.deferred) != 1 {
 		t.Errorf("deferred = %v; want [302]", q.deferred)
+	}
+}
+
+// TestRunOnceRecordsLaneAttemptsOnSuccess verifies the worker persists the
+// per-track attribution carried out of the orchestrator on a successful fetch:
+// the winning lane recorded as a hit for this queue row (#282).
+func TestRunOnceRecordsLaneAttemptsOnSuccess(t *testing.T) {
+	q := &fakeQueue{items: []queue.WorkItem{{ID: 301, Inputs: models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "T"}}}}}
+	c := &fakeCache{}
+	fetcher := &fakeFetcher{song: models.Song{
+		Track:  models.Track{ArtistName: "A", TrackName: "T"},
+		Lyrics: models.Lyrics{LyricsBody: "lyrics"},
+	}}
+	rec := &fakeProviderRecorder{}
+
+	w := New(q, c, fetcher, &fakeWriter{})
+	w.SetProviderRecorder(rec)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got := rec.attempts[301]
+	if len(got) != 1 || got[0].Lane != "musixmatch" || !got[0].Hit {
+		t.Errorf("lane attempts for 301 = %+v; want [{musixmatch hit=true}]", got)
+	}
+}
+
+// TestRunOnceRecordsLaneAttemptsOnBenignMiss verifies the worker persists an
+// all-miss per-track attribution when every lane misses (#282).
+func TestRunOnceRecordsLaneAttemptsOnBenignMiss(t *testing.T) {
+	q := &fakeQueue{items: []queue.WorkItem{{ID: 302, Inputs: models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "T"}}}}}
+	c := &fakeCache{}
+	fetcher := &fakeFetcher{err: musixmatch.ErrNoLyrics}
+	rec := &fakeProviderRecorder{}
+
+	w := New(q, c, fetcher, &fakeWriter{})
+	w.SetProviderRecorder(rec)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got := rec.attempts[302]
+	if len(got) != 1 || got[0].Lane != "musixmatch" || got[0].Hit {
+		t.Errorf("lane attempts for 302 = %+v; want [{musixmatch hit=false}]", got)
 	}
 }
 

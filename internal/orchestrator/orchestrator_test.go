@@ -234,6 +234,129 @@ func TestWinningLaneSetOnBestAvailable(t *testing.T) {
 	}
 }
 
+// attemptHit looks up the recorded outcome for lane in a LaneAttempts slice.
+// found is false when the lane has no attempt entry.
+func attemptHit(attempts []models.LaneAttempt, lane string) (hit, found bool) {
+	for _, a := range attempts {
+		if a.Lane == lane {
+			return a.Hit, true
+		}
+	}
+	return false, false
+}
+
+// TestLaneAttemptsOrderedLoserRecordsMiss is the exact over-count fix (#282):
+// in ordered mode a lane that was tried but lost to a LATER winning lane must be
+// recorded as a miss, not silently dropped.
+func TestLaneAttemptsOrderedLoserRecordsMiss(t *testing.T) {
+	miss := &stubProvider{name: "aaa", err: musixmatch.ErrNoLyrics} // tried first, no lyrics
+	synced := &stubProvider{name: "musixmatch", song: models.Song{Subtitles: models.Synced{Lines: []models.Lines{{Text: "lyric"}}}}}
+	o, _ := New("ordered", laneFor(miss), laneFor(synced))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if err != nil {
+		t.Fatalf("FindLyrics: %v", err)
+	}
+	if song.WinningLane != "musixmatch" {
+		t.Fatalf("WinningLane = %q; want musixmatch", song.WinningLane)
+	}
+	if hit, found := attemptHit(song.LaneAttempts, "musixmatch"); !found || !hit {
+		t.Errorf("musixmatch attempt = (hit=%v, found=%v); want hit", hit, found)
+	}
+	if hit, found := attemptHit(song.LaneAttempts, "aaa"); !found || hit {
+		t.Errorf("aaa (lost to later winner) attempt = (hit=%v, found=%v); want recorded miss", hit, found)
+	}
+}
+
+// TestLaneAttemptsOrderedLaterLaneNotConsulted verifies a lane after the winner,
+// never consulted in ordered mode, has no attempt entry (it was not tried).
+func TestLaneAttemptsOrderedLaterLaneNotConsulted(t *testing.T) {
+	synced := &stubProvider{name: "aaa", song: models.Song{Subtitles: models.Synced{Lines: []models.Lines{{Text: "lyric"}}}}}
+	never := &stubProvider{name: "zzz", song: models.Song{Subtitles: models.Synced{Lines: []models.Lines{{Text: "unused"}}}}}
+	o, _ := New("ordered", laneFor(synced), laneFor(never))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if err != nil {
+		t.Fatalf("FindLyrics: %v", err)
+	}
+	if _, found := attemptHit(song.LaneAttempts, "zzz"); found {
+		t.Errorf("zzz was never consulted; want no attempt entry, got one")
+	}
+}
+
+// TestLaneAttemptsParallelAllMiss verifies parallel mode attributes every
+// CONSULTED lane on the all-miss path (both lanes report, no early return): each
+// is recorded as a miss. Deterministic because resolve runs only after pending
+// reaches 0, so both lanes are always in the consulted set.
+func TestLaneAttemptsParallelAllMiss(t *testing.T) {
+	m1 := &stubProvider{name: "aaa", err: musixmatch.ErrNoLyrics}
+	m2 := &stubProvider{name: "bbb", err: musixmatch.ErrNoLyrics}
+	o, _ := New("parallel", laneFor(m1), laneFor(m2))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if !musixmatch.IsBenignMiss(err) {
+		t.Fatalf("err = %v; want benign miss", err)
+	}
+	for _, lane := range []string{"aaa", "bbb"} {
+		if hit, found := attemptHit(song.LaneAttempts, lane); !found || hit {
+			t.Errorf("%s attempt = (hit=%v, found=%v); want recorded miss", lane, hit, found)
+		}
+	}
+}
+
+// TestLaneAttemptsParallelExcludesUnavailable is the parallel-mode over-count
+// guard (F1): a breaker-open lane never calls the provider, so it must get NO
+// lane_attempts row -- it was not consulted. Deterministic regardless of result
+// ordering: the unavailable lane is skipped on every path, and the synced lane
+// wins (immediately or after the miss reports), so the breaker-open lane is never
+// added to the consulted set.
+func TestLaneAttemptsParallelExcludesUnavailable(t *testing.T) {
+	down := &stubProvider{name: "down", song: models.Song{Subtitles: models.Synced{Lines: []models.Lines{{Text: "unused"}}}}}
+	synced := &stubProvider{name: "musixmatch", song: models.Song{Subtitles: models.Synced{Lines: []models.Lines{{Text: "lyric"}}}}}
+	downLane := laneFor(down)
+	downLane.Breaker().Trip() // open the breaker: provider not called -> OutcomeUnavailable
+	o, _ := New("parallel", downLane, laneFor(synced))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if err != nil {
+		t.Fatalf("FindLyrics: %v", err)
+	}
+	if song.WinningLane != "musixmatch" {
+		t.Fatalf("WinningLane = %q; want musixmatch", song.WinningLane)
+	}
+	if hit, found := attemptHit(song.LaneAttempts, "musixmatch"); !found || !hit {
+		t.Errorf("musixmatch attempt = (hit=%v, found=%v); want hit", hit, found)
+	}
+	if _, found := attemptHit(song.LaneAttempts, "down"); found {
+		t.Errorf("breaker-open lane 'down' was never consulted; want NO attempt row, got one")
+	}
+	if down.calls != 0 {
+		t.Errorf("breaker-open provider calls = %d; want 0", down.calls)
+	}
+}
+
+// TestLaneAttemptsAllMissRecorded verifies that when every lane misses (the
+// orchestrator returns a benign-miss error and an empty song), the attempts are
+// still carried so the worker can record an all-miss per-track row.
+func TestLaneAttemptsAllMissRecorded(t *testing.T) {
+	m1 := &stubProvider{name: "aaa", err: musixmatch.ErrNoLyrics}
+	m2 := &stubProvider{name: "bbb", err: musixmatch.ErrNoLyrics}
+	o, _ := New("ordered", laneFor(m1), laneFor(m2))
+
+	song, err := o.FindLyrics(context.Background(), models.Track{})
+	if !musixmatch.IsBenignMiss(err) {
+		t.Fatalf("err = %v; want benign miss", err)
+	}
+	if song.WinningLane != "" {
+		t.Errorf("WinningLane = %q; want empty on all-miss", song.WinningLane)
+	}
+	for _, lane := range []string{"aaa", "bbb"} {
+		if hit, found := attemptHit(song.LaneAttempts, lane); !found || hit {
+			t.Errorf("%s attempt = (hit=%v, found=%v); want recorded miss", lane, hit, found)
+		}
+	}
+}
+
 func TestWinningLaneEmptyOnBenignMiss(t *testing.T) {
 	p1 := &stubProvider{name: "musixmatch", err: musixmatch.ErrNoLyrics}
 	o, _ := New("ordered", laneFor(p1))

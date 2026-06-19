@@ -21,6 +21,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/reports"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
+	"github.com/sydlexius/mxlrcgo-svc/internal/secrets"
 	"github.com/sydlexius/mxlrcgo-svc/internal/trustnet"
 	"github.com/sydlexius/mxlrcgo-svc/internal/web"
 )
@@ -74,21 +75,23 @@ func defaultPathChecker(path string) error {
 
 // Handler serves the HTTP API.
 type Handler struct {
-	auth         Authenticator
-	queue        WorkQueue
-	outdir       string
-	priority     int
-	ready        Readiness
-	stats        StatusReporter
-	metrics      MetricsReporter
-	inventory    Inventory
-	allowedRoots []string
-	pathChecker  func(string) error
-	webui        *web.UI
-	onboarding   *web.Onboarding
-	reportsDB    *sql.DB
-	trusted      *trustnet.Policy
-	mux          *http.ServeMux
+	auth               Authenticator
+	queue              WorkQueue
+	outdir             string
+	priority           int
+	ready              Readiness
+	stats              StatusReporter
+	metrics            MetricsReporter
+	inventory          Inventory
+	allowedRoots       []string
+	pathChecker        func(string) error
+	webui              *web.UI
+	onboarding         *web.Onboarding
+	reportsDB          *sql.DB
+	settingsConfigPath string
+	settingsStore      secrets.Store
+	trusted            *trustnet.Policy
+	mux                *http.ServeMux
 }
 
 // Option configures optional Handler dependencies.
@@ -195,6 +198,18 @@ func WithReportsDB(db *sql.DB) Option {
 	return func(h *Handler) { h.reportsDB = db }
 }
 
+// WithSettingsWriter enables the settings page write path (#288 Phase 2): the
+// resolved config file path the save handlers write through config.ApplyChanges,
+// and the encrypted secret store that absorbs secret-field saves (the Musixmatch
+// token) off the TOML. Meaningful only alongside a mounted web UI; with no UI it
+// is a no-op. An empty path leaves the page read-only.
+func WithSettingsWriter(configPath string, store secrets.Store) Option {
+	return func(h *Handler) {
+		h.settingsConfigPath = configPath
+		h.settingsStore = store
+	}
+}
+
 // WithWebUIIf conditionally mounts the web UI. When enabled is false it
 // returns a no-op option so callers do not need an inline if-branch.
 func WithWebUIIf(enabled bool, cfg config.Config, version string) Option {
@@ -229,6 +244,9 @@ func NewHandler(a Authenticator, q WorkQueue, outdir string, opts ...Option) *Ha
 		}
 		if h.reportsDB != nil {
 			h.webui.AttachReports(reports.New(h.reportsDB))
+		}
+		if h.settingsConfigPath != "" {
+			h.webui.AttachSettingsWriter(h.settingsConfigPath, h.settingsStore)
 		}
 		h.webui.Register(h.mux)
 	}

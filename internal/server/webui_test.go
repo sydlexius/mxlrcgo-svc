@@ -13,35 +13,50 @@ import (
 )
 
 // TestWithWebUIServesPages verifies that mounting the web UI registers its
-// routes on the handler alongside the JSON API: the Config view renders (with
-// secrets redacted) and the root redirects to it.
+// routes on the handler alongside the JSON API: the Settings view renders (with
+// secrets redacted), the legacy /config path permanently redirects to it, and
+// the root redirects to it. /config replaced its read-only page with a redirect
+// to /settings (the editable settings page, #288).
 func TestWithWebUIServesPages(t *testing.T) {
 	cfg := config.Config{}
 	cfg.API.Token = "tok_should_not_appear"
 
 	h := NewHandler(&fakeAuth{}, &fakeQueue{}, "lyrics", WithWebUI(cfg, "vtest"))
 
-	t.Run("config page redacts and renders", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	t.Run("settings page redacts and renders", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /config status = %d, want 200", rec.Code)
+			t.Fatalf("GET /settings status = %d, want 200", rec.Code)
 		}
 		body := rec.Body.String()
 		if strings.Contains(body, "tok_should_not_appear") {
-			t.Error("Config view leaked the token through the server handler")
+			t.Error("Settings view leaked the token through the server handler")
 		}
 		if !strings.Contains(body, "[REDACTED]") {
-			t.Error("Config view missing [REDACTED] sentinel; redaction did not render")
+			t.Error("Settings view missing [REDACTED] sentinel; redaction did not render")
 		}
 		if !strings.Contains(body, "vtest") {
 			t.Error("sidebar version not rendered")
 		}
 	})
 
-	t.Run("root redirects to config", func(t *testing.T) {
+	t.Run("config path permanently redirects to settings", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMovedPermanently {
+			t.Fatalf("GET /config status = %d, want 301", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/settings" {
+			t.Errorf("Location = %q, want /settings", loc)
+		}
+	})
+
+	t.Run("root redirects to settings", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -49,8 +64,8 @@ func TestWithWebUIServesPages(t *testing.T) {
 		if rec.Code != http.StatusFound {
 			t.Fatalf("GET / status = %d, want 302", rec.Code)
 		}
-		if loc := rec.Header().Get("Location"); loc != "/config" {
-			t.Errorf("Location = %q, want /config", loc)
+		if loc := rec.Header().Get("Location"); loc != "/settings" {
+			t.Errorf("Location = %q, want /settings", loc)
 		}
 	})
 }
@@ -102,12 +117,12 @@ func TestWithWebUIIfEnabled(t *testing.T) {
 	h := NewHandler(&fakeAuth{}, &fakeQueue{}, "lyrics",
 		WithWebUIIf(true, config.Config{}, "venabled"))
 
-	req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /config with WithWebUIIf(true) status = %d, want 200", rec.Code)
+		t.Fatalf("GET /settings with WithWebUIIf(true) status = %d, want 200", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), "venabled") {
 		t.Error("sidebar version not rendered; web UI appears not mounted")

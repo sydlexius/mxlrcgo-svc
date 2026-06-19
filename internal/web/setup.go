@@ -226,7 +226,7 @@ func (o *Onboarding) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o.auth.setSessionCookie(w, r, token)
-	http.Redirect(w, r, "/config", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
 // writeSecrets persists any non-blank optional secret fields through the

@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/a-h/templ"
 
 	"github.com/sydlexius/mxlrcgo-svc/internal/config"
 	"github.com/sydlexius/mxlrcgo-svc/internal/reports"
+	"github.com/sydlexius/mxlrcgo-svc/internal/secrets"
 	"github.com/sydlexius/mxlrcgo-svc/web/templates"
 )
 
@@ -67,6 +69,20 @@ type UI struct {
 	// It is nil when the UI is built without a database seam (e.g. some tests);
 	// the report-fragment handler degrades to a 503 rather than panicking.
 	reports *reports.Repo
+
+	// --- settings write path (#288 Phase 2) ---
+	// configPath is the RESOLVED config file path the save handlers write through
+	// config.ApplyChanges. Empty disables the editable write path (the settings
+	// page stays read-only). Threaded from runServe via WithConfigPath.
+	configPath string
+	// secretStore routes secret-field saves (api.token) into the encrypted store
+	// instead of the TOML, so a secret never lands in config.toml or its .bak
+	// (#290). Nil disables secret saves (they are rejected, not written to TOML).
+	secretStore secrets.Store
+	// saveMu serializes the read-modify-write config saves so concurrent POSTs
+	// cannot interleave ApplyChanges' load/modify/atomic-rename cycle (#290
+	// single-writer guard).
+	saveMu sync.Mutex
 }
 
 // UIOption customizes a UI.
@@ -105,6 +121,79 @@ func WithReports(repo *reports.Repo) UIOption {
 // the UI is built first (WithWebUIAuth) and the reports repo attached after.
 func (u *UI) AttachReports(repo *reports.Repo) { u.reports = repo }
 
+// WithConfigPath sets the resolved config file path the settings save handlers
+// write through. Without it the settings page stays read-only (no write path).
+func WithConfigPath(path string) UIOption {
+	return func(u *UI) { u.configPath = path }
+}
+
+// WithSecretStore wires the encrypted secret store used to persist secret-field
+// saves (the Musixmatch token) off the TOML. Without it secret saves are
+// rejected rather than written to the config file.
+func WithSecretStore(s secrets.Store) UIOption {
+	return func(u *UI) { u.secretStore = s }
+}
+
+// AttachSettingsWriter wires the settings write path (config file + secret store)
+// onto an already-constructed UI, the post-construction equivalent of
+// WithConfigPath + WithSecretStore used by the server layer (WithWebUIAuth builds
+// the UI first). A nil store leaves secret saves rejected.
+func (u *UI) AttachSettingsWriter(configPath string, store secrets.Store) {
+	u.configPath = configPath
+	u.secretStore = store
+}
+
+// secureRequest reports whether the effective connection is TLS, for the CSRF
+// cookie's Secure attribute. It defers to the auth subsystem's proxy-aware check
+// when present; otherwise it reads the direct TLS state.
+func (u *UI) secureRequest(r *http.Request) bool {
+	if u.auth != nil {
+		return u.auth.secureRequest(r)
+	}
+	return r.TLS != nil
+}
+
+// secretPresentSentinel is a non-empty placeholder set on a re-loaded config's
+// secret fields when the secret exists only in the encrypted store (not the
+// file or env), which a file reload cannot see. It marks the field "set" for the
+// display without exposing a value: effectiveValue never echoes a secret and
+// FormatConfigText redacts it, so the sentinel is never rendered.
+const secretPresentSentinel = "\x00stored\x00"
+
+// currentConfig returns the config to render the settings view from: the CURRENT
+// on-disk file, re-loaded and env-resolved the same way startup does, so a value
+// just saved through the write path is reflected on reload (#288 Phase 2). It
+// falls back to the frozen startup snapshot when the write path is not wired or
+// a reload fails (logged). Secret presence from the store is folded in so a
+// store-only secret still reads "(set)".
+func (u *UI) currentConfig(ctx context.Context) config.Config {
+	if u.configPath == "" {
+		return u.cfg
+	}
+	cfg, _, err := config.LoadWithSources(u.configPath)
+	if err != nil {
+		slog.Error("settings: reload config for display failed; showing startup snapshot", "error", err)
+		return u.cfg
+	}
+	if u.secretStore != nil {
+		if cfg.API.Token == "" {
+			if _, ok, err := u.secretStore.Get(ctx, secrets.NameMusixmatchToken); err != nil {
+				slog.Warn("settings: secret-store read failed; secret presence unknown for display", "key", secrets.NameMusixmatchToken, "error", err)
+			} else if ok {
+				cfg.API.Token = secretPresentSentinel
+			}
+		}
+		if len(cfg.Server.WebhookAPIKeys) == 0 {
+			if v, ok, err := u.secretStore.Get(ctx, secrets.NameWebhookAPIKey); err != nil {
+				slog.Warn("settings: secret-store read failed; secret presence unknown for display", "key", secrets.NameWebhookAPIKey, "error", err)
+			} else if ok && v != "" {
+				cfg.Server.WebhookAPIKeys = []string{secretPresentSentinel}
+			}
+		}
+	}
+	return cfg
+}
+
 // NewUI builds the web UI renderer from the effective config and build version.
 func NewUI(cfg config.Config, version string, opts ...UIOption) *UI {
 	u := &UI{cfg: cfg, version: version}
@@ -115,7 +204,8 @@ func NewUI(cfg config.Config, version string, opts ...UIOption) *UI {
 }
 
 // Register wires the web UI routes onto mux: the static asset handler, a root
-// redirect to /config, and the Reports and Config pages. Routes are GET-only;
+// redirect to /settings, the Reports pages, and the Settings page (with /config
+// kept as a redirect to /settings for old links). Routes are GET-only;
 // the JSON API and its method patterns are registered separately by the server.
 // When an Auth is attached the page routes are wrapped in RequireSession and the
 // /login (GET/POST) and /logout (POST) endpoints are registered; the static
@@ -144,18 +234,27 @@ func (u *UI) Register(mux *http.ServeMux) {
 		mux.Handle("GET /reports", guard(http.HandlerFunc(u.handleReports)))
 		mux.Handle("GET /reports/{key}", guard(http.HandlerFunc(u.handleReportFragment)))
 		mux.Handle("GET /config", guard(http.HandlerFunc(u.handleConfig)))
+		mux.Handle("GET /settings", guard(http.HandlerFunc(u.handleSettings)))
+		mux.Handle("POST /settings/field", guard(http.HandlerFunc(u.handleSaveField)))
 		return
 	}
 	mux.HandleFunc("GET /{$}", u.handleRoot)
 	mux.HandleFunc("GET /reports", u.handleReports)
 	mux.HandleFunc("GET /reports/{key}", u.handleReportFragment)
 	mux.HandleFunc("GET /config", u.handleConfig)
+	mux.HandleFunc("GET /settings", u.handleSettings)
+	mux.HandleFunc("POST /settings/field", u.handleSaveField)
 }
 
-// handleRoot redirects the bare root to the Config view, the default landing
-// page for v1 (Reports is still a placeholder).
+// settingsPath is the single config destination. Settings replaced the old
+// read-only Config page (#288); /config is kept only as a redirect so old links
+// and bookmarks still resolve.
+const settingsPath = "/settings"
+
+// handleRoot redirects the bare root to the Settings page, the default landing
+// page (Reports is still a placeholder).
 func (u *UI) handleRoot(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/config", http.StatusFound)
+	http.Redirect(w, r, settingsPath, http.StatusFound)
 }
 
 // handleReports renders the Reports workspace shell with no report selected. No
@@ -336,18 +435,11 @@ func detectRequestedLabel(n sql.NullInt64) string {
 	return "not requested"
 }
 
-// handleConfig renders the effective configuration with secrets redacted.
-// FormatConfigText is the single redaction source of truth (shared with the
-// logging layer), so api.token and server.webhook_api_keys are masked before
-// the text reaches the template. Source-hint maps are nil: the view shows the
-// merged effective values, not per-field provenance.
+// handleConfig redirects the retired Config page to Settings, which absorbed the
+// read-only config view as its Raw config tab (#288). The route is kept so old
+// links and bookmarks still resolve.
 func (u *UI) handleConfig(w http.ResponseWriter, r *http.Request) {
-	toml := config.FormatConfigText(u.cfg, nil, nil)
-	// Even with secrets redacted, the effective config exposes operational
-	// detail (paths, intervals, provider lanes); keep it out of browser and
-	// intermediary caches.
-	w.Header().Set("Cache-Control", "no-store")
-	render(w, r, templates.ConfigPage(u.version, toml, u.buildRail("")))
+	http.Redirect(w, r, settingsPath, http.StatusMovedPermanently)
 }
 
 // render writes a templ component as the HTML response with an implicit 200.

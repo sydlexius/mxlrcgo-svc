@@ -48,12 +48,12 @@ func TestTrustedBypassNeverWeakensAPIKey(t *testing.T) {
 	const trustedIP = "192.0.2.50:6000"
 
 	t.Run("web UI is bypassed from a trusted IP", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+		req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 		req.RemoteAddr = trustedIP // trusted, no session cookie
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /config from trusted IP = %d, want 200 (session bypass)", rec.Code)
+			t.Fatalf("GET /settings from trusted IP = %d, want 200 (session bypass)", rec.Code)
 		}
 	})
 
@@ -78,12 +78,12 @@ func TestTrustedBypassNeverWeakensAPIKey(t *testing.T) {
 	})
 
 	t.Run("web UI redirects an untrusted IP to login", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+		req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 		req.RemoteAddr = "198.51.100.9:6000" // untrusted, no cookie
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("GET /config from untrusted IP = %d, want 303", rec.Code)
+			t.Fatalf("GET /settings from untrusted IP = %d, want 303", rec.Code)
 		}
 	})
 }

@@ -63,6 +63,28 @@ func Select(primary string, disabled []string, candidates ...LyricsProvider) (Ly
 	return nil, fmt.Errorf("unsupported lyrics provider %q", primary)
 }
 
+// ValidateSelection checks the cross-field provider invariants the daemon needs
+// to boot: the primary provider must not be in the disabled list (Select fails
+// otherwise), and at least one known provider must remain enabled. It shares the
+// providerDisabled primitive with Select, so it is the single source of truth
+// for the settings write path's cross-field validation (a per-field "is this a
+// known provider?" check cannot see these resulting-state invariants).
+func ValidateSelection(primary string, disabled []string) error {
+	primary = NormalizeName(primary)
+	if primary == "" {
+		primary = Musixmatch
+	}
+	if providerDisabled(primary, disabled) {
+		return fmt.Errorf("provider %q is the primary source and cannot be disabled; change the primary first", primary)
+	}
+	for _, k := range Known() {
+		if !providerDisabled(k, disabled) {
+			return nil
+		}
+	}
+	return fmt.Errorf("at least one provider must stay enabled")
+}
+
 // NormalizeName canonicalizes provider names for config comparisons.
 func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))

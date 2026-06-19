@@ -130,15 +130,58 @@ func TestSetValue_InsertsAbsentKeyIntoSection(t *testing.T) {
 	}
 }
 
-func TestSetValue_MissingSectionErrors(t *testing.T) {
+// TestSetValue_CreatesAbsentSection confirms a field whose [section] table is
+// absent from the file is written by CREATING that table (operators hand-write
+// minimal configs), rather than failing -- the #288 P1 fix. Existing sections,
+// keys, and comments are preserved.
+func TestSetValue_CreatesAbsentSection(t *testing.T) {
 	path := writeTempConfig(t)
 	doc, err := LoadDocument(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// [enrichment] is not present in the fixture.
-	if err := SetValue(doc, "enrichment.enabled", TypeBool, "true"); err == nil {
-		t.Error("expected an error setting a key in an absent section")
+	if err := SetValue(doc, "enrichment.enabled", TypeBool, "true"); err != nil {
+		t.Fatalf("SetValue into an absent section should create it, got: %v", err)
+	}
+	if err := WriteAtomic(path, doc); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	got := string(out)
+	if !strings.Contains(got, "[enrichment]") {
+		t.Errorf("absent section [enrichment] was not created:\n%s", got)
+	}
+	if !strings.Contains(got, "enabled = true") {
+		t.Errorf("value not written into the created section:\n%s", got)
+	}
+	// Existing content is untouched.
+	for _, must := range []string{
+		"# This top comment must survive a write.",
+		"token = \"secret-abc\"",
+		"[logging]",
+		"level = \"info\"",
+		"[providers]",
+	} {
+		if !strings.Contains(got, must) {
+			t.Errorf("creating a section disturbed existing content; missing %q:\n%s", must, got)
+		}
+	}
+}
+
+// TestApplyChangesCreatesAbsentSection exercises the same absent-section path
+// through the public ApplyChanges entry the settings save uses (#288 P1).
+func TestApplyChangesCreatesAbsentSection(t *testing.T) {
+	path := writeTempConfig(t)
+	if err := ApplyChanges(path, map[string]string{"enrichment.enabled": "true"}); err != nil {
+		t.Fatalf("ApplyChanges into an absent section: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !cfg.Enrichment.Enabled {
+		t.Error("enrichment.enabled not persisted via ApplyChanges into an absent section")
 	}
 }
 

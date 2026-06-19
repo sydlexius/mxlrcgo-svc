@@ -426,9 +426,7 @@ func Load(path string) (Config, error) {
 func LoadWithSources(path string) (Config, map[string]bool, error) {
 	cfg := defaults()
 	appliedEnv := map[string]bool{}
-	if path == "" {
-		path = xdgConfigPath("mxlrcgo-svc", "config.toml")
-	}
+	path = ResolveConfigPath(path)
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
 			md, err := toml.DecodeFile(path, &cfg)
@@ -1112,16 +1110,29 @@ func validateTrustedNetworks(cfg Config) error {
 // rather than a confusing listener failure.
 func validateServerTLS(cfg Config) error {
 	t := cfg.Server.TLS
-	if t.SelfSigned && (t.CertFile != "" || t.KeyFile != "") {
-		return fmt.Errorf("config: server.tls: self_signed is mutually exclusive with cert_file/key_file")
-	}
-	if (t.CertFile == "") != (t.KeyFile == "") {
-		return fmt.Errorf("config: server.tls: cert_file and key_file must be set together")
+	if err := ValidateTLSSelection(t.SelfSigned, t.CertFile, t.KeyFile); err != nil {
+		return fmt.Errorf("config: server.tls: %w", err)
 	}
 	for _, h := range t.SelfSignedHosts {
 		if net.ParseIP(h) == nil && !isValidHostname(h) {
 			return fmt.Errorf("config: server.tls: self_signed_hosts: %q is not a valid hostname or IP address", h)
 		}
+	}
+	return nil
+}
+
+// ValidateTLSSelection enforces the two cross-field [server.tls] invariants the
+// daemon needs to boot: self_signed is mutually exclusive with an explicit
+// cert_file/key_file, and cert_file and key_file must be set together. It is the
+// single source of truth shared by validateServerTLS (boot) and the settings
+// write path's checkTLSInvariant (a per-field validator cannot see these
+// resulting-state rules), so the UI rejects exactly what boot would reject.
+func ValidateTLSSelection(selfSigned bool, certFile, keyFile string) error {
+	if selfSigned && (certFile != "" || keyFile != "") {
+		return fmt.Errorf("self_signed is mutually exclusive with cert_file/key_file")
+	}
+	if (certFile == "") != (keyFile == "") {
+		return fmt.Errorf("cert_file and key_file must be set together")
 	}
 	return nil
 }
@@ -1157,6 +1168,19 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// ResolveConfigPath resolves the effective config file path: the caller-supplied
+// path when non-empty, otherwise the XDG default (config.toml under the app's
+// XDG config dir, or /config in Docker). It is the single resolver shared by
+// LoadWithSources and the settings write path, so the web UI writes to the exact
+// file the daemon loaded. May return "" only if no path was given and the home
+// directory cannot be determined outside Docker.
+func ResolveConfigPath(path string) string {
+	if path != "" {
+		return path
+	}
+	return xdgConfigPath("mxlrcgo-svc", "config.toml")
 }
 
 // xdgConfigPath returns the XDG config path for the given app and file.

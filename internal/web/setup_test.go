@@ -218,8 +218,8 @@ func TestSetupCreatesAdminAndSecrets(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("POST /setup = %d, want 303", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/config" {
-		t.Errorf("Location = %q, want /config", loc)
+	if loc := rec.Header().Get("Location"); loc != "/settings" {
+		t.Errorf("Location = %q, want /settings", loc)
 	}
 
 	// A session cookie was issued so onboarding flows straight into the UI.
@@ -528,17 +528,17 @@ func TestWriteSecretsBranches(t *testing.T) {
 	t.Run("nil store with submitted fields warns and proceeds", func(t *testing.T) {
 		onb := newFakeOnboarding(t, fakeOnboardingService{}, nil) // nil setter
 		rec := postFakeSetup(onb)
-		// Admin created + auto-login succeeds -> redirect to /config.
-		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/config" {
-			t.Fatalf("nil-store success -> %d %q, want 303 /config", rec.Code, rec.Header().Get("Location"))
+		// Admin created + auto-login succeeds -> redirect to /settings.
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/settings" {
+			t.Fatalf("nil-store success -> %d %q, want 303 /settings", rec.Code, rec.Header().Get("Location"))
 		}
 	})
 
 	t.Run("secret store error is logged but does not fail setup", func(t *testing.T) {
 		onb := newFakeOnboarding(t, fakeOnboardingService{}, failingSecretSetter{})
 		rec := postFakeSetup(onb)
-		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/config" {
-			t.Fatalf("secret-error success -> %d %q, want 303 /config", rec.Code, rec.Header().Get("Location"))
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/settings" {
+			t.Fatalf("secret-error success -> %d %q, want 303 /settings", rec.Code, rec.Header().Get("Location"))
 		}
 	})
 }

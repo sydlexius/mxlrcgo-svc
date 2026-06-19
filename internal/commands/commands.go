@@ -940,6 +940,10 @@ func runServe(ctx context.Context, out io.Writer, args ServeCmd, newFetcher func
 			// Back the Reports workspace with the same DB the rest of serve mode
 			// uses; the handler builds a read-only reports.Repo from it (#211).
 			server.WithReportsDB(sqlDB),
+			// Enable the settings write path (#288 Phase 2): writes go to the
+			// RESOLVED config file (never ""), and secret-field saves route to the
+			// encrypted store rather than the TOML.
+			server.WithSettingsWriter(config.ResolveConfigPath(args.ConfigPath), store),
 		)
 	}
 	srv := &http.Server{

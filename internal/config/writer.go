@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -33,8 +34,10 @@ func LoadDocument(path string) (*tomledit.Document, error) {
 // SetValue sets the value of a known dotted key in the document, preserving all
 // other content. The field's type drives serialization (strings are quoted,
 // slices become inline arrays, etc.). If the key already exists its value is
-// replaced in place; if it is absent it is inserted into its (existing)
-// section. Comments, blank lines, and ordering elsewhere are untouched.
+// replaced in place; if it is absent it is inserted into its table, and if that
+// [section] table is itself absent (operators hand-write minimal configs with
+// only the sections they set) the table is created. Comments, blank lines, and
+// ordering elsewhere are untouched.
 func SetValue(doc *tomledit.Document, path string, ftype FieldType, value string) error {
 	keys := strings.Split(path, ".")
 	val, err := tomlValue(ftype, value)
@@ -48,13 +51,44 @@ func SetValue(doc *tomledit.Document, path string, ftype FieldType, value string
 	// Key absent: insert into its table (the last element is the leaf key).
 	name := keys[len(keys)-1]
 	table := keys[:len(keys)-1]
-	tab := transform.FindTable(doc, table...)
-	if tab == nil || tab.Section == nil {
-		return fmt.Errorf("config: set %s: section %q is not present in the file", path, strings.Join(table, "."))
-	}
 	kv := &parser.KeyValue{Name: parser.Key{name}, Value: val}
-	transform.InsertMapping(tab.Section, kv, true)
+	if tab := transform.FindTable(doc, table...); tab != nil && tab.Section != nil {
+		transform.InsertMapping(tab.Section, kv, true)
+		return nil
+	}
+	// The [section] table is absent. A registry field always lives under a
+	// section, so create that table (appending it after the existing sections)
+	// rather than failing the save. A truly global key would have no table to
+	// create, which is not a real registry shape -- guard it explicitly.
+	if len(table) == 0 {
+		return fmt.Errorf("config: set %s: no table to insert into", path)
+	}
+	doc.Sections = append(doc.Sections, &tomledit.Section{
+		Heading: &parser.Heading{Name: parser.Key(table)},
+		Items:   []parser.Item{kv},
+	})
 	return nil
+}
+
+// RemoveKeyIfPresent removes a dotted key from the config file if it is present,
+// preserving all other content (comments, ordering, other keys). It is a no-op
+// (no write, no .bak churn) when the key is absent. The settings token save uses
+// it to strip a cleartext api.token from the TOML after routing the secret to
+// the encrypted store, so the store -- not a stale higher-precedence file value
+// -- is authoritative on the next load (#288).
+func RemoveKeyIfPresent(configPath, path string) error {
+	doc, err := LoadDocument(configPath)
+	if err != nil {
+		return err
+	}
+	keys := strings.Split(path, ".")
+	if doc.First(keys...) == nil {
+		return nil // absent: nothing to remove
+	}
+	if err := transform.Remove(parser.Key(keys)).Apply(context.Background(), doc); err != nil {
+		return fmt.Errorf("config: remove %s: %w", path, err)
+	}
+	return WriteAtomic(configPath, doc)
 }
 
 // tomlValue converts a string value of the given field type into a parsed TOML

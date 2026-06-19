@@ -457,12 +457,12 @@ func TestCSRFTokenPostSetupRejectsInvalidToken(t *testing.T) {
 					t.Error("admin created despite CSRF rejection")
 				}
 			} else {
-				// A valid CSRF + valid form should succeed and redirect to /config.
+				// A valid CSRF + valid form should succeed and redirect to /settings.
 				if rec.Code != http.StatusSeeOther {
 					t.Fatalf("valid CSRF status = %d, want 303", rec.Code)
 				}
-				if loc := rec.Header().Get("Location"); loc != "/config" {
-					t.Errorf("Location = %q, want /config", loc)
+				if loc := rec.Header().Get("Location"); loc != "/settings" {
+					t.Errorf("Location = %q, want /settings", loc)
 				}
 			}
 		})

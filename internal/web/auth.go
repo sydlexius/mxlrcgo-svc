@@ -156,7 +156,7 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if err := r.ParseForm(); err != nil {
 		a.renderLoginStatus(w, r, http.StatusBadRequest, a.version,
-			"Invalid form submission.", "/config", "")
+			"Invalid form submission.", "/settings", "")
 		return
 	}
 	username := strings.TrimSpace(r.PostFormValue("username"))
@@ -312,11 +312,12 @@ func safeReturnPath(r *http.Request) string {
 }
 
 // safeNext sanitizes a caller-supplied return path to a local, same-site path,
-// defaulting to /config. It rejects anything that is not a single-slash-rooted
-// path (absolute URLs, scheme-relative "//host", and backslash tricks) to close
-// the open-redirect vector.
+// defaulting to /settings (the landing page; Settings replaced Config). It
+// rejects anything that is not a single-slash-rooted path (absolute URLs,
+// scheme-relative "//host", and backslash tricks) to close the open-redirect
+// vector.
 func safeNext(raw string) string {
-	const fallback = "/config"
+	const fallback = "/settings"
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw[0] != '/' {
 		return fallback

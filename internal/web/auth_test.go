@@ -440,23 +440,23 @@ func TestUIWithAuthRoutes(t *testing.T) {
 	})
 
 	t.Run("guarded page redirects when unauthenticated", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+		req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 		req.RemoteAddr = "198.51.100.21:1"
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("GET /config unauthenticated = %d, want 303", rec.Code)
+			t.Fatalf("GET /settings unauthenticated = %d, want 303", rec.Code)
 		}
 	})
 
 	t.Run("guarded page renders with a valid session", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+		req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 		req.RemoteAddr = "198.51.100.22:1"
 		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: loginToken(t, svc)})
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /config authenticated = %d, want 200", rec.Code)
+			t.Fatalf("GET /settings authenticated = %d, want 200", rec.Code)
 		}
 	})
 
@@ -502,14 +502,14 @@ func TestSafeNext(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"/reports", "/reports"},
 		{"/config?x=1", "/config?x=1"},
-		{"", "/config"},
-		{"//evil.example", "/config"},
-		{"/\\evil.example", "/config"},
-		{"https://evil.example/path", "/config"},
-		{"http://evil.example", "/config"},
-		{"javascript:alert(1)", "/config"},
+		{"", "/settings"},
+		{"//evil.example", "/settings"},
+		{"/\\evil.example", "/settings"},
+		{"https://evil.example/path", "/settings"},
+		{"http://evil.example", "/settings"},
+		{"javascript:alert(1)", "/settings"},
 		{"  /reports  ", "/reports"},
-		{"/path\r\nSet-Cookie: x", "/config"},
+		{"/path\r\nSet-Cookie: x", "/settings"},
 	}
 	for _, tc := range cases {
 		if got := safeNext(tc.in); got != tc.want {

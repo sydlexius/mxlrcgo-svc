@@ -25,19 +25,20 @@ func newUIServer(cfg config.Config, version string) *http.ServeMux {
 	return mux
 }
 
-// TestConfigViewRedactsSecrets is the required in-package proof that the Config
-// view never emits a secret-bearing value. It populates the token and webhook
-// keys, renders the live /config response, and asserts the raw secrets are
-// absent while the redaction marker is present.
+// TestConfigViewRedactsSecrets is the required in-package proof that the Raw
+// config tab of the Settings page (which absorbed the old read-only Config view)
+// never emits a secret-bearing value. It populates the token and webhook keys,
+// renders the live /settings response, and asserts the raw secrets are absent
+// while the redaction marker is present.
 func TestConfigViewRedactsSecrets(t *testing.T) {
 	mux := newUIServer(secretCfg(), "v9.9.9")
 
-	req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /config status = %d, want 200", rec.Code)
+		t.Fatalf("GET /settings status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
 
@@ -56,16 +57,17 @@ func TestConfigViewRedactsSecrets(t *testing.T) {
 }
 
 // TestConfigViewEmptyTokenNotSet confirms an unset token renders as "(not set)"
-// rather than "[REDACTED]", so an operator can tell unset from configured.
+// rather than "[REDACTED]" in the Raw config tab, so an operator can tell unset
+// from configured.
 func TestConfigViewEmptyTokenNotSet(t *testing.T) {
 	mux := newUIServer(config.Config{}, "dev")
 
-	req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /config status = %d, want 200", rec.Code)
+		t.Fatalf("GET /settings status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "token = (not set)") {
@@ -75,25 +77,25 @@ func TestConfigViewEmptyTokenNotSet(t *testing.T) {
 
 // TestActiveNavHighlight verifies the sidebar marks exactly the right row active
 // with aria-current="page", which drives the active-item accent styling. The
-// Config page highlights the Config link; the Reports landing (no report
+// Settings page highlights the Settings link; the Reports landing (no report
 // selected) highlights nothing.
 func TestActiveNavHighlight(t *testing.T) {
 	mux := newUIServer(config.Config{}, "dev")
 
-	t.Run("config marks Config active", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	t.Run("settings marks Settings active", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /config status = %d, want 200", rec.Code)
+			t.Fatalf("GET /settings status = %d, want 200", rec.Code)
 		}
 		body := rec.Body.String()
-		if !strings.Contains(body, `href="/config" class="mx-nav-link" aria-current="page"`) {
-			t.Error("config page did not mark the Config nav link active")
+		if !strings.Contains(body, `href="/settings" class="mx-nav-link" aria-current="page"`) {
+			t.Error("settings page did not mark the Settings nav link active")
 		}
-		// Exactly one row is active: Config, not any report row.
+		// Exactly one row is active: Settings, not any report row.
 		if n := strings.Count(body, `aria-current="page"`); n != 1 {
-			t.Errorf("config page should have exactly one active nav row, got %d", n)
+			t.Errorf("settings page should have exactly one active nav row, got %d", n)
 		}
 	})
 
@@ -120,7 +122,7 @@ func TestActiveNavHighlight(t *testing.T) {
 func TestShellRendersLogoutControl(t *testing.T) {
 	mux := newUIServer(config.Config{}, "dev")
 
-	for _, path := range []string{"/config", "/reports"} {
+	for _, path := range []string{"/settings", "/reports"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			rec := httptest.NewRecorder()
@@ -138,9 +140,9 @@ func TestShellRendersLogoutControl(t *testing.T) {
 	}
 }
 
-// TestRootRedirectsToConfig checks the bare root sends operators to the Config
-// view (the v1 landing page).
-func TestRootRedirectsToConfig(t *testing.T) {
+// TestRootRedirectsToSettings checks the bare root sends operators to the
+// Settings page (the landing page; Settings replaced the old Config view).
+func TestRootRedirectsToSettings(t *testing.T) {
 	mux := newUIServer(config.Config{}, "dev")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -150,8 +152,26 @@ func TestRootRedirectsToConfig(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("GET / status = %d, want 302", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/config" {
-		t.Errorf("GET / Location = %q, want /config", loc)
+	if loc := rec.Header().Get("Location"); loc != "/settings" {
+		t.Errorf("GET / Location = %q, want /settings", loc)
+	}
+}
+
+// TestConfigRedirectsToSettings confirms the retired /config route still
+// resolves: it permanently redirects to /settings so old links and bookmarks
+// keep working.
+func TestConfigRedirectsToSettings(t *testing.T) {
+	mux := newUIServer(config.Config{}, "dev")
+
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("GET /config status = %d, want 301", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/settings" {
+		t.Errorf("GET /config Location = %q, want /settings", loc)
 	}
 }
 

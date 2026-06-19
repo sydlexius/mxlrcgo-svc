@@ -39,8 +39,13 @@ func (u *UI) handleSaveSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// enforceCSRFToken read a PostForm value, so the body is already parsed and
-	// r.PostForm is populated; the repeated "path" lists the batch members.
+	// Parse the form explicitly so r.PostForm is populated by this handler rather
+	// than relying on enforceCSRFToken's parse-as-a-side-effect; the repeated
+	// "path" then lists the batch members.
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form data", http.StatusBadRequest)
+		return
+	}
 	paths := r.PostForm["path"]
 	if len(paths) == 0 {
 		http.Error(w, "no fields to save", http.StatusBadRequest)

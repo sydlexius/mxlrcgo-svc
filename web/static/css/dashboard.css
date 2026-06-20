@@ -139,3 +139,10 @@
 .mx-dash-link:hover {
   text-decoration: underline;
 }
+
+/* -- Sidebar logo mark ----------------------------------------------------- */
+.mx-sidebar-logo {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}

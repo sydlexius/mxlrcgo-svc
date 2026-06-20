@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="120" height="120"
+     role="img" aria-label="Canticle" style="color:#3B2F77">
+  <!-- Concept: "Fermata-C". An open ring reads as a C (Canticle) and as a fermata's
+       arch; the centred dot is the note being held/sung. One swappable color token
+       (style="color:..."); everything uses currentColor so it inherits when embedded.
+       Works monochrome, at favicon size, and on dark or light backgrounds. -->
+  <path d="M74 26 A34 34 0 1 0 74 74"
+        fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="50" cy="50" r="8" fill="currentColor"/>
+</svg>

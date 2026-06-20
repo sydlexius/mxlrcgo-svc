@@ -14,5 +14,5 @@ import "embed"
 // carries the woff2 files and their OFL license texts; js carries the vendored
 // htmx runtime (htmx.min.js) and its 0BSD license text.
 //
-//go:embed all:css all:fonts all:js
+//go:embed all:css all:fonts all:img all:js
 var FS embed.FS

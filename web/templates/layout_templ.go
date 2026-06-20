@@ -55,7 +55,7 @@ func Layout(title string, active string, version string, reports []RailItem) tem
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " - mxlrcgo-svc</title><link rel=\"stylesheet\" href=\"/static/css/output.css\"><link rel=\"stylesheet\" href=\"/static/css/dashboard.css\"><script src=\"/static/js/htmx.min.js\" defer></script></head><body><div class=\"mx-shell\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " - mxlrcgo-svc</title><link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/img/canticle-mark.svg\"><link rel=\"icon\" type=\"image/png\" sizes=\"48x48\" href=\"/static/img/favicon-48.png\"><link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"/static/img/favicon-32.png\"><link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"/static/img/favicon-16.png\"><link rel=\"icon\" href=\"/static/img/favicon.ico\" sizes=\"any\"><link rel=\"apple-touch-icon\" href=\"/static/img/apple-touch-icon.png\"><link rel=\"stylesheet\" href=\"/static/css/output.css\"><link rel=\"stylesheet\" href=\"/static/css/dashboard.css\"><script src=\"/static/js/htmx.min.js\" defer></script></head><body><div class=\"mx-shell\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

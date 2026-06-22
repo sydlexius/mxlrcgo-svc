@@ -95,6 +95,9 @@ func TestValidateHTTPURL(t *testing.T) {
 		"example.com/path", // scheme-less host
 		"example.com",      // no scheme, no path
 		"",                 // empty
+		"ftp://host",       // non-http(s) scheme
+		"file:///x",        // non-http(s) scheme
+		"ws://host",        // non-http(s) scheme
 	}
 	for _, u := range rejected {
 		if err := ValidateHTTPURL(u); err == nil {

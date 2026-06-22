@@ -32,7 +32,19 @@ jobs:
     runs-on: ubuntu-latest
     # Strictly Dependabot-only. Human PRs are untouched, so the `UI Assets` gate
     # still fails when a human forgets to run `make ui`.
-    if: github.actor == 'dependabot[bot]'
+    #
+    # Combined condition (do NOT reduce to author-only):
+    #   - github.event.pull_request.user.login == 'dependabot[bot]' keeps this
+    #     Dependabot-only and, unlike keying on github.actor, still runs when a
+    #     maintainer manually re-runs the job (actor becomes the maintainer).
+    #   - github.actor != 'github-actions[bot]' is the no-loop guard: this job
+    #     commits regenerated assets then close+reopens the PR to re-trigger
+    #     checks. That `reopened` event has the SAME PR author (dependabot[bot]),
+    #     so an author-only gate would re-run regen -> infinite loop. The reopen's
+    #     actor is github-actions[bot] (the token), so excluding it breaks the
+    #     self-trigger loop while still letting Dependabot and maintainer re-runs
+    #     through.
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor != 'github-actions[bot]'
     permissions:
       contents: write # push the regenerated assets back to the PR branch
       pull-requests: write # close+reopen to re-trigger checks on the new HEAD

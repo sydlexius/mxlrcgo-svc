@@ -56,7 +56,11 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_WEBHOOK_API_KEY` | (none) | Comma-separated webhook API key(s) accepted by the server. Generate with `mxlrcgo-svc keys create --scope webhook`. |
 | `MXLRC_SERVER_ADDR` | `127.0.0.1:3876` | HTTP listen address for `serve`. Docker images default this to `0.0.0.0:50705`. |
 | `MXLRC_WEB_UI_ENABLED` | `false` | Enable the browser UI on the serve listener. Env override of `web_ui_enabled` (precedence: env > file). Restart to apply. |
+| `MXLRC_TRUSTED_CIDRS` | (none) | Comma-separated CIDRs of trusted client networks (serve mode). Loopback is always trusted. Requests from listed CIDRs may scrape `GET /metrics` and bypass the web UI session requirement. |
+| `MXLRC_TRUSTED_PROXIES` | (none) | Comma-separated CIDRs of reverse proxies whose `X-Forwarded-For` is trusted to carry the real client IP (serve mode). Must not overlap `MXLRC_TRUSTED_CIDRS`. |
 | `MXLRC_OUTPUT_DIR` | XDG / `/music` | Output directory for `fetch` mode. **Ignored in `serve` mode** (lyrics are written next to the audio file; the metadata-only webhook fallback uses the internal default). |
+| `MXLRC_EMBEDDED_LYRICS` | `off` | Embedded unsynced lyrics handling. `off` - ignore (default); `respect` - skip fetching when embedded lyrics exist; `extract` - write embedded lyrics to a `.txt` sidecar, then skip fetching. |
+| `MXLRC_BILINGUAL_OUTPUT` | `false` | When `true` and a provider returns a translation track, interleave original and translated lines under shared timestamps in a single `.lrc`. |
 | `MXLRC_DB_PATH` | XDG / `/config/mxlrcgo.db` | SQLite database path. |
 | `MXLRC_DOCKER` | `false` | When `true`, storage defaults resolve under `/config`. Set automatically in the images. |
 | `MXLRC_MASTER_KEY` | (none) | Optional. Base64 of 32 random bytes; overrides the auto-generated key file as the master key for encrypted-at-rest secrets. When set, no key file is read or written. Use for key/data separation (recommended Docker hardening when the threat model includes whole-volume theft). Generate with `openssl rand -base64 32`. See the [Encrypted secrets](USER_GUIDE.md#encrypted-secrets) guide. |
@@ -66,6 +70,9 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_API_COOLDOWN` | `15` | Seconds between Musixmatch requests. `MXLRC_COOLDOWN` is a lower-precedence alias. |
 | `MXLRC_API_CIRCUIT_OPEN_DURATION` | `1800` | Cap (seconds) for the worker circuit-breaker window; the window ramps geometrically up to this ceiling, and a token-renewal signal opens for the full cap (floor 300). |
 | `MXLRC_API_CIRCUIT_BACKOFF_BASE` | `60` | Trip-1 circuit-breaker window (seconds); doubles each consecutive throttle up to `MXLRC_API_CIRCUIT_OPEN_DURATION`, resets on a successful fetch or clean miss (floor 15, capped at the open-duration). |
+| `MXLRC_MISS_BACKOFF_BASE_HOURS` | `168` | Initial re-check delay in hours for a benign miss (7 days). Doubles on each successive miss up to `MXLRC_MISS_BACKOFF_CAP_HOURS`. Minimum 1. |
+| `MXLRC_MISS_BACKOFF_CAP_HOURS` | `672` | Maximum re-check delay in hours for a benign miss (28 days). Clamped to at least `MXLRC_MISS_BACKOFF_BASE_HOURS`. |
+| `MXLRC_MAX_MISS_ATTEMPTS` | `15` | Maximum number of miss re-fetches before retiring the queue row. `0` means no cap. |
 | `MXLRC_SCAN_INTERVAL` | `900` | `serve` library-scan interval in seconds. `0` scans once without repeating. |
 | `MXLRC_WORK_INTERVAL` | `0` | Worker poll interval in seconds. `0` falls back to `api.cooldown` (15s floor). |
 | `MXLRC_PROVIDER_PRIMARY` | `musixmatch` | Primary lyrics provider. |
@@ -89,6 +96,14 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_VERIFICATION_SAMPLE_DURATION_SECONDS` | `30` | Audio sample length sent to Whisper. `MXLRC_VERIFICATION_SAMPLE_DURATION` is an alias. |
 | `MXLRC_VERIFICATION_MIN_CONFIDENCE` | `0.85` | Below this Musixmatch confidence, verify against Whisper (0-1). |
 | `MXLRC_VERIFICATION_MIN_SIMILARITY` | `0.35` | Minimum transcript/lyric overlap to accept (0-1). |
+| `MXLRC_INSTRUMENTAL_DETECTOR_ENABLED` | `false` | Enable the audio-based instrumental detection sidecar. Requires `MXLRC_INSTRUMENTAL_DETECTOR_CLASSIFIER_URL`. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_CLASSIFIER_URL` | (none) | Base URL of the AudioSet classifier sidecar, e.g. `http://yamnet:8080`. Required when the detector is enabled. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_FFMPEG_PATH` | `ffmpeg` | Path to the `ffmpeg` binary used for audio sampling by the instrumental detector. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_SAMPLE_DURATION_SECONDS` | `30` | Length of the audio sample sent to the classifier, clamped to [30, 60]. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_MIN_CONFIDENCE` | `0.90` | Minimum summed AudioSet class probability to mark a track instrumental. Values outside (0, 1] reset to `0.90`. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_CLASSES` | `Music,Musical instrument` | Comma-separated AudioSet class names whose probabilities are summed and compared against the confidence threshold. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS` | `5` | Minimum gap in seconds between consecutive classifier inference calls. `0` disables the cooldown. |
+| `MXLRC_ENRICHMENT_ENABLED` | `true` | Global default for recording enrichment (reading ISRC, MusicBrainz ID, and duration from audio tags). Per-library and per-run flags override this. |
 | `PUID` / `PGID` | `99` / `100` | Container-only: user/group the process drops to for file ownership. |
 
 ## TOML config keys
@@ -101,19 +116,30 @@ The TOML config file mirrors the environment variables in named sections. The ke
 [api]
 cooldown = 15
 circuit_open_duration = 1800
-# circuit_backoff_base = 60
+# circuit_backoff_base_seconds = 60
+# miss_backoff_base_hours = 168   # initial re-check delay (hours; 7 days); minimum 1
+# miss_backoff_cap_hours = 672    # maximum re-check delay (hours; 28 days)
+# max_miss_attempts = 15          # 0 = no cap
 ```
 
-Request cooldown and the worker circuit-breaker window (env: `MXLRC_API_COOLDOWN`, `MXLRC_API_CIRCUIT_OPEN_DURATION`, `MXLRC_API_CIRCUIT_BACKOFF_BASE`).
+Request cooldown, the worker circuit-breaker window, and miss re-check backoff (env: `MXLRC_API_COOLDOWN`, `MXLRC_API_CIRCUIT_OPEN_DURATION`, `MXLRC_API_CIRCUIT_BACKOFF_BASE`, `MXLRC_MISS_BACKOFF_BASE_HOURS`, `MXLRC_MISS_BACKOFF_CAP_HOURS`, `MXLRC_MAX_MISS_ATTEMPTS`).
+
+`miss_backoff_base_hours` (default 168, i.e. 7 days) and `miss_backoff_cap_hours` (default 672, i.e. 28 days) govern the escalating re-check cadence for benign misses: the delay doubles each miss (base, 2 x base, 4 x base, ...) up to the cap. `max_miss_attempts` retires the queue row after N miss fetches; `0` means no cap.
 
 ### `[output]`
 
 ```toml
 [output]
 dir = "lyrics"
+# embedded_lyrics = "off"
+# bilingual_output = false
 ```
 
-Fallback output directory for webhook jobs that resolve via metadata (env: `MXLRC_OUTPUT_DIR`).
+Fallback output directory and per-file output controls (env: `MXLRC_OUTPUT_DIR`, `MXLRC_EMBEDDED_LYRICS`, `MXLRC_BILINGUAL_OUTPUT`; CLI: `--embedded-lyrics`).
+
+`embedded_lyrics` controls how unsynced lyrics already embedded in the audio file's tags are handled. `off` (default) ignores them and always fetches from providers. `respect` skips fetching for files that already carry embedded lyrics. `extract` writes the embedded lyrics to a `.txt` sidecar (never overwriting an existing one) and then skips fetching. Synced (SYLT) tags are intentionally not handled.
+
+`bilingual_output` (default `false`): when `true` and a provider returns a non-empty translation track, the original and translation lines are interleaved under shared timestamps in a single `.lrc`. See `docs/multilingual-output-policy.md`.
 
 ### `[db]`
 
@@ -138,6 +164,22 @@ addr = "127.0.0.1:3876"
 HTTP listen address, webhook keys, and the scheduler scan/worker poll intervals (env: `MXLRC_SERVER_ADDR`, `MXLRC_WEBHOOK_API_KEY`, `MXLRC_SCAN_INTERVAL`, `MXLRC_WORK_INTERVAL`; CLI: `--listen`, `--scan-interval`, `--work-interval`).
 
 `web_ui_enabled` (default `false`, env: `MXLRC_WEB_UI_ENABLED`, precedence env > file) gates the browser UI on the serve listener. When enabled, the UI pages require a session login (a single admin account, separate from the webhook API key), or a request from a trusted network (the `[server.trusted_networks]` CIDR allowlist). Secret values (API token, webhook keys) are always redacted in the Config view. See [Web UI access](#web-ui-access) for the first-run onboarding flow.
+
+### `[server.trusted_networks]`
+
+```toml
+[server.trusted_networks]
+# cidrs = ["192.168.1.0/24", "10.0.0.0/8"]
+# trusted_proxies = ["172.16.0.0/12"]
+```
+
+Trusted-network allowlist for serve mode (env: `MXLRC_TRUSTED_CIDRS`, `MXLRC_TRUSTED_PROXIES`). Controls two things: access to `GET /metrics` (see the [User Guide](USER_GUIDE.md#metrics-endpoint)) and the web UI session bypass (requests from a trusted network skip the login prompt).
+
+`cidrs` - CIDRs of trusted client networks. Loopback (`127.x.x.x`, `::1`) is always trusted and does not need to be listed. An empty list (the default) means only loopback is trusted.
+
+`trusted_proxies` - CIDRs of reverse proxies allowed to set `X-Forwarded-For`. Only when a request's immediate peer is within one of these networks is the XFF header consulted (walked right-to-left, skipping proxies) to find the real client IP. Default empty: XFF is never trusted, so a spoofed header cannot forge a trusted source. Entries must not overlap `cidrs`.
+
+An invalid CIDR in either list is a fatal startup error.
 
 #### Web UI access
 
@@ -179,6 +221,38 @@ min_similarity = 0.35
 Optional Whisper-based speech-to-text verification for low-confidence scanned audio. When enabled, the worker extracts a bounded mono 16 kHz WAV sample using `sample_duration_seconds`, then sends it to a Whisper-compatible `/v1/audio/transcriptions` sidecar for audio whose Musixmatch metadata confidence is below `min_confidence`. The transcript must overlap the candidate lyrics by at least `min_similarity`. Environment variables override the TOML keys (`MXLRC_VERIFICATION_*`); `MXLRC_WHISPER_URL` and `MXLRC_VERIFICATION_SAMPLE_DURATION` remain accepted as legacy aliases.
 
 ffmpeg (used to extract the audio sample) is resolved automatically: see [ffmpeg resolution](#ffmpeg-resolution) below. Set `ffmpeg_path` only to pin a specific binary.
+
+### `[instrumental_detector]`
+
+```toml
+[instrumental_detector]
+# enabled = false
+# classifier_url = "http://yamnet:8080"
+# ffmpeg_path = "ffmpeg"
+# sample_duration_seconds = 30
+# min_confidence = 0.90
+# instrumental_classes = ["Music", "Musical instrument"]
+# cooldown_seconds = 5
+```
+
+Optional audio-based instrumental detection sidecar (env: `MXLRC_INSTRUMENTAL_DETECTOR_ENABLED`, `MXLRC_INSTRUMENTAL_DETECTOR_CLASSIFIER_URL`, `MXLRC_INSTRUMENTAL_DETECTOR_FFMPEG_PATH`, `MXLRC_INSTRUMENTAL_DETECTOR_SAMPLE_DURATION_SECONDS`, `MXLRC_INSTRUMENTAL_DETECTOR_MIN_CONFIDENCE`, `MXLRC_INSTRUMENTAL_DETECTOR_CLASSES`, `MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS`).
+
+When enabled and a `classifier_url` is set, the detector samples each track's audio with ffmpeg and sends the sample to an external AudioSet classifier (e.g. a YAMNet sidecar). It runs only on provider misses and never overrides provider-supplied data. The summed probability of the `instrumental_classes` must meet `min_confidence` to mark a track instrumental.
+
+`sample_duration_seconds` is clamped to [30, 60]. `min_confidence` values outside (0, 1] reset to `0.90`. `cooldown_seconds` is the minimum gap between consecutive inference calls; `0` disables the cooldown. See the [Instrumental detection](USER_GUIDE.md#instrumental-detection) guide for the per-library and per-run override controls.
+
+ffmpeg resolution is shared with `[verification]`; see [ffmpeg resolution](#ffmpeg-resolution) below. Set `ffmpeg_path` here only to pin a binary separately from the verification path.
+
+### `[enrichment]`
+
+```toml
+[enrichment]
+enabled = true
+```
+
+Global default for recording enrichment (env: `MXLRC_ENRICHMENT_ENABLED`). When enabled, the scanner reads the ISRC, MusicBrainz recording ID, and audio duration from each file's tags and passes them to the matcher to disambiguate results.
+
+Default `true`, preserving the always-on behavior from before per-library control existed. Per-library and per-run flags override this; see [Recording enrichment](USER_GUIDE.md#recording-enrichment) for the full precedence chain.
 
 ### ffmpeg resolution
 

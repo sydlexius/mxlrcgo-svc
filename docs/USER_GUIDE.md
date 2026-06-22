@@ -40,6 +40,40 @@ The scheduler scan interval and worker poll interval are configurable for Docker
 
 Example Docker healthcheck: `curl -fsS http://127.0.0.1:3876/readyz`.
 
+### Metrics endpoint
+
+`GET /metrics` returns a Prometheus text-exposition (version 0.0.4) response suitable for scraping by Prometheus, Grafana Agent, or any compatible collector. Metrics are computed from read-only database queries at scrape time; there is no in-process registry or caching.
+
+**Exposed metric families:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mxlrcgo_queue_items{status="..."}` | gauge | Work queue item count per status (`pending`, `processing`, `done`, `failed`, `deferred`). |
+| `mxlrcgo_queue_failures{reason="..."}` | gauge | Failed queue items grouped by error reason. |
+| `mxlrcgo_provider_hits_total{lane="..."}` | counter | Successful lyrics fetches per provider lane. |
+| `mxlrcgo_provider_misses_total{lane="..."}` | counter | Benign no-result misses per provider lane. |
+| `mxlrcgo_instrumental_tracks` | gauge | Queue items confirmed instrumental by audio detection. |
+
+**Access control.** The endpoint is gated by the trusted-network allowlist, not an API key or session cookie. Loopback (`127.x.x.x`, `::1`) is always trusted. A remote scraper (Prometheus server, Grafana Agent, etc.) must have its host CIDR listed in `[server.trusted_networks].cidrs`. A spoofed `X-Forwarded-For` header cannot forge a trusted source.
+
+To enable a remote scraper, add its CIDR to `config.toml`:
+
+```toml
+[server.trusted_networks]
+cidrs = ["192.168.1.0/24"]   # replace with your Prometheus host's CIDR
+```
+
+Or override with the environment variable: `MXLRC_TRUSTED_CIDRS=192.168.1.0/24`.
+
+Example Prometheus `scrape_configs` entry:
+
+```yaml
+scrape_configs:
+  - job_name: mxlrcgo-svc
+    static_configs:
+      - targets: ["mxlrcgo-svc-host:3876"]
+```
+
 ## Docker
 
 The container runs the webhook service on port `50705` and stores its config and SQLite database under `/config`. Mount your media following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/How-to-set-up/Unraid/) single-mount convention: map your data parent to `/data` and point the app at `/data/media/music`. (The image's built-in default is `/music`, which still works for the simplest single-folder case; just keep `MXLRC_OUTPUT_DIR` at its `/music` default and mount there instead.)
@@ -207,6 +241,45 @@ Bootstrap behavior:
 **First login and cleanup.** After the container is up, browse to `http://[host]:[port]/login` and sign in with the bootstrapped credentials. Then **rotate the password from inside the UI and remove the `MXLRC_WEBAUTH_ADMIN_USER` / `MXLRC_WEBAUTH_ADMIN_PASSWORD` env vars** (and restart). Because the bootstrap is idempotent, the stale vars do nothing on the next start, but removing them keeps the plaintext password out of the container environment.
 
 If the UI is reachable beyond your local machine, also read [Security considerations](#security-considerations) below: put it behind TLS so the session cookie is not sent in cleartext.
+
+## Web UI: Settings page
+
+The Settings page (`/settings`) is the single destination for editing the daemon configuration from the browser. It is available whenever `web_ui_enabled = true` and the operator is signed in as admin (or is accessing from a trusted network).
+
+**Prerequisite.** The page is only reachable when the web UI is enabled (`web_ui_enabled = true` under `[server]` or `MXLRC_WEB_UI_ENABLED=true`). See [Web UI enablement](#web-ui-enablement) for the bootstrap steps.
+
+### Tab layout
+
+The page has three CSS-only tabs (no JavaScript round-trip to switch):
+
+- **Common** - everyday fields: API token, webhook key, listen address, web UI toggle, and similar high-touch settings. This is the default tab.
+- **Advanced** - every other field, organized by config section (API, output, providers, verification, instrumental detector, enrichment, guard, queue, logging, and so on).
+- **Raw config** - a read-only view of the effective configuration as TOML, with secrets redacted. Use this to verify exactly what the daemon is running before a restart.
+
+### Risk-tiered saves
+
+Fields are classified into three risk tiers that control how a save is triggered:
+
+- **safe** - auto-saves on change; no button click required.
+- **caution** - requires an explicit Save button click.
+- **critical** - requires Save plus a browser confirmation dialog before the value is written.
+
+Changes are written to the config file and take effect on the next restart, not live. A status line below each field reports the result of the save POST.
+
+### Locked fields
+
+A field whose value is set by an environment variable or a command-line flag shows a "Locked" pill and cannot be edited in the UI. The override source is described below the field. To regain control from the UI, clear the environment variable (or remove the flag) and restart the daemon.
+
+### CSRF
+
+Write operations use a double-submit cookie token (`mx-csrf-token`). This is transparent during normal browser use but means direct `curl` POSTs without the matching cookie are rejected. The page must be loaded from the same origin before any write can succeed.
+
+### Recommended workflow
+
+1. Open the **Common** tab for routine changes (rotating the API token, updating the webhook key, changing the listen address).
+2. Use the **Advanced** tab for tuning (backoff windows, provider mode, verification thresholds, etc.).
+3. After saving, open the **Raw config** tab to verify the effective state before restarting the daemon.
+4. Restart the daemon to apply changes.
 
 ## Windows
 
@@ -468,3 +541,40 @@ mxlrcgo-svc scan results --library 1 --limit 200
 mxlrcgo-svc scan clear --library Music
 mxlrcgo-svc scan clear --library Music --yes
 ```
+
+## Reports workspace
+
+The web UI exposes five read-only report views under the Reports section. Every report runs a live database query at request time; there is no pre-aggregation or caching. The reports require the web UI to be enabled (`web_ui_enabled = true`).
+
+### Queue summary
+
+Shows the count of work queue items grouped by status: pending, processing, done, failed, deferred, and total. Use this as a quick health check - a rising `failed` count warrants a look at the Failure analysis report; a large `deferred` count is normal (those are benign misses awaiting their next retry).
+
+### Recent outcomes
+
+Lists the most recently completed tracks, newest first, with:
+- Artist, title, and album.
+- Completion timestamp.
+- Provider lane that served the result.
+- Result class: `synced` (an `.lrc` was written), `unsynced-or-instrumental` (a `.txt` was written - covers both plain unsynced lyrics and instrumental markers), or `miss` (the track exhausted its miss budget with no lyrics found).
+
+Note: `.txt` results group plain unsynced lyrics and audio-detected instrumentals together. Use the Instrumental inventory report to isolate audio-detected instrumentals.
+
+### Provider effectiveness
+
+Shows per-lane hit/miss counts and a true per-track hit-rate for each provider lane. The hit-rate is computed as `hits / (hits + misses)` where a "hit" means the lane served the winning result and a "miss" means the lane was tried but did not win (including being outcompeted by a later lane in ordered mode).
+
+**No-backfill caveat.** This report reads the `lane_attempts` table, which was added in a later migration. Traffic that predates the migration has no lane-level records, so the report shows an empty state until new attempts accrue after the migration. This is expected; no historical backfill is possible.
+
+### Instrumental inventory
+
+Lists every work queue item the audio detector confirmed as instrumental, joined to the source file path from scan results. Each item shows:
+- Artist and title.
+- Source file path (empty for items enqueued via CLI without a library scan link).
+- Whether per-item detection was requested explicitly, inherited from a library setting, or fell back to the global default.
+
+Use this to audit which tracks the detector marked instrumental and whether they match expectation.
+
+### Failure analysis
+
+Lists failed and deferred work queue items grouped by status and error reason, with a count per group, ordered most-frequent first. "Failed" rows hit a hard error; "deferred" rows are benign misses waiting for a retry. Grouping keeps the two separate because they require different responses - deferred rows self-resolve on their retry schedule, while failed rows may need manual intervention (`mxlrcgo-svc queue retry <id>`).

@@ -236,6 +236,44 @@ sample_duration_seconds = 30
 min_confidence = 0.85
 min_similarity = 0.35
 
+[instrumental_detector]
+# Optional audio-based instrumental detection sidecar. When enabled and a
+# classifier_url is configured, the detector samples each track's audio with
+# ffmpeg and asks an external AudioSet classifier whether it is instrumental,
+# writing an instrumental marker on a provider miss. It runs ONLY on provider
+# misses and never overrides provider-supplied data. Disabled by default.
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_ENABLED.
+# enabled = false
+
+# Base URL of the AudioSet classifier sidecar (e.g. "http://yamnet:8080").
+# Required when enabled is true. Env: MXLRC_INSTRUMENTAL_DETECTOR_CLASSIFIER_URL.
+# classifier_url = ""
+
+# Path to the ffmpeg binary used for audio sampling. Default "ffmpeg" (resolved
+# via PATH or auto-downloaded; see docs/CONFIGURATION.md "ffmpeg resolution").
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_FFMPEG_PATH.
+# ffmpeg_path = "ffmpeg"
+
+# Length of the audio sample in seconds, clamped to [30, 60]. Default 30.
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_SAMPLE_DURATION_SECONDS.
+# sample_duration_seconds = 30
+
+# Minimum summed AudioSet class probability to mark a track instrumental.
+# Values outside (0, 1] reset to 0.90 (the default). Intentionally conservative:
+# false-instrumental errors are worse than false-misses.
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_MIN_CONFIDENCE.
+# min_confidence = 0.90
+
+# AudioSet class names whose probabilities are summed and compared against
+# min_confidence. Default ["Music", "Musical instrument"].
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_CLASSES (comma-separated).
+# instrumental_classes = ["Music", "Musical instrument"]
+
+# Minimum gap in seconds between consecutive classifier inference calls.
+# Default 5. Set to 0 to disable the cooldown.
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS.
+# cooldown_seconds = 5
+
 [enrichment]
 # Recording enrichment reads the ISRC, MusicBrainz recording ID, and duration
 # from each file's audio tags and feeds them to the matcher to disambiguate

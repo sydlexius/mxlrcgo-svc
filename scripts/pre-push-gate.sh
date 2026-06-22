@@ -112,4 +112,23 @@ else
   echo "    govulncheck not installed; skipping (CI still enforces it)"
 fi
 
+echo "==> ui-check (generated web assets up to date)"
+# Catch stale generated web UI assets (web/static/css/output.css, *_templ.go)
+# locally instead of only on the remote "UI Assets" CI job (#321). The check
+# needs the Tailwind v4 standalone CLI; the single version pin lives in
+# .github/workflows/ci.yml, so we do NOT re-pin or download anything here.
+# Resolve a binary from a TAILWIND override (CI passes one) or PATH; when none
+# is found this is SKIPPED (not failed), exactly like the codecovcli/actionlint
+# steps above -- CI's ui-check job remains the source of truth.
+TAILWIND_BIN="${TAILWIND:-}"
+if [ -z "$TAILWIND_BIN" ]; then
+  TAILWIND_BIN="$(command -v tailwindcss 2>/dev/null || command -v tailwind 2>/dev/null || true)"
+fi
+if [ -n "$TAILWIND_BIN" ]; then
+  make ui-check TAILWIND="$TAILWIND_BIN" || fail "ui-check: generated web assets are stale; run 'make ui' and commit the result"
+else
+  echo "    tailwindcss not found; skipping ui-check (CI enforces it)."
+  echo "    (brew install tailwindcss, or set TAILWIND=/path/to/tailwindcss for the local check)"
+fi
+
 echo "OK: all pre-push checks passed"

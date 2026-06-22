@@ -113,6 +113,35 @@ func TestSaveFieldHappyPath(t *testing.T) {
 	}
 }
 
+func TestSaveFieldMalformedFormRejected(t *testing.T) {
+	store := newFakeSecretStore()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(seedConfigTOML), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	u := NewUI(config.Config{}, "v0", WithConfigPath(cfgPath), WithSecretStore(store))
+
+	// The explicit r.ParseForm() guard mirrors the section save handler: a truly
+	// malformed body yields a clean 400 instead of silently empty values. To
+	// exercise the guard, pre-populate r.PostForm with a valid CSRF token (so
+	// enforceCSRFToken's PostFormValue does not parse, and therefore swallow, the
+	// request first) and put invalid percent-encoding in the query so ParseForm
+	// returns a non-nil error.
+	req := httptest.NewRequest(http.MethodPost, "/settings/field?bad=%zz", nil)
+	req.PostForm = url.Values{"csrf_token": {testCSRFToken}}
+	req.AddCookie(&http.Cookie{Name: CSRFCookieName, Value: testCSRFToken})
+	rec := httptest.NewRecorder()
+	u.handleSaveField(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "invalid form data" {
+		t.Errorf("body = %q, want %q", got, "invalid form data")
+	}
+}
+
 func TestSaveFieldCSRFRejected(t *testing.T) {
 	h, cfgPath := writableTestUI(t, newFakeSecretStore())
 

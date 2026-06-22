@@ -630,13 +630,24 @@ func redactRawTOML(raw string) string {
 	section := ""
 	for _, line := range strings.Split(raw, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			section = strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+		// Skip comment lines verbatim so they are never treated as key/value
+		// pairs or section headers.
+		if strings.HasPrefix(trimmed, "#") {
 			b.WriteString(line)
 			b.WriteByte('\n')
 			continue
 		}
-		if eq := strings.Index(line, " = "); eq > 0 && !strings.HasPrefix(trimmed, "#") {
+		// Section headers cover both [table] and [[array-of-tables]]; trimming
+		// all surrounding brackets yields the dotted-section name in either case.
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = strings.Trim(trimmed, "[]")
+			b.WriteString(line)
+			b.WriteByte('\n')
+			continue
+		}
+		// Locate the key/value split on the first '=' regardless of surrounding
+		// whitespace, so key=value and key = value are both redacted.
+		if eq := strings.IndexByte(line, '='); eq > 0 {
 			key := strings.TrimSpace(line[:eq])
 			if sensitive[secKey{section, key}] {
 				b.WriteString(key)

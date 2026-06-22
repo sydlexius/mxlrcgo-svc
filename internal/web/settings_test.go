@@ -349,3 +349,49 @@ func TestSettingsTokenNotLockedByForeignEnv(t *testing.T) {
 		t.Errorf("token input rendered disabled with no token env override: %s", tag)
 	}
 }
+
+// TestRedactRawTOML asserts the raw config-file view redacts Sensitive values
+// across TOML spacing/header variants while preserving non-sensitive text,
+// comments, and formatting (Codoki High: brittle string matching leaked secrets).
+func TestRedactRawTOML(t *testing.T) {
+	const secret = "super-secret-token"
+	raw := strings.Join([]string{
+		"# top-level comment with token = should-not-change",
+		"[api]",
+		"token=" + secret, // no spaces around '='
+		"cooldown = 60",
+		"",
+		"[[server]]", // array-of-tables header
+		"webhook_api_keys = [\"k1\", \"k2\"]",
+		"# api.token = inline-comment-must-survive",
+	}, "\n")
+
+	got := redactRawTOML(raw)
+
+	if strings.Contains(got, secret) {
+		t.Errorf("secret leaked through redaction:\n%s", got)
+	}
+	// no-space key=value under [api] is redacted.
+	if !strings.Contains(got, `token = "(redacted)"`) {
+		t.Errorf("no-space api.token not redacted:\n%s", got)
+	}
+	// [[server]] array-of-tables header still resolves the server section.
+	if !strings.Contains(got, `webhook_api_keys = "(redacted)"`) {
+		t.Errorf("webhook_api_keys under [[server]] not redacted:\n%s", got)
+	}
+	// Non-sensitive value is preserved verbatim.
+	if !strings.Contains(got, "cooldown = 60") {
+		t.Errorf("non-sensitive cooldown altered:\n%s", got)
+	}
+	// Comment lines are preserved verbatim, including ones mentioning sensitive keys.
+	if !strings.Contains(got, "# top-level comment with token = should-not-change") {
+		t.Errorf("top-level comment altered:\n%s", got)
+	}
+	if !strings.Contains(got, "# api.token = inline-comment-must-survive") {
+		t.Errorf("commented api.token line was redacted/altered:\n%s", got)
+	}
+	// Headers themselves survive.
+	if !strings.Contains(got, "[api]") || !strings.Contains(got, "[[server]]") {
+		t.Errorf("section headers not preserved:\n%s", got)
+	}
+}

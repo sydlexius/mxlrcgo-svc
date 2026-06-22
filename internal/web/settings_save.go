@@ -39,6 +39,14 @@ func (u *UI) handleSaveField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse the form explicitly so a malformed body yields a clean 400 rather
+	// than PostFormValue silently returning empty values, matching the section
+	// save handler (settings_save_section.go).
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form data", http.StatusBadRequest)
+		return
+	}
+
 	path := strings.TrimSpace(r.PostFormValue("path"))
 	spec, ok := config.FieldByPath(path)
 	if !ok {

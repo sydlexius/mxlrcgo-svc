@@ -35,6 +35,16 @@ jobs:
         with:
           languages: go
 
+      # Generated web UI assets are no longer committed (issue #364); generate
+      # them before the traced build so the go:embed of output.css and the
+      # generated *_templ.go compile. The build below stays a bare `go build`
+      # so CodeQL still traces the real analyzed build.
+      - name: Install Tailwind standalone CLI (v4.2.0)
+        run: bash scripts/install-tailwind.sh "$RUNNER_TEMP/tailwindcss"
+
+      - name: Generate web UI assets (make generate)
+        run: make generate TAILWIND="$RUNNER_TEMP/tailwindcss"
+
       - name: Build
         run: go build ./...
 

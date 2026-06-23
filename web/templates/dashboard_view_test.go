@@ -44,4 +44,7 @@ func TestChartDataJSON(t *testing.T) {
 	if got := empty.LabelsJSON(); got != "null" && got != "[]" {
 		t.Errorf("LabelsJSON() for nil = %q, want null or []", got)
 	}
+	if got := empty.ValuesJSON(); got != "null" && got != "[]" {
+		t.Errorf("ValuesJSON() for nil = %q, want null or []", got)
+	}
 }

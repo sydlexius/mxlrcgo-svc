@@ -108,8 +108,8 @@
     var type = canvas.getAttribute('data-chart-type');
     var labels = parseAttr(canvas, 'data-chart-labels');
     var values = parseAttr(canvas, 'data-chart-values');
-    if (!Array.isArray(labels) || !Array.isArray(values)) {
-      console.error('dashboard charts: #' + canvas.id + ' missing/invalid labels or values; skipped');
+    if (!Array.isArray(labels) || !Array.isArray(values) || labels.length !== values.length) {
+      console.error('dashboard charts: #' + canvas.id + ' missing/invalid labels or values (length mismatch); skipped');
       return;
     }
     try {

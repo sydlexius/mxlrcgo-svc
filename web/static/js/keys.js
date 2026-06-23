@@ -100,7 +100,8 @@
   // htmx swaps the key-list panel on create/revoke; reformat the swapped-in nodes.
   if (document.body) {
     document.body.addEventListener("htmx:afterSwap", function (event) {
-      reformatTimes(event.target || document);
+      var root = (event.detail && event.detail.target) ? event.detail.target : (event.target || document);
+      reformatTimes(root);
     });
   }
 })();

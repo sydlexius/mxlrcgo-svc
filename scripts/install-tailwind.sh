@@ -61,13 +61,36 @@ echo "==> downloading ${ASSET} (v${VERSION})"
 curl -fsSL -o "$workdir/$ASSET" "$BASE/$ASSET"
 
 echo "==> verifying sha256"
-# Pull the single line for our asset from the release's sha256sums.txt and
-# rewrite its path to point at the downloaded file, then verify. A mismatch or
-# a missing line makes sha256sum -c exit non-zero.
-curl -fsSL "$BASE/sha256sums.txt" \
-  | grep "${ASSET}\$" \
-  | sed "s|^\([^ ]*\)  ./|\1  $workdir/|" \
-  | sha256sum -c -
+# Resolve a SHA-256 tool. Linux ships `sha256sum`; macOS (a first-class dev
+# platform here) ships `shasum -a 256` instead. Compute-and-compare rather than
+# `sha256sum -c` so we do not depend on either tool's checkfile format.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_of() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_of() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+  echo "install-tailwind: neither sha256sum nor shasum found; cannot verify download" >&2
+  exit 1
+fi
+
+# Pull the expected hash for our asset from the release's sha256sums.txt. Entries
+# look like "<hash>  ./tailwindcss-linux-x64"; match the asset at end-of-line with
+# an optional leading "./" so an upstream switch to a bare "filename" form does
+# not silently break verification. ASSET is a controlled value (no regex metachars).
+expected="$(curl -fsSL "$BASE/sha256sums.txt" \
+  | grep -E "[[:space:]]\.?/?${ASSET}\$" \
+  | awk '{print $1}' | head -n1)"
+if [ -z "$expected" ]; then
+  echo "install-tailwind: no sha256 entry for ${ASSET} in sha256sums.txt" >&2
+  exit 1
+fi
+actual="$(sha256_of "$workdir/$ASSET")"
+if [ "$expected" != "$actual" ]; then
+  echo "install-tailwind: sha256 mismatch for ${ASSET}" >&2
+  echo "  expected: $expected" >&2
+  echo "  actual:   $actual" >&2
+  exit 1
+fi
 
 # Atomically place the verified binary at DEST.
 mkdir -p "$(dirname "$DEST")"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/mxlrcgo-svc-smoke.XXXXXX")"
+TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/canticle-smoke.XXXXXX")"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 BIN="$TMPDIR/canticle"

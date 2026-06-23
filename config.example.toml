@@ -1,5 +1,6 @@
 # Canticle configuration file
 # Copy to ~/.config/mxlrcgo-svc/config.toml and edit as needed.
+# (config dir name retained as mxlrcgo-svc for in-place upgrade compatibility)
 # Environment variable overrides (in precedence order): MUSIXMATCH_TOKEN,
 # MXLRC_API_TOKEN, MXLRC_API_COOLDOWN (or MXLRC_COOLDOWN),
 # MXLRC_API_CIRCUIT_OPEN_DURATION, MXLRC_API_CIRCUIT_BACKOFF_BASE, MXLRC_OUTPUT_DIR,

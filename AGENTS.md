@@ -159,12 +159,13 @@ Every package is listed with a one-line purpose and its location. `cmd/mxlrcgo-s
 - `internal/lyrics` - LRC/TXT/instrumental writer (`Writer` interface, `LRCWriter`), `Slugify`, an `.lrc` parser, provenance-tag embedding, and fsync helpers. Location: `internal/lyrics/`.
 - `internal/normalize` - NFKC cache-key normalization, duration bucketing, fuzzy match confidence, and album-artist resolution. Location: `internal/normalize/`.
 - `internal/langguard` - Unicode-script classification/filtering of lyric text against a configured language allowlist. Location: `internal/langguard/`.
-- `internal/scanner` - Parses CLI/text-file/directory input into the in-memory queue (`Scanner`, `ScanOptions`). Location: `internal/scanner/scanner.go`.
+- `internal/scanner` - Parses CLI/text-file/directory input into the in-memory queue (`Scanner`, `ScanOptions`). Skips files that consistently fail metadata read via the injected `MetadataFailureStore` (issue #376). Location: `internal/scanner/scanner.go`.
 - `internal/app` - One-shot `fetch`-mode orchestration loop over the in-memory `InputsQueue`; depends on the `Fetcher` and `Writer` interfaces. Location: `internal/app/app.go`.
 
 ### Persistence and stateful services
 - `internal/db` - Pure-Go SQLite (`modernc.org/sqlite`) open/migrate (goose), WAL mode, foreign keys, busy-retry, and a read-only open path. Migrations live in `internal/db/migrations/`. Location: `internal/db/`.
 - `internal/cache` - Lyrics cache repository (`CacheRepo`) over the SQLite DB. Location: `internal/cache/cache.go`.
+- `internal/scanfail` - `Store` over the SQLite DB recording files that consistently fail metadata read, so the scanner skips re-reading them until their mtime/size changes (issue #376). Satisfies `scanner.MetadataFailureStore`. Location: `internal/scanfail/scanfail.go`.
 - `internal/queue` - Two queues: the in-memory `InputsQueue` (fetch mode) and the durable SQLite `DBQueue` (serve/worker mode) with priority tiers and randomized within-tier dequeue. Location: `internal/queue/`.
 - `internal/library` - Library-root CRUD repository (`Repo`: `Add`/`List`/`Get`/`GetByName`/`Update`/`Remove`). Location: `internal/library/repository.go`.
 - `internal/scan` - Library scanning: `Enqueuer`, the `scan_results` `Repo`, and the periodic scheduler that enqueues missing lyrics. Location: `internal/scan/`.

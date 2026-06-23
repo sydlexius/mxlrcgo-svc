@@ -37,6 +37,7 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/providers"
 	"github.com/sydlexius/mxlrcgo-svc/internal/queue"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scan"
+	"github.com/sydlexius/mxlrcgo-svc/internal/scanfail"
 	"github.com/sydlexius/mxlrcgo-svc/internal/scanner"
 	"github.com/sydlexius/mxlrcgo-svc/internal/secrets"
 	"github.com/sydlexius/mxlrcgo-svc/internal/server"
@@ -1609,8 +1610,10 @@ func scheduler(sqlDB *sql.DB, opts scanner.ScanOptions, detectOverride *bool, gl
 	return scan.Scheduler{
 		Libraries: library.New(sqlDB),
 		Results:   results,
-		Scanner:   scanner.NewScanner(),
-		Options:   opts,
+		// Persist metadata-read failures so a permanently-malformed file is not
+		// re-read (and re-warned about) on every scheduled/watched scan (#376).
+		Scanner: scanner.NewScanner(scanner.WithMetadataFailureStore(scanfail.New(sqlDB))),
+		Options: opts,
 		OnScanComplete: func(ctx context.Context, lib models.Library, found []models.ScanResult) error {
 			enqueued, cacheHits, err := enq.EnqueuePending(ctx, lib)
 			if err != nil {

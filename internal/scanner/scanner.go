@@ -45,11 +45,38 @@ func audioFileTypeForExt(ext string) (int, bool) {
 	}
 }
 
+// MetadataFailureStore remembers files that consistently fail audio metadata
+// read so the scanner can skip re-reading (and re-warning about) malformed files
+// until they change on disk. A nil store disables the feature: every file is
+// read and every failure warns, the historical behavior. See issue #376.
+type MetadataFailureStore interface {
+	// ShouldSkip reports whether path previously failed metadata read at the same
+	// mtime and size, meaning a re-read would fail identically and can be skipped.
+	// mtimeNano is ModTime().UnixNano() (nanosecond precision so a same-second
+	// rewrite to the same size is still detected as changed).
+	ShouldSkip(ctx context.Context, path string, mtimeNano, size int64) (bool, error)
+	// RecordFailure remembers that path failed metadata read at the given mtime
+	// and size, so subsequent scans skip it until the file changes.
+	RecordFailure(ctx context.Context, path string, mtimeNano, size int64, readErr error) error
+}
+
 // Scanner handles parsing input sources and populating the work queue.
 type Scanner struct {
 	// probeFunc, when set, is used as the duration probe instead of audioduration
 	// (tests only -- lets tests inject a known duration without real audio fixtures).
 	probeFunc func(string) (int, error)
+	// failures, when set, lets the scanner skip files that previously failed
+	// metadata read (and warn only once per file-version). Nil disables it.
+	failures MetadataFailureStore
+}
+
+// Option configures a Scanner at construction.
+type Option func(*Scanner)
+
+// WithMetadataFailureStore wires a store so the scanner skips files that
+// consistently fail metadata read until they change on disk (issue #376).
+func WithMetadataFailureStore(s MetadataFailureStore) Option {
+	return func(sc *Scanner) { sc.failures = s }
 }
 
 // ScanOptions controls library directory traversal and queue eligibility.
@@ -74,9 +101,13 @@ type ScanOptions struct {
 	EnrichRecording bool
 }
 
-// NewScanner creates a new Scanner.
-func NewScanner() *Scanner {
-	return &Scanner{}
+// NewScanner creates a new Scanner with the supplied options.
+func NewScanner(opts ...Option) *Scanner {
+	sc := &Scanner{}
+	for _, o := range opts {
+		o(sc)
+	}
+	return sc
 }
 
 // audioDuration reads the header of r to determine duration in seconds.
@@ -267,7 +298,29 @@ func (sc *Scanner) scanDir(ctx context.Context, dir string, opts ScanOptions, de
 			continue
 		}
 
-		f, err := os.Open(filepath.Join(dir, file.Name())) //nolint:gosec // path from directory scan
+		fullPath := filepath.Join(dir, file.Name())
+
+		// Identity for the metadata-failure skip list: a malformed file reads
+		// identically until its mtime or size changes, so a prior failure at the
+		// same (mtime, size) means re-reading is wasted work and repeat log noise.
+		// info() can fail (race with a delete) -- when it does we skip the feature
+		// for this file and read as usual rather than guessing an identity.
+		var mtimeNano, size int64
+		haveIdentity := false
+		if sc.failures != nil {
+			if info, ierr := file.Info(); ierr == nil {
+				mtimeNano, size, haveIdentity = info.ModTime().UnixNano(), info.Size(), true
+				skip, serr := sc.failures.ShouldSkip(ctx, fullPath, mtimeNano, size)
+				if serr != nil {
+					slog.Warn("metadata-failure lookup failed; reading file anyway", "file", file.Name(), "error", serr)
+				} else if skip {
+					slog.Debug("skipping file, metadata read previously failed (unchanged)", "file", file.Name())
+					continue
+				}
+			}
+		}
+
+		f, err := os.Open(fullPath) //nolint:gosec // path from directory scan
 		if err != nil {
 			slog.Warn("error reading file", "error", err)
 			continue
@@ -277,6 +330,14 @@ func (sc *Scanner) scanDir(ctx context.Context, dir string, opts ScanOptions, de
 		if err != nil {
 			_ = f.Close()
 			slog.Warn("error reading metadata", "file", file.Name(), "error", err)
+			// Remember this failure so later scans skip the file (and do not
+			// re-warn) until it changes on disk. A record/store error is logged
+			// but never fatal -- the scan continues exactly as before.
+			if sc.failures != nil && haveIdentity {
+				if rerr := sc.failures.RecordFailure(ctx, fullPath, mtimeNano, size, err); rerr != nil {
+					slog.Warn("failed to record metadata-read failure", "file", file.Name(), "error", rerr)
+				}
+			}
 			continue
 		}
 

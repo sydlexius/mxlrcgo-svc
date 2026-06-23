@@ -23,6 +23,15 @@ coverage.html
 # Build artifacts
 dist/
 
+# Generated web UI assets (issue #364): produced on build by `make ui`, never
+# committed. web/static/embed.go embeds output.css at compile time, so run
+# `make ui` after a fresh clone before `go build`.
+web/templates/*_templ.go
+web/static/css/output.css
+
+# GoReleaser before-hook tooling (downloaded Tailwind standalone CLI)
+/.tools/
+
 # Docs build output
 /site/
 

@@ -182,7 +182,7 @@ Every package is listed with a one-line purpose and its location. `cmd/mxlrcgo-s
 - `internal/pathutil` - Path-containment checks confining filesystem targets to configured roots; shared by `server`, `watcher`, and `scan`. Location: `internal/pathutil/`.
 - `internal/web` - Serves the serve-mode web UI (fixed-sidebar shell, Reports placeholder, read-only Config view) from embedded templ templates and `go:embed`'d static assets. Location: `internal/web/`.
 - `web/static` - Embeds the compiled CSS and self-hosted fonts into the binary so the UI serves offline. Location: `web/static/`.
-- `web/templates` - templ source for the web UI shell; generated `*_templ.go` files are committed and CI-verified. Location: `web/templates/`.
+- `web/templates` - templ source for the web UI shell; generated `*_templ.go` files are generated on build and gitignored, not committed (issue #364 -- run `make ui` after a fresh clone before `go build`). Location: `web/templates/`.
 
 ### Sidecars, config, and cross-cutting
 - `internal/verification` - Optional acoustic verification of fetched lyrics (`Verifier`, `HTTPVerifier`) against an external service, using a short audio sample. Location: `internal/verification/`.

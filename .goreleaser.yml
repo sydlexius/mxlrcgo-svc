@@ -2,6 +2,17 @@ version: 2
 
 project_name: canticle
 
+# Generate the web UI assets before any platform build. They are no longer
+# committed (issue #364): web/static/embed.go embeds web/static/css/output.css at
+# COMPILE TIME, so templ + Tailwind must run before the `builds:` below compile
+# the binaries. install-tailwind.sh downloads + sha256-verifies the node-free
+# Tailwind standalone CLI (auto-detecting the runner's OS/arch).
+before:
+  hooks:
+    - scripts/install-tailwind.sh ./.tools/tailwindcss
+    - go tool templ generate
+    - ./.tools/tailwindcss -i web/static/css/input.css -o web/static/css/output.css --minify
+
 builds:
   - id: mxlrcgo-svc
     main: ./cmd/mxlrcgo-svc

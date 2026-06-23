@@ -1,6 +1,6 @@
 .PHONY: build run test test-shuffle test-cover patch-cover gate scan vulncheck \
         doctor sync-tool-versions coverage-floor smoke lint fmt hooks clean help \
-        docs docs-serve docs-deps templ tailwind ui ui-check
+        docs docs-serve docs-deps templ tailwind ui ui-check ui-validate generate
 
 # Binary name
 BINARY=canticle
@@ -14,8 +14,14 @@ TAILWIND ?= tailwindcss
 # scripts/check-tool-versions.sh asserts the golangci-lint and grype version pins.
 GOVULNCHECK_VERSION=v1.1.4
 
-## build: Build the binary
-build:
+## build: Build the binary (regenerates web UI assets first)
+# Generated web assets (web/templates/*_templ.go, web/static/css/output.css) are
+# no longer committed (issue #364) and output.css is go:embed-ed at compile time,
+# so a fresh clone must regenerate before compiling. Depending on `generate`
+# keeps `make build` / `make run` working with no manual `make ui` step. Needs
+# the Tailwind standalone CLI on PATH (or `TAILWIND=/path/to/tailwindcss`); see
+# scripts/install-tailwind.sh.
+build: generate
 	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/mxlrcgo-svc
 
 ## run: Build and run
@@ -114,10 +120,28 @@ tailwind:
 ## ui: Regenerate all web UI assets (templ + Tailwind)
 ui: templ tailwind
 
-## ui-check: Fail if committed web UI assets are stale or untracked vs their sources (CI gate)
-ui-check: ui
-	@{ git diff --exit-code -- web/ && test -z "$$(git ls-files --others --exclude-standard -- web/)"; } || { \
-		echo "Generated web UI assets are stale or untracked. Run 'make ui' and commit the result."; \
+## generate: Generate web UI assets (alias of `ui`) for scripts/CI build paths
+# Generated assets (web/templates/*_templ.go, web/static/css/output.css) are no
+# longer committed (issue #364); they are produced on build. web/static/embed.go
+# embeds output.css at COMPILE TIME, so this MUST run before `go build` in every
+# build path (gate, Dockerfile, GoReleaser, CI).
+generate: ui
+
+## ui-check: Regenerate then validate the web UI CSS (sentinels + size band)
+# Generated assets are produced on build and never committed (issue #364), so
+# there is no committed-drift check here -- a templ/Tailwind tool bump can never
+# fail on stale committed output. This regenerates from source then runs the
+# generation-correctness checks in `ui-validate`.
+ui-check: ui ui-validate
+
+## ui-validate: Validate the generated output.css (no regeneration, no git diff)
+# Runs against whatever output.css is already on disk, so CI/gate can call it
+# right after `make generate` without regenerating a second time. Catches a
+# broken Tailwind run (missing @source glob, leaked Go vocabulary) that would
+# otherwise ship silently now that the CSS is never reviewed in a diff.
+ui-validate:
+	@test -f web/static/css/output.css || { \
+		echo "ui-validate: web/static/css/output.css missing; run 'make generate' first."; \
 		exit 1; \
 	}
 	@# Guard the load-bearing shell-layout CSS rules (.mx-shell/.mx-sidebar/.mx-content,

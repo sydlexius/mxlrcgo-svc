@@ -4,10 +4,33 @@ FROM golang:1.26.4-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af01
 
 WORKDIR /src
 
+# bash + curl run scripts/install-tailwind.sh (download + sha256 verify the
+# node-free Tailwind standalone CLI); golang:alpine ships neither. libgcc +
+# libstdc++ are the C++/unwind runtime the -musl Tailwind binary is dynamically
+# linked against (_Unwind_* from libgcc_s, _ZSt*/__cxxabiv* from libstdc++);
+# without them it aborts with "Error relocating ... symbol not found" (issue #366).
+RUN apk add --no-cache bash curl libgcc libstdc++
+
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# Generate the web UI assets in-image. They are no longer committed (issue #364):
+# web/static/embed.go embeds web/static/css/output.css at COMPILE TIME, so templ
+# + Tailwind MUST run before `go build`. Alpine is musl-linked, so install the
+# -musl Tailwind variant (the glibc linux-x64 binary used in CI will not run
+# here). SHA-validated by install-tailwind.sh against the release checksums.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  asset=tailwindcss-linux-x64-musl ;; \
+      aarch64) asset=tailwindcss-linux-arm64-musl ;; \
+      *) echo "unsupported build arch: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    TAILWIND_ASSET="$asset" scripts/install-tailwind.sh /usr/local/bin/tailwindcss; \
+    go tool templ generate; \
+    /usr/local/bin/tailwindcss -i web/static/css/input.css -o web/static/css/output.css --minify
+
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/canticle ./cmd/mxlrcgo-svc
 
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b

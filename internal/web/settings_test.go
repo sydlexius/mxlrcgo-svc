@@ -513,6 +513,99 @@ func TestRedactRawTOMLEdgeCases(t *testing.T) {
 				secret + "-tail",
 			},
 		},
+		{
+			// A table header with a trailing inline comment must still update the
+			// current section. Otherwise the following sensitive key is keyed at
+			// top level, misses the registry match, and leaks its value verbatim.
+			name: "table header with trailing comment still scopes the section",
+			in: strings.Join([]string{
+				"[server] # bind + webhook config",
+				"webhook_api_keys = [\"" + secret + "-1\", \"" + secret + "-2\"]",
+			}, "\n"),
+			wantContain: []string{
+				"[server] # bind + webhook config",
+				`webhook_api_keys = "(redacted)"`,
+			},
+			wantAbsent: []string{
+				secret + "-1",
+				secret + "-2",
+			},
+		},
+		{
+			// A sensitive multi-line basic string must collapse to the single
+			// redacted line; its body lines (the secret) are dropped, never
+			// emitted verbatim.
+			name: "sensitive multi-line basic string does not leak body",
+			in: strings.Join([]string{
+				"[api]",
+				`token = """`,
+				secret + "-line1",
+				secret + "-line2",
+				`"""`,
+				"cooldown = 60",
+			}, "\n"),
+			wantContain: []string{
+				`token = "(redacted)"`,
+				"cooldown = 60",
+			},
+			wantAbsent: []string{
+				secret + "-line1",
+				secret + "-line2",
+			},
+		},
+		{
+			// Same leak for a sensitive multi-line literal string ('''...''').
+			name: "sensitive multi-line literal string does not leak body",
+			in: strings.Join([]string{
+				"[api]",
+				"token = '''",
+				secret + "-lit1",
+				secret + "-lit2",
+				"'''",
+				"cooldown = 60",
+			}, "\n"),
+			wantContain: []string{
+				`token = "(redacted)"`,
+				"cooldown = 60",
+			},
+			wantAbsent: []string{
+				secret + "-lit1",
+				secret + "-lit2",
+			},
+		},
+		{
+			// A NON-sensitive multi-line string must render verbatim: the body
+			// lines are preserved and nothing is over-redacted.
+			name: "non-sensitive multi-line string preserved verbatim",
+			in: strings.Join([]string{
+				"[guard]",
+				`note = """`,
+				"first body line",
+				"second body line",
+				`"""`,
+			}, "\n"),
+			wantContain: []string{
+				`note = """`,
+				"first body line",
+				"second body line",
+				`"""`,
+			},
+		},
+		{
+			// A sensitive triple-quote string that opens AND closes on the same
+			// line must not swallow the following (non-secret) line.
+			name: "sensitive single-line triple-quote does not swallow next line",
+			in: strings.Join([]string{
+				"[api]",
+				`token = """` + secret + `"""`,
+				"cooldown = 60",
+			}, "\n"),
+			wantContain: []string{
+				`token = "(redacted)"`,
+				"cooldown = 60",
+			},
+			wantAbsent: []string{secret},
+		},
 	}
 
 	for _, tc := range tests {

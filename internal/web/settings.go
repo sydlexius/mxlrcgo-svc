@@ -658,8 +658,19 @@ func redactRawTOML(raw string) string {
 		// all surrounding brackets yields the dotted-section name in either case.
 		// normalizeTOMLKeyPath unquotes any quoted segments so a header written as
 		// ["server"."tls"] resolves to the same dotted name as [server.tls].
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			section = normalizeTOMLKeyPath(strings.Trim(trimmed, "[]"))
+		//
+		// A header may carry a trailing inline comment ([server] # note), which is
+		// valid TOML. Strip the comment (quote-aware, so a '#' inside a quoted key
+		// is kept) BEFORE testing for the [...] shape, otherwise the trimmed line
+		// ends with "note" instead of "]" and the section would not update -- a
+		// following sensitive key would then be keyed at top level, miss the
+		// registry match, and leak its value (#367).
+		headerCandidate := trimmed
+		if comment := trailingTOMLComment(trimmed); comment != "" {
+			headerCandidate = strings.TrimRight(trimmed[:len(trimmed)-len(comment)], " \t")
+		}
+		if strings.HasPrefix(headerCandidate, "[") && strings.HasSuffix(headerCandidate, "]") {
+			section = normalizeTOMLKeyPath(strings.Trim(headerCandidate, "[]"))
 			b.WriteString(line)
 			b.WriteByte('\n')
 			continue
@@ -693,10 +704,25 @@ func redactRawTOML(raw string) string {
 				// (the closing ']' line is part of the value and is dropped too).
 				// Without this, a multi-line array of secrets would leak every
 				// element after the first verbatim.
-				depth := tomlBracketDepth(line[eq+1:], 0)
+				value := line[eq+1:]
+				depth := tomlBracketDepth(value, 0)
 				for depth > 0 && i+1 < len(lines) {
 					i++
 					depth = tomlBracketDepth(lines[i], depth)
+				}
+				// A sensitive value may instead open a multi-line basic ("""...""")
+				// or literal ('''...''') string whose body spans later lines. The
+				// placeholder stands in for the whole string, so drop continuation
+				// lines until the matching closing delimiter. Without this, every
+				// body line after the opener (the secret) would render verbatim. A
+				// triple-quote that also closes on the opening line is not consumed.
+				if delim, open := openMultilineTOMLString(value); open {
+					for i+1 < len(lines) {
+						i++
+						if strings.Contains(lines[i], delim) {
+							break
+						}
+					}
 				}
 				continue
 			}
@@ -804,6 +830,28 @@ func tomlBracketDepth(s string, depth int) int {
 		}
 	}
 	return depth
+}
+
+// openMultilineTOMLString reports whether a TOML value region (the text right
+// of '=') opens a multi-line basic (""") or literal (”') string that is NOT
+// closed on the same line, returning the opening delimiter and true in that
+// case. A triple-quote that also closes on the opening line (token = """x""")
+// is fully contained and returns false, so the redaction does not swallow the
+// following lines. The redaction uses this to drop the secret body of a
+// sensitive multi-line string until its closing delimiter.
+func openMultilineTOMLString(value string) (string, bool) {
+	v := strings.TrimLeft(value, " \t")
+	for _, delim := range []string{`"""`, `'''`} {
+		if strings.HasPrefix(v, delim) {
+			// Closed on this same line if the delimiter appears again after the
+			// opener; otherwise the body continues on later lines.
+			if strings.Contains(v[len(delim):], delim) {
+				return delim, false
+			}
+			return delim, true
+		}
+	}
+	return "", false
 }
 
 // effectiveValue renders the field's current merged value as a string. Secret

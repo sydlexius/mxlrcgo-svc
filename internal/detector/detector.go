@@ -52,6 +52,24 @@ type Detector interface {
 	Detect(ctx context.Context, audioPath string) (Result, error)
 }
 
+// Config holds the construction parameters for an HTTPDetector. Zero values for
+// SampleDurationSeconds, MinConfidence, InstrumentalClasses, VocalClasses,
+// VocalMaxConfidence, and SpreadSamples are replaced with built-in defaults by
+// NewHTTPDetector; CooldownSeconds < 0 is clamped to 0. FFprobePath empty means
+// auto-discover (sibling of ffmpeg, then PATH).
+type Config struct {
+	ClassifierURL         string
+	SampleDurationSeconds int
+	MinConfidence         float64
+	InstrumentalClasses   []string
+	VocalClasses          []string
+	VocalMaxConfidence    float64
+	SpreadSamples         int
+	FFmpegPath            string
+	FFprobePath           string
+	CooldownSeconds       int
+}
+
 // clampSampleDuration clamps d to [minSampleDurationSeconds, maxSampleDurationSeconds].
 func clampSampleDuration(d int) int {
 	if d < minSampleDurationSeconds {

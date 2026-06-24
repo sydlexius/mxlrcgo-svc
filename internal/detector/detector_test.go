@@ -43,7 +43,7 @@ func TestHTTPDetectorAboveThresholdIsInstrumental(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, []string{"Music", "Musical instrument"}, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, InstrumentalClasses: []string{"Music", "Musical instrument"}, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestHTTPDetectorBelowThresholdIsMiss(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, []string{"Music", "Musical instrument"}, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, InstrumentalClasses: []string{"Music", "Musical instrument"}, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestHTTPDetectorHummingGrayZoneIsMiss(t *testing.T) {
 	defer srv.Close()
 
 	// Use a high threshold (0.90) so the gray zone (0.85 combined) is a miss.
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, []string{"Music", "Musical instrument"}, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, InstrumentalClasses: []string{"Music", "Musical instrument"}, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestNewHTTPDetectorClampsSampleDuration(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			d, err := NewHTTPDetector("http://classifier:8080", tc.duration, 0.90, nil, ffmpegPath, 0)
+			d, err := NewHTTPDetector(Config{ClassifierURL: "http://classifier:8080", SampleDurationSeconds: tc.duration, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 			if err != nil {
 				t.Fatalf("NewHTTPDetector: %v", err)
 			}
@@ -180,7 +180,7 @@ func TestNewHTTPDetectorClampsSampleDuration(t *testing.T) {
 }
 
 func TestNewHTTPDetectorErrorsWhenFFmpegMissing(t *testing.T) {
-	_, err := NewHTTPDetector("http://classifier:8080", 30, 0.90, nil, filepath.Join(t.TempDir(), "missing-ffmpeg"), 0)
+	_, err := NewHTTPDetector(Config{ClassifierURL: "http://classifier:8080", SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: filepath.Join(t.TempDir(), "missing-ffmpeg")})
 	if err == nil {
 		t.Fatal("NewHTTPDetector returned nil error; want missing ffmpeg error")
 	}
@@ -188,7 +188,7 @@ func TestNewHTTPDetectorErrorsWhenFFmpegMissing(t *testing.T) {
 
 func TestNewHTTPDetectorErrorsOnBlankURL(t *testing.T) {
 	ffmpegPath := fakeFFmpeg(t)
-	_, err := NewHTTPDetector("", 30, 0.90, nil, ffmpegPath, 0)
+	_, err := NewHTTPDetector(Config{ClassifierURL: "", SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err == nil {
 		t.Fatal("NewHTTPDetector returned nil error; want empty URL error")
 	}
@@ -230,7 +230,7 @@ func TestHTTPDetectorPostsAudioToClassifier(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, []string{"Music"}, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, InstrumentalClasses: []string{"Music"}, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestHTTPDetectorClassifierErrorIsMiss(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, nil, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestHTTPDetectorNon2xxReturnsClassifierUnavailable(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			d, err := NewHTTPDetector(srv.URL, 30, 0.90, nil, ffmpegPath, 0)
+			d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 			if err != nil {
 				t.Fatalf("NewHTTPDetector: %v", err)
 			}
@@ -309,7 +309,7 @@ func TestHTTPDetectorMalformedJSONReturnsInvalidResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, nil, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestHTTPDetectorContextCancelDuringHTTP(t *testing.T) {
 		srv.Close()
 	}()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, nil, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestHTTPDetectorClearlyAboveThresholdIsInstrumental(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, []string{"Music", "Musical instrument"}, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, InstrumentalClasses: []string{"Music", "Musical instrument"}, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestHTTPDetectorJustBelowThresholdIsMiss(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d, err := NewHTTPDetector(srv.URL, 30, 0.90, []string{"Music", "Musical instrument"}, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, SampleDurationSeconds: 30, MinConfidence: 0.90, InstrumentalClasses: []string{"Music", "Musical instrument"}, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestHTTPDetectorDefaultMinConfidenceOnInvalidInput(t *testing.T) {
 	ffmpegPath := fakeFFmpeg(t)
 	// Values outside (0,1] should be reset to 0.90.
 	for _, conf := range []float64{0, -0.5, 1.5} {
-		d, err := NewHTTPDetector("http://classifier:8080", 30, conf, nil, ffmpegPath, 0)
+		d, err := NewHTTPDetector(Config{ClassifierURL: "http://classifier:8080", SampleDurationSeconds: 30, MinConfidence: conf, FFmpegPath: ffmpegPath})
 		if err != nil {
 			t.Fatalf("NewHTTPDetector(conf=%.1f): %v", conf, err)
 		}
@@ -436,7 +436,7 @@ func TestHTTPDetectorDefaultMinConfidenceOnInvalidInput(t *testing.T) {
 func TestHTTPDetectorDetectEmptyPathError(t *testing.T) {
 	ffmpegPath := fakeFFmpeg(t)
 
-	d, err := NewHTTPDetector("http://classifier:8080", 30, 0.90, nil, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: "http://classifier:8080", SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestHTTPDetectorDetectEmptyPathError(t *testing.T) {
 func TestHTTPDetectorDefaultClasses(t *testing.T) {
 	ffmpegPath := fakeFFmpeg(t)
 	// Passing nil classes should use the built-in defaults.
-	d, err := NewHTTPDetector("http://classifier:8080", 30, 0.90, nil, ffmpegPath, 0)
+	d, err := NewHTTPDetector(Config{ClassifierURL: "http://classifier:8080", SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err != nil {
 		t.Fatalf("NewHTTPDetector: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestHTTPDetectorDefaultClasses(t *testing.T) {
 func TestNewHTTPDetectorInvalidURL(t *testing.T) {
 	ffmpegPath := fakeFFmpeg(t)
 	// A URL that is not a valid request URI should be rejected.
-	_, err := NewHTTPDetector("not-a-url", 30, 0.90, nil, ffmpegPath, 0)
+	_, err := NewHTTPDetector(Config{ClassifierURL: "not-a-url", SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 	if err == nil {
 		t.Fatal("NewHTTPDetector returned nil error for invalid URL; want error")
 	}
@@ -473,7 +473,7 @@ func TestNewHTTPDetectorInvalidURL(t *testing.T) {
 func TestNewHTTPDetectorRejectsSchemelesURL(t *testing.T) {
 	ffmpegPath := fakeFFmpeg(t)
 	for _, u := range []string{"/classify", "classifier:8080", "example.com"} {
-		_, err := NewHTTPDetector(u, 30, 0.90, nil, ffmpegPath, 0)
+		_, err := NewHTTPDetector(Config{ClassifierURL: u, SampleDurationSeconds: 30, MinConfidence: 0.90, FFmpegPath: ffmpegPath})
 		if err == nil {
 			t.Errorf("NewHTTPDetector(%q) returned nil error; want rejection of scheme-less URL", u)
 		}

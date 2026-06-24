@@ -28,6 +28,9 @@ type HTTPDetector struct {
 	sampleDuration      int
 	minConfidence       float64
 	instrumentalClasses []string
+	vocalClasses        []string
+	vocalMaxConfidence  float64
+	spreadSamples       int
 	ffmpegPath          string
 	ionicePath          string // empty when ionice is not available on this platform
 	nicePath            string // empty when nice is not available on this platform
@@ -37,26 +40,30 @@ type HTTPDetector struct {
 	lastInference       time.Time
 }
 
-// NewHTTPDetector creates a Detector that posts audio samples to a classifier
-// at classifierURL. Classes lists the AudioSet class names whose probabilities
-// are summed and compared against minConfidence (range 0-1). cooldownSeconds
-// enforces a minimum gap between inference calls.
-func NewHTTPDetector(classifierURL string, sampleDurationSeconds int, minConfidence float64, classes []string, ffmpegPath string, cooldownSeconds int) (*HTTPDetector, error) {
-	classifierURL = strings.TrimSpace(classifierURL)
+// NewHTTPDetector creates a Detector that posts audio samples to the classifier
+// at cfg.ClassifierURL. cfg.InstrumentalClasses lists the AudioSet class names
+// whose mean probabilities are summed and compared against cfg.MinConfidence
+// (range 0-1) for the music gate; cfg.VocalClasses + cfg.VocalMaxConfidence form
+// the vocal gate (see Detect). cfg.CooldownSeconds enforces a minimum gap between
+// inference calls. Zero/blank fields fall back to built-in defaults.
+func NewHTTPDetector(cfg Config) (*HTTPDetector, error) {
+	classifierURL := strings.TrimSpace(cfg.ClassifierURL)
 	if classifierURL == "" {
 		return nil, fmt.Errorf("detector: classifier_url must not be empty")
 	}
 	if err := config.ValidateHTTPURL(classifierURL); err != nil {
 		return nil, fmt.Errorf("detector: invalid classifier_url: %w", err)
 	}
-	sampleDurationSeconds = clampSampleDuration(sampleDurationSeconds)
+	sampleDurationSeconds := clampSampleDuration(cfg.SampleDurationSeconds)
+	minConfidence := cfg.MinConfidence
 	if minConfidence <= 0 || minConfidence > 1 {
 		minConfidence = 0.90
 	}
+	classes := cfg.InstrumentalClasses
 	if len(classes) == 0 {
 		classes = []string{"Music", "Musical instrument"}
 	}
-	ffmpegPath = strings.TrimSpace(ffmpegPath)
+	ffmpegPath := strings.TrimSpace(cfg.FFmpegPath)
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
@@ -64,6 +71,7 @@ func NewHTTPDetector(classifierURL string, sampleDurationSeconds int, minConfide
 	if err != nil {
 		return nil, fmt.Errorf("detector: ffmpeg unavailable at %q: %w", ffmpegPath, err)
 	}
+	cooldownSeconds := cfg.CooldownSeconds
 	if cooldownSeconds < 0 {
 		cooldownSeconds = 0
 	}
@@ -78,6 +86,9 @@ func NewHTTPDetector(classifierURL string, sampleDurationSeconds int, minConfide
 		sampleDuration:      sampleDurationSeconds,
 		minConfidence:       minConfidence,
 		instrumentalClasses: classes,
+		vocalClasses:        cfg.VocalClasses,
+		vocalMaxConfidence:  cfg.VocalMaxConfidence,
+		spreadSamples:       cfg.SpreadSamples,
 		ffmpegPath:          resolvedFFmpegPath,
 		ionicePath:          ionicePath,
 		nicePath:            nicePath,

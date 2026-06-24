@@ -312,12 +312,12 @@ func safeReturnPath(r *http.Request) string {
 }
 
 // safeNext sanitizes a caller-supplied return path to a local, same-site path,
-// defaulting to /settings (the landing page; Settings replaced Config). It
-// rejects anything that is not a single-slash-rooted path (absolute URLs,
+// defaulting to /dashboard (the post-authentication landing page). It rejects
+// anything that is not a single-slash-rooted path (absolute URLs,
 // scheme-relative "//host", and backslash tricks) to close the open-redirect
 // vector.
 func safeNext(raw string) string {
-	const fallback = "/settings"
+	const fallback = dashboardPath
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw[0] != '/' {
 		return fallback

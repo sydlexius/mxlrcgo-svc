@@ -14,9 +14,10 @@ import (
 
 // TestWithWebUIServesPages verifies that mounting the web UI registers its
 // routes on the handler alongside the JSON API: the Settings view renders (with
-// secrets redacted), the legacy /config path permanently redirects to it, and
-// the root redirects to it. /config replaced its read-only page with a redirect
-// to /settings (the editable settings page, #288).
+// secrets redacted), the legacy /config path permanently redirects to /settings,
+// and the root redirects to the Dashboard (the default landing page). /config
+// replaced its read-only page with a redirect to /settings (the editable
+// settings page, #288).
 func TestWithWebUIServesPages(t *testing.T) {
 	cfg := config.Config{}
 	cfg.API.Token = "tok_should_not_appear"
@@ -56,7 +57,7 @@ func TestWithWebUIServesPages(t *testing.T) {
 		}
 	})
 
-	t.Run("root redirects to settings", func(t *testing.T) {
+	t.Run("root redirects to dashboard", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -64,8 +65,8 @@ func TestWithWebUIServesPages(t *testing.T) {
 		if rec.Code != http.StatusFound {
 			t.Fatalf("GET / status = %d, want 302", rec.Code)
 		}
-		if loc := rec.Header().Get("Location"); loc != "/settings" {
-			t.Errorf("Location = %q, want /settings", loc)
+		if loc := rec.Header().Get("Location"); loc != "/dashboard" {
+			t.Errorf("Location = %q, want /dashboard", loc)
 		}
 	})
 }

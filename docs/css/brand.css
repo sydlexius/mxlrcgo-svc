@@ -1,0 +1,26 @@
+/* Canticle brand palette for the docs site.
+ *
+ * Overrides the approximate named Material color with the exact brand values:
+ *   indigo  #3B2F77  (primary; header/nav bar, white text reads on it)
+ *   lavender #B3A4E6 (the dark-theme accent)
+ *
+ * Material color roles:
+ *   --md-primary-fg-color : header / nav bar background
+ *   --md-accent-fg-color  : links, hover, active, search highlight
+ * The accent is theme-scoped so links stay readable on both backgrounds
+ * (deep indigo on the light/white content, lavender on the dark/slate content).
+ */
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #3B2F77;
+  --md-primary-fg-color--light: #5B4FA0;
+  --md-primary-fg-color--dark:  #2A2156;
+  --md-accent-fg-color:         #3B2F77;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        #3B2F77;
+  --md-primary-fg-color--light: #5B4FA0;
+  --md-primary-fg-color--dark:  #2A2156;
+  --md-accent-fg-color:         #B3A4E6;
+}

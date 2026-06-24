@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="img/canticle-wordmark.svg" alt="Canticle" width="300"/>
+</p>
+
 # Canticle
 
 Canticle is a Go command-line tool and webhook service that fetches synced lyrics from [Musixmatch](https://www.musixmatch.com/) and saves them as `.lrc` files (falling back to `.txt` for unsynced lyrics or instrumental markers). It runs one-shot from the CLI, recursively over a media directory, or as a long-running Lidarr webhook server with a durable work queue, scheduled library scans, and an optional filesystem watcher.

@@ -19,18 +19,19 @@ exclude_docs: |
 
 theme:
   name: material
+  favicon: img/canticle-mark.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: green
-      accent: green
+      primary: deep purple
+      accent: purple
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: green
-      accent: green
+      primary: deep purple
+      accent: purple
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
@@ -89,3 +90,7 @@ nav:
   - Legal:
       - Privacy Policy: privacy-policy.md
       - Code Signing Policy: code-signing-policy.md
+
+# Brand color override (exact #3B2F77 / #B3A4E6) on top of the named palette.
+extra_css:
+  - css/brand.css

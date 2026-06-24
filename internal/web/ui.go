@@ -294,10 +294,12 @@ func (u *UI) Register(mux *http.ServeMux) {
 // and bookmarks still resolve.
 const settingsPath = "/settings"
 
-// handleRoot redirects the bare root to the Settings page, the default landing
-// page (Reports is still a placeholder).
+// dashboardPath is the default landing page after authentication.
+const dashboardPath = "/dashboard"
+
+// handleRoot redirects the bare root to the Dashboard, the default landing page.
 func (u *UI) handleRoot(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, settingsPath, http.StatusFound)
+	http.Redirect(w, r, dashboardPath, http.StatusFound)
 }
 
 // handleReports renders the Reports workspace shell with no report selected. No

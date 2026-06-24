@@ -1,4 +1,8 @@
-# Canticle
+<p align="center">
+  <img src="web/static/img/canticle-mark.svg" alt="Canticle" width="150" height="150"/>
+</p>
+
+<h1 align="center">Canticle</h1>
 
 [![CI](https://github.com/sydlexius/canticle/actions/workflows/ci.yml/badge.svg)](https://github.com/sydlexius/canticle/actions/workflows/ci.yml)
 [![Release](https://github.com/sydlexius/canticle/actions/workflows/release.yml/badge.svg)](https://github.com/sydlexius/canticle/actions/workflows/release.yml)

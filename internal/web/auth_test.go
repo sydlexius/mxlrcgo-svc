@@ -502,14 +502,14 @@ func TestSafeNext(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"/reports", "/reports"},
 		{"/config?x=1", "/config?x=1"},
-		{"", "/settings"},
-		{"//evil.example", "/settings"},
-		{"/\\evil.example", "/settings"},
-		{"https://evil.example/path", "/settings"},
-		{"http://evil.example", "/settings"},
-		{"javascript:alert(1)", "/settings"},
+		{"", "/dashboard"},
+		{"//evil.example", "/dashboard"},
+		{"/\\evil.example", "/dashboard"},
+		{"https://evil.example/path", "/dashboard"},
+		{"http://evil.example", "/dashboard"},
+		{"javascript:alert(1)", "/dashboard"},
 		{"  /reports  ", "/reports"},
-		{"/path\r\nSet-Cookie: x", "/settings"},
+		{"/path\r\nSet-Cookie: x", "/dashboard"},
 	}
 	for _, tc := range cases {
 		if got := safeNext(tc.in); got != tc.want {

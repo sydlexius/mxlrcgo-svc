@@ -140,9 +140,9 @@ func TestShellRendersLogoutControl(t *testing.T) {
 	}
 }
 
-// TestRootRedirectsToSettings checks the bare root sends operators to the
-// Settings page (the landing page; Settings replaced the old Config view).
-func TestRootRedirectsToSettings(t *testing.T) {
+// TestRootRedirectsToDashboard checks the bare root sends operators to the
+// Dashboard, the default landing page after authentication.
+func TestRootRedirectsToDashboard(t *testing.T) {
 	mux := newUIServer(config.Config{}, "dev")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -152,8 +152,8 @@ func TestRootRedirectsToSettings(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("GET / status = %d, want 302", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/settings" {
-		t.Errorf("GET / Location = %q, want /settings", loc)
+	if loc := rec.Header().Get("Location"); loc != "/dashboard" {
+		t.Errorf("GET / Location = %q, want /dashboard", loc)
 	}
 }
 

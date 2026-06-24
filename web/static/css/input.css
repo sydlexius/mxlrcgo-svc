@@ -73,26 +73,20 @@ body {
 
 .mx-sidebar-header {
   display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
   padding: 0.5rem 0.5rem 1.25rem;
 }
 
-/* The brand mark in the sidebar header. The sidebar renders on every page, so
-   this rule lives in the globally-loaded stylesheet (not the dashboard-only
-   sheet) -- issue #322. */
-.mx-sidebar-logo {
-  display: inline-block;
-  vertical-align: middle;
+/* The Canticle wordmark in the sidebar header. The sidebar renders on every
+   page, so this rule lives in the globally-loaded stylesheet (not the
+   dashboard-only sheet) -- issue #322. The icon mark is favicon/Unraid only. */
+.mx-sidebar-wordmark-svg {
+  height: 1.85rem;
+  width: auto;
+  display: block;
   flex-shrink: 0;
-}
-
-.mx-sidebar-wordmark {
-  font-family: var(--mx-font-sans);
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: #f1f5f9; /* slate-100 */
 }
 
 .mx-sidebar-version {
@@ -286,7 +280,8 @@ body {
 
 .mx-auth-brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: center;
   gap: 0.5rem;
 }
 
@@ -296,6 +291,15 @@ body {
   font-weight: 700;
   letter-spacing: -0.01em;
   color: #f1f5f9; /* slate-100 */
+}
+
+/* SVG wordmark on the auth pages (replaces the text wordmark). Sized to the
+   header; aspect ratio ~3.6:1 from the artwork viewBox. */
+.mx-auth-wordmark-svg {
+  height: 4.5rem;
+  width: auto;
+  display: block;
+  margin-block: 0.5rem 0.75rem;
 }
 
 .mx-auth-title {

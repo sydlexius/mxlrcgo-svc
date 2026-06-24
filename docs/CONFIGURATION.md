@@ -111,6 +111,10 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_INSTRUMENTAL_DETECTOR_MIN_CONFIDENCE` | `0.90` | Minimum summed AudioSet class probability to mark a track instrumental. Values outside (0, 1] reset to `0.90`. |
 | `MXLRC_INSTRUMENTAL_DETECTOR_CLASSES` | `Music,Musical instrument` | Comma-separated AudioSet class names whose probabilities are summed and compared against the confidence threshold. |
 | `MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS` | `5` | Minimum gap in seconds between consecutive classifier inference calls. `0` disables the cooldown. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_CLASSES` | `Singing,Vocal music,Choir,...` | Comma-separated AudioSet vocal-class names whose peak (max-over-frames) score blocks an instrumental marking (the vocal gate). |
+| `MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_MAX_CONFIDENCE` | `0.03` | Maximum vocal-class peak (0-1) tolerated before a track is excluded from instrumental. Values outside (0, 1] reset to `0.03`. |
+| `MXLRC_INSTRUMENTAL_DETECTOR_SPREAD_SAMPLES` | `6` | Number of short windows spread across the track and concatenated into one classifier sample. `< 2` disables spreading (single contiguous window). |
+| `MXLRC_INSTRUMENTAL_DETECTOR_FFPROBE_PATH` | (auto-discover) | Path to `ffprobe` used to read track duration for spread-sample placement. Empty auto-discovers (sibling of ffmpeg, then PATH). Set this when ffmpeg was auto-provisioned (no ffprobe). |
 | `MXLRC_ENRICHMENT_ENABLED` | `true` | Global default for recording enrichment (reading ISRC, MusicBrainz ID, and duration from audio tags). Per-library and per-run flags override this. |
 | `PUID` / `PGID` | `99` / `100` | Container-only: user/group the process drops to for file ownership. |
 
@@ -276,14 +280,20 @@ ffmpeg (used to extract the audio sample) is resolved automatically: see [ffmpeg
 # sample_duration_seconds = 30
 # min_confidence = 0.90
 # instrumental_classes = ["Music", "Musical instrument"]
+# vocal_classes = ["Singing", "Vocal music", "Choir", "A capella", "Chant", "Rapping", "Child singing", "Synthetic singing", "Yodeling", "Humming"]
+# vocal_max_confidence = 0.03
+# spread_samples = 6
+# ffprobe_path = ""
 # cooldown_seconds = 5
 ```
 
-Optional audio-based instrumental detection sidecar (env: `MXLRC_INSTRUMENTAL_DETECTOR_ENABLED`, `MXLRC_INSTRUMENTAL_DETECTOR_CLASSIFIER_URL`, `MXLRC_INSTRUMENTAL_DETECTOR_FFMPEG_PATH`, `MXLRC_INSTRUMENTAL_DETECTOR_SAMPLE_DURATION_SECONDS`, `MXLRC_INSTRUMENTAL_DETECTOR_MIN_CONFIDENCE`, `MXLRC_INSTRUMENTAL_DETECTOR_CLASSES`, `MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS`).
+Optional audio-based instrumental detection sidecar (env: `MXLRC_INSTRUMENTAL_DETECTOR_ENABLED`, `MXLRC_INSTRUMENTAL_DETECTOR_CLASSIFIER_URL`, `MXLRC_INSTRUMENTAL_DETECTOR_FFMPEG_PATH`, `MXLRC_INSTRUMENTAL_DETECTOR_SAMPLE_DURATION_SECONDS`, `MXLRC_INSTRUMENTAL_DETECTOR_MIN_CONFIDENCE`, `MXLRC_INSTRUMENTAL_DETECTOR_CLASSES`, `MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_CLASSES`, `MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_MAX_CONFIDENCE`, `MXLRC_INSTRUMENTAL_DETECTOR_SPREAD_SAMPLES`, `MXLRC_INSTRUMENTAL_DETECTOR_FFPROBE_PATH`, `MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS`).
 
-When enabled and a `classifier_url` is set, the detector samples each track's audio with ffmpeg and sends the sample to an external AudioSet classifier (e.g. a YAMNet sidecar). It runs only on provider misses and never overrides provider-supplied data. The summed probability of the `instrumental_classes` must meet `min_confidence` to mark a track instrumental.
+When enabled and a `classifier_url` is set, the detector samples each track's audio with ffmpeg and sends the sample to an external AudioSet classifier (a YAMNet sidecar; vendored at `deploy/yamnet-detector/`). It runs only on provider misses and never overrides provider-supplied data. A track is marked instrumental only when **both** gates pass: the **music gate** (summed mean probability of the `instrumental_classes` meets `min_confidence`) **and** the **vocal gate** (no `vocal_classes` member peaks at or above `vocal_max_confidence`). The decision is conservative: any doubt resolves to "not instrumental", because a false instrumental suppresses a real lyrics fetch.
 
-`sample_duration_seconds` is clamped to [30, 60]. `min_confidence` values outside (0, 1] reset to `0.90`. `cooldown_seconds` is the minimum gap between consecutive inference calls; `0` disables the cooldown. See the [Instrumental detection](USER_GUIDE.md#instrumental-detection) guide for the per-library and per-run override controls.
+To catch vocals that enter after an instrumental intro (arias, jazz, classical), the detector samples `spread_samples` short windows spread across the **whole** track, concatenated into one sample, and gates on the per-class **max-over-frames** peak (the loudest singing moment), which the frame mean dilutes. This requires the sidecar to return `{"mean": {...}, "max": {...}}`; a legacy mean-only sidecar degrades safely to never-instrumental.
+
+`sample_duration_seconds` is clamped to [30, 60]. `min_confidence` and `vocal_max_confidence` values outside (0, 1] reset to `0.90` and `0.03` respectively. `cooldown_seconds` is the minimum gap between consecutive inference calls; `0` disables the cooldown. Track-duration probing needs `ffprobe`; the auto-provisioned ffmpeg ships none, so set `ffprobe_path` (or rely on a PATH ffprobe) or the detector falls back to a single window. **Deploy order:** upgrade Canticle before the sidecar (new Canticle tolerates the old flat-map response; old Canticle cannot parse `{mean,max}`). See the [Instrumental detection](USER_GUIDE.md#instrumental-detection) guide for the per-library and per-run override controls.
 
 ffmpeg resolution is shared with `[verification]`; see [ffmpeg resolution](#ffmpeg-resolution) below. Set `ffmpeg_path` here only to pin a binary separately from the verification path.
 

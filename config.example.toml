@@ -275,6 +275,36 @@ min_similarity = 0.35
 # Env: MXLRC_INSTRUMENTAL_DETECTOR_COOLDOWN_SECONDS.
 # cooldown_seconds = 5
 
+# The vocal gate (#384). A track is marked instrumental only when the music
+# score is high AND no vocal class peaks above vocal_max_confidence. The detector
+# samples several short windows spread across the whole track (spread_samples) so
+# late-entering vocals (e.g. an aria after an instrumental intro) are caught, and
+# gates on the per-class MAX-over-frames (the peak singing moment), which the
+# frame mean would dilute. Requires the sidecar to return {"mean", "max"} maps.
+
+# AudioSet vocal-class names whose peak score blocks an instrumental marking.
+# Defaults to the verified singing/vocal set. Env (CSV):
+# MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_CLASSES.
+# vocal_classes = ["Singing", "Vocal music", "Choir", "A capella", "Chant", "Rapping", "Child singing", "Synthetic singing", "Yodeling", "Humming"]
+
+# Maximum vocal-class peak (0-1) tolerated before a track is excluded from being
+# instrumental. Conservative: biased toward "not instrumental". Default 0.03
+# (pinned by the #384 calibration sweep). Values outside (0, 1] reset to 0.03.
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_MAX_CONFIDENCE.
+# vocal_max_confidence = 0.03
+
+# Number of short segments spread across the track and concatenated into one
+# classifier sample (total audio stays sample_duration_seconds). Default 6.
+# A value < 2 disables spreading (single contiguous window from the start).
+# Env: MXLRC_INSTRUMENTAL_DETECTOR_SPREAD_SAMPLES.
+# spread_samples = 6
+
+# Path to ffprobe, used to read track duration for spread-sample placement.
+# Empty (default) auto-discovers (sibling of ffmpeg, then PATH). Set this when
+# ffmpeg was auto-provisioned (which ships no ffprobe); otherwise the detector
+# falls back to a single window. Env: MXLRC_INSTRUMENTAL_DETECTOR_FFPROBE_PATH.
+# ffprobe_path = ""
+
 [enrichment]
 # Recording enrichment reads the ISRC, MusicBrainz recording ID, and duration
 # from each file's audio tags and feeds them to the matcher to disambiguate

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -32,12 +33,14 @@ type HTTPDetector struct {
 	vocalMaxConfidence  float64
 	spreadSamples       int
 	ffmpegPath          string
+	ffprobePath         string // empty when ffprobe cannot be resolved (spread sampling falls back to one window)
 	ionicePath          string // empty when ionice is not available on this platform
 	nicePath            string // empty when nice is not available on this platform
 	httpClient          *http.Client
 	cooldown            time.Duration
 	mu                  sync.Mutex
 	lastInference       time.Time
+	validateOnce        sync.Once
 }
 
 // NewHTTPDetector creates a Detector that posts audio samples to the classifier
@@ -71,6 +74,29 @@ func NewHTTPDetector(cfg Config) (*HTTPDetector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("detector: ffmpeg unavailable at %q: %w", ffmpegPath, err)
 	}
+	// ffprobe supplies the track duration for spread-sample placement. Resolution
+	// order: explicit FFprobePath, then a sibling of ffmpeg, then PATH. The
+	// auto-provisioned ffmpeg ships NO ffprobe, so an operator may need to set
+	// MXLRC_INSTRUMENTAL_DETECTOR_FFPROBE_PATH; when none resolves, Detect falls
+	// back to a single contiguous window (logged loudly in Detect).
+	ffprobePath := ""
+	if p := strings.TrimSpace(cfg.FFprobePath); p != "" {
+		if resolved, lookErr := exec.LookPath(p); lookErr == nil {
+			ffprobePath = resolved
+		} else {
+			slog.Warn("detector: configured ffprobe_path not found; falling back to discovery", "ffprobe_path", p, "err", lookErr)
+		}
+	}
+	if ffprobePath == "" {
+		if p := filepath.Join(filepath.Dir(resolvedFFmpegPath), "ffprobe"); fileIsExecutable(p) {
+			ffprobePath = p
+		} else if p, lookErr := exec.LookPath("ffprobe"); lookErr == nil {
+			ffprobePath = p
+		}
+	}
+	if ffprobePath == "" {
+		slog.Warn("detector: ffprobe not found; spread sampling will fall back to a single window (set MXLRC_INSTRUMENTAL_DETECTOR_FFPROBE_PATH)")
+	}
 	cooldownSeconds := cfg.CooldownSeconds
 	if cooldownSeconds < 0 {
 		cooldownSeconds = 0
@@ -90,6 +116,7 @@ func NewHTTPDetector(cfg Config) (*HTTPDetector, error) {
 		vocalMaxConfidence:  cfg.VocalMaxConfidence,
 		spreadSamples:       cfg.SpreadSamples,
 		ffmpegPath:          resolvedFFmpegPath,
+		ffprobePath:         ffprobePath,
 		ionicePath:          ionicePath,
 		nicePath:            nicePath,
 		httpClient:          &http.Client{Timeout: 3 * time.Minute},
@@ -137,17 +164,63 @@ func (d *HTTPDetector) Detect(ctx context.Context, audioPath string) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	d.warnUnknownClassesOnce(resp)
 
-	var confidence float64
+	// Music gate: summed mean probability of the instrumental classes.
+	var music float64
 	for _, name := range d.instrumentalClasses {
-		confidence += resp.Mean[name]
+		music += resp.Mean[name]
 	}
+	// Vocal gate: the loudest single vocal-class peak (max-over-frames) anywhere
+	// in the spread sample. A nil Max map (legacy sidecar) means the vocal gate
+	// cannot run, so the decision degrades safely to not-instrumental.
+	vocalPeak := 0.0
+	for _, name := range d.vocalClasses {
+		if v, ok := resp.Max[name]; ok && v > vocalPeak {
+			vocalPeak = v
+		}
+	}
+	maxAvailable := len(resp.Max) > 0
+	if !maxAvailable {
+		slog.Warn("detector: classifier returned no max map; vocal gate cannot run, treating as not-instrumental", "path", audioPath)
+	}
+	instrumental := music >= d.minConfidence && maxAvailable && vocalPeak < d.vocalMaxConfidence
+
+	// Surface the decision inputs: the worker only reads res.Instrumental, so
+	// without this line a misclassification leaves no trace of the music_sum /
+	// vocal_peak that produced it.
+	slog.Info("detector: instrumental decision",
+		"path", audioPath, "music_sum", music, "vocal_peak", vocalPeak,
+		"instrumental", instrumental, "min_confidence", d.minConfidence,
+		"vocal_max_confidence", d.vocalMaxConfidence)
 
 	return Result{
-		Instrumental: confidence >= d.minConfidence,
-		Confidence:   confidence,
-		Classes:      resp.Mean,
+		Instrumental:    instrumental,
+		Confidence:      music,
+		VocalConfidence: vocalPeak,
+		Classes:         resp.Mean,
 	}, nil
+}
+
+// warnUnknownClassesOnce logs, at most once per detector, any configured
+// instrumental/vocal class name absent from the classifier's response maps. A
+// missing name silently contributes 0 to its sum/peak, so surface it loudly
+// rather than let a typo'd class quietly weaken a gate.
+func (d *HTTPDetector) warnUnknownClassesOnce(resp classifyResponse) {
+	d.validateOnce.Do(func() {
+		for _, c := range d.instrumentalClasses {
+			if _, ok := resp.Mean[c]; !ok {
+				slog.Error("detector: configured instrumental class not in classifier response", "class", c)
+			}
+		}
+		if len(resp.Max) > 0 {
+			for _, c := range d.vocalClasses {
+				if _, ok := resp.Max[c]; !ok {
+					slog.Error("detector: configured vocal class not in classifier response", "class", c)
+				}
+			}
+		}
+	})
 }
 
 func (d *HTTPDetector) sample(ctx context.Context, audioPath string) (_ string, retErr error) {
@@ -177,7 +250,14 @@ func (d *HTTPDetector) sample(ctx context.Context, audioPath string) (_ string, 
 	//
 	// The command is layered inside-out: ffmpeg is the base, wrapped by ionice
 	// (if available), then by nice (if available).
-	ffmpegArgs := ffmpegDetectSampleArgs(audioPath, samplePath, d.sampleDuration)
+	var ffmpegArgs []string
+	if expr := d.spreadExpr(ctx, audioPath); expr != "" {
+		ffmpegArgs = ffmpegSpreadSampleArgs(audioPath, samplePath, expr)
+	} else {
+		// Duration unknown (no ffprobe) or spreading disabled: fall back to one
+		// contiguous window from the start. Logged loudly in spreadExpr.
+		ffmpegArgs = ffmpegDetectSampleArgs(audioPath, samplePath, d.sampleDuration)
+	}
 	prog, args := wrapWithPriority(d.nicePath, d.ionicePath, d.ffmpegPath, ffmpegArgs)
 	cmd := exec.CommandContext(ctx, prog, args...) //nolint:gosec // prog is ffmpeg/nice/ionice, all resolved via LookPath at construction; audio path is a scanned user file
 	output, err := cmd.CombinedOutput()
@@ -219,6 +299,47 @@ func ffmpegDetectSampleArgs(audioPath, samplePath string, durationSeconds int) [
 		"-y",
 		"-i", audioPath,
 		"-t", strconv.Itoa(durationSeconds),
+		"-vn",
+		"-ac", "1",
+		"-ar", "16000",
+		samplePath,
+	}
+}
+
+// spreadExpr probes the track duration and builds an aselect expression that
+// spreads spreadSamples short windows across the whole track (so late-entering
+// vocals are sampled). It returns "" when spreading is disabled (spreadSamples
+// < 2) or the duration probe fails, signaling the caller to fall back to a
+// single contiguous window.
+func (d *HTTPDetector) spreadExpr(ctx context.Context, audioPath string) string {
+	if d.spreadSamples < 2 {
+		return ""
+	}
+	dur, err := d.probeDurationSeconds(ctx, audioPath)
+	if err != nil {
+		slog.Warn("detector: duration probe failed; single-window fallback", "path", audioPath, "err", err)
+		return ""
+	}
+	segLen := d.sampleDuration / d.spreadSamples
+	if segLen < 1 {
+		segLen = 1
+	}
+	return buildSpreadSelectExpr(dur, d.spreadSamples, segLen)
+}
+
+// ffmpegSpreadSampleArgs builds the ffmpeg args that select+concatenate the
+// spread windows (selectExpr) into one 16 kHz mono WAV. The selectExpr is wrapped
+// in literal single quotes: that is ffmpeg's OWN filter-argument escaping,
+// consumed by libavfilter (exec runs no shell), and is required so the parser
+// does not split on the commas inside between(t,a,b).
+func ffmpegSpreadSampleArgs(audioPath, samplePath, selectExpr string) []string {
+	return []string{
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-y",
+		"-i", audioPath,
+		"-af", "aselect='" + selectExpr + "',asetpts=N/SR/TB",
 		"-vn",
 		"-ac", "1",
 		"-ar", "16000",
@@ -304,4 +425,60 @@ func (d *HTTPDetector) classify(ctx context.Context, samplePath string) (_ class
 		resp.Mean = flat
 	}
 	return resp, nil
+}
+
+// fileIsExecutable reports whether path is a regular file with any execute bit.
+func fileIsExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
+}
+
+// probeDurationSeconds returns the track duration in seconds via ffprobe, or
+// (0, err) when ffprobe is unavailable or the probe fails. A zero duration tells
+// the caller to fall back to a single contiguous window.
+func (d *HTTPDetector) probeDurationSeconds(ctx context.Context, audioPath string) (float64, error) {
+	if d.ffprobePath == "" {
+		return 0, fmt.Errorf("detector: ffprobe unavailable")
+	}
+	cmd := exec.CommandContext(ctx, d.ffprobePath, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", audioPath) //nolint:gosec // ffprobePath resolved via LookPath at construction; audioPath is a scanned user file
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("detector: ffprobe duration: %w", err)
+	}
+	dur, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil {
+		return 0, fmt.Errorf("detector: parse ffprobe duration %q: %w", strings.TrimSpace(string(out)), err)
+	}
+	return dur, nil
+}
+
+// buildSpreadSelectExpr returns an ffmpeg aselect expression that picks
+// numSamples windows of sampleSeconds each, evenly distributed across a track of
+// durationSec. Each window is centered on its slot and clamped to fit. It returns
+// "" when durationSec <= 0 (caller falls back to a single contiguous window).
+// When the track is shorter than one segment, it selects the whole clip.
+func buildSpreadSelectExpr(durationSec float64, numSamples, sampleSeconds int) string {
+	if durationSec <= 0 || numSamples < 1 || sampleSeconds <= 0 {
+		return ""
+	}
+	l := float64(sampleSeconds)
+	if durationSec <= l {
+		return fmt.Sprintf("between(t,0.00,%.2f)", durationSec)
+	}
+	parts := make([]string, 0, numSamples)
+	for i := 0; i < numSamples; i++ {
+		center := durationSec * (float64(i) + 0.5) / float64(numSamples)
+		start := center - l/2
+		if start < 0 {
+			start = 0
+		}
+		if start > durationSec-l {
+			start = durationSec - l
+		}
+		parts = append(parts, fmt.Sprintf("between(t,%.2f,%.2f)", start, start+l))
+	}
+	return strings.Join(parts, "+")
 }

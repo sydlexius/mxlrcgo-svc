@@ -36,14 +36,21 @@ const (
 
 // Result describes an instrumental detection decision.
 type Result struct {
-	// Instrumental is true when every sampled window's summed class probability
-	// for the configured InstrumentalClasses meets or exceeds MinConfidence.
+	// Instrumental is true only when the summed mean probability of the
+	// configured InstrumentalClasses meets or exceeds MinConfidence (the music
+	// gate) AND the peak (max-over-frames) of every configured VocalClass stays
+	// below VocalMaxConfidence (the vocal gate). Any doubt resolves to false: a
+	// false instrumental suppresses a real lyrics fetch.
 	Instrumental bool
-	// Confidence is the summed instrumental-class probability for the most
-	// recently classified window.
+	// Confidence is the summed instrumental-class MEAN probability (the music
+	// score) for the classified sample.
 	Confidence float64
-	// Classes is the raw per-class probability map from the last classified
-	// window, retained for debugging and observability.
+	// VocalConfidence is the peak vocal-class score (max over the configured
+	// VocalClasses of their max-over-frames value). A high value means vocals
+	// were detected somewhere in the sample.
+	VocalConfidence float64
+	// Classes is the per-class MEAN probability map from the classified sample,
+	// retained for debugging and observability.
 	Classes map[string]float64
 }
 

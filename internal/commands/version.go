@@ -17,9 +17,9 @@ var (
 func VersionString() string { return appversion.VersionString() }
 
 // Version implements go-arg's Versioned interface for the subcommand-aware
-// parser, so `mxlrcgo-svc <cmd> --version` is recognized.
+// parser, so `canticle <cmd> --version` is recognized.
 func (Args) Version() string { return appversion.VersionString() }
 
 // Version implements go-arg's Versioned interface for the legacy (no
-// subcommand) parser, so top-level `mxlrcgo-svc --version` works too.
+// subcommand) parser, so top-level `canticle --version` works too.
 func (LegacyArgs) Version() string { return appversion.VersionString() }

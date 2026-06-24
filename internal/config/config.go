@@ -220,7 +220,7 @@ type TLSConfig struct {
 	RedirectHTTP string `toml:"redirect_http"`
 	// SelfSignedHosts lists extra hostnames and IP literals to include as Subject
 	// Alternative Names in the generated self-signed certificate, in addition to the
-	// built-in SANs (localhost, mxlrcgo-svc, 127.0.0.1, ::1). Allows browsers on
+	// built-in SANs (localhost, canticle, 127.0.0.1, ::1). Allows browsers on
 	// LAN hosts to reach https://<lan-ip-or-hostname> without a name-mismatch error
 	// when they trust the cert. Each entry must be a valid hostname or IP literal;
 	// invalid entries are a startup error. Duplicates and entries already covered by

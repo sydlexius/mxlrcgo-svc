@@ -106,7 +106,7 @@ func (v *HTTPVerifier) Verify(ctx context.Context, audioPath string, song models
 }
 
 func (v *HTTPVerifier) sample(ctx context.Context, audioPath string) (_ string, retErr error) {
-	f, err := os.CreateTemp("", "mxlrcgo-svc-verify-*.wav")
+	f, err := os.CreateTemp("", "canticle-verify-*.wav")
 	if err != nil {
 		return "", fmt.Errorf("verification: create sample file: %w", err)
 	}

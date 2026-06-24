@@ -1,6 +1,6 @@
 // Command genlib generates a synthetic music library: tagged .mp3 files
 // (ID3v2.4/UTF-8) with optional embedded USLT lyrics and optional .lrc
-// sidecars, for load- and concurrency-testing mxlrcgo-svc against a #131-style
+// sidecars, for load- and concurrency-testing canticle against a #131-style
 // large library without touching real music. It is a developer tool and is
 // intentionally excluded from releases (GoReleaser builds only
 // ./cmd/mxlrcgo-svc).

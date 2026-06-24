@@ -140,7 +140,7 @@ func (d *HTTPDetector) Detect(ctx context.Context, audioPath string) (Result, er
 }
 
 func (d *HTTPDetector) sample(ctx context.Context, audioPath string) (_ string, retErr error) {
-	f, err := os.CreateTemp("", "mxlrcgo-svc-detect-*.wav")
+	f, err := os.CreateTemp("", "canticle-detect-*.wav")
 	if err != nil {
 		return "", fmt.Errorf("detector: create sample file: %w", err)
 	}

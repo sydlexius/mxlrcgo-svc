@@ -185,7 +185,7 @@ func TestHTTPVerifierCleansSampleAfterFFmpegFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Verify returned nil error; want ffmpeg failure")
 	}
-	matches, err := filepath.Glob(filepath.Join(tmp, "mxlrcgo-svc-verify-*.wav"))
+	matches, err := filepath.Glob(filepath.Join(tmp, "canticle-verify-*.wav"))
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestHTTPVerifierCleansSampleAfterContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("Verify returned nil error; want context cancellation")
 	}
-	matches, err := filepath.Glob(filepath.Join(tmp, "mxlrcgo-svc-verify-*.wav"))
+	matches, err := filepath.Glob(filepath.Join(tmp, "canticle-verify-*.wav"))
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}

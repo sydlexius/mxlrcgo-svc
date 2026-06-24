@@ -19,7 +19,7 @@ import (
 
 const (
 	// selfSignedCommonName is the subject/issuer CN for the generated certificate.
-	selfSignedCommonName = "mxlrcgo-svc"
+	selfSignedCommonName = "canticle"
 	// selfSignedValidity is the certificate lifetime (~365 days).
 	selfSignedValidity = 365 * 24 * time.Hour
 	// selfSignedCertFile and selfSignedKeyFile are the on-disk PEM filenames.
@@ -126,7 +126,7 @@ func loadValidCert(certPath, keyPath string) (*tls.Certificate, bool) {
 }
 
 // generateSelfSignedCert builds an ECDSA P-256 self-signed certificate valid over
-// [notBefore, notAfter], returning the cert and key as PEM. CN=mxlrcgo-svc, with
+// [notBefore, notAfter], returning the cert and key as PEM. CN=canticle, with
 // loopback SANs so same-host HTTPS verifies against localhost/127.0.0.1/::1.
 // extraDNS and extraIPs are appended to the built-in SANs; they must be pre-deduped
 // against the built-ins (parseSelfSignedHosts guarantees this).

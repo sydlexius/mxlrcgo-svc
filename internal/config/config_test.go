@@ -1446,6 +1446,114 @@ func TestLoad_InstrumentalDetectorEnvFFmpegPath(t *testing.T) {
 	}
 }
 
+// TestLoad_InstrumentalDetectorVocalGateDefaults verifies the vocal-gate
+// defaults (#384): vocal_max_confidence 0.03, spread_samples 6, a non-empty
+// vocal-class list, and an empty ffprobe_path (auto-discover).
+func TestLoad_InstrumentalDetectorVocalGateDefaults(t *testing.T) {
+	isolateEnv(t)
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.InstrumentalDetector.VocalMaxConfidence != 0.03 {
+		t.Errorf("VocalMaxConfidence = %v; want 0.03", cfg.InstrumentalDetector.VocalMaxConfidence)
+	}
+	if cfg.InstrumentalDetector.SpreadSamples != 6 {
+		t.Errorf("SpreadSamples = %d; want 6", cfg.InstrumentalDetector.SpreadSamples)
+	}
+	if len(cfg.InstrumentalDetector.VocalClasses) == 0 || cfg.InstrumentalDetector.VocalClasses[0] != "Singing" {
+		t.Errorf("VocalClasses = %v; want non-empty starting with Singing", cfg.InstrumentalDetector.VocalClasses)
+	}
+	if cfg.InstrumentalDetector.FFprobePath != "" {
+		t.Errorf("FFprobePath = %q; want empty (auto-discover)", cfg.InstrumentalDetector.FFprobePath)
+	}
+}
+
+// TestLoad_InstrumentalDetectorEnvVocalGate verifies the vocal-gate env
+// overrides and the invalid-value fallbacks.
+func TestLoad_InstrumentalDetectorEnvVocalGate(t *testing.T) {
+	t.Run("vocal classes CSV", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_CLASSES", "Singing,Rapping")
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(cfg.InstrumentalDetector.VocalClasses) != 2 || cfg.InstrumentalDetector.VocalClasses[1] != "Rapping" {
+			t.Errorf("VocalClasses = %v; want [Singing Rapping]", cfg.InstrumentalDetector.VocalClasses)
+		}
+	})
+	t.Run("vocal max confidence valid", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_MAX_CONFIDENCE", "0.07")
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.InstrumentalDetector.VocalMaxConfidence != 0.07 {
+			t.Errorf("VocalMaxConfidence = %v; want 0.07", cfg.InstrumentalDetector.VocalMaxConfidence)
+		}
+	})
+	t.Run("vocal max confidence out of range ignored", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_INSTRUMENTAL_DETECTOR_VOCAL_MAX_CONFIDENCE", "1.5")
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.InstrumentalDetector.VocalMaxConfidence != 0.03 {
+			t.Errorf("VocalMaxConfidence = %v; want 0.03 (invalid env ignored)", cfg.InstrumentalDetector.VocalMaxConfidence)
+		}
+	})
+	t.Run("spread samples", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_INSTRUMENTAL_DETECTOR_SPREAD_SAMPLES", "8")
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.InstrumentalDetector.SpreadSamples != 8 {
+			t.Errorf("SpreadSamples = %d; want 8", cfg.InstrumentalDetector.SpreadSamples)
+		}
+	})
+	t.Run("ffprobe path", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("MXLRC_INSTRUMENTAL_DETECTOR_FFPROBE_PATH", "/opt/ffprobe")
+		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.InstrumentalDetector.FFprobePath != "/opt/ffprobe" {
+			t.Errorf("FFprobePath = %q; want /opt/ffprobe", cfg.InstrumentalDetector.FFprobePath)
+		}
+	})
+}
+
+// TestLoad_InstrumentalDetectorVocalGateFileReDefaults verifies that a config
+// file leaving the vocal-gate fields blank/zero restores the built-in defaults
+// (so copying config.example.toml verbatim does not disable the gate).
+func TestLoad_InstrumentalDetectorVocalGateFileReDefaults(t *testing.T) {
+	isolateEnv(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[instrumental_detector]\nclassifier_url = \"http://yamnet:8080\"\nvocal_max_confidence = 0\nspread_samples = 0\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.InstrumentalDetector.VocalMaxConfidence != 0.03 {
+		t.Errorf("VocalMaxConfidence = %v; want 0.03 (re-defaulted from 0)", cfg.InstrumentalDetector.VocalMaxConfidence)
+	}
+	if cfg.InstrumentalDetector.SpreadSamples != 6 {
+		t.Errorf("SpreadSamples = %d; want 6 (re-defaulted from 0)", cfg.InstrumentalDetector.SpreadSamples)
+	}
+	if len(cfg.InstrumentalDetector.VocalClasses) == 0 {
+		t.Error("VocalClasses empty; want re-defaulted list")
+	}
+}
+
 // TestLoad_InstrumentalDetectorEnvSampleDuration verifies
 // MXLRC_INSTRUMENTAL_DETECTOR_SAMPLE_DURATION_SECONDS. Valid positive values
 // override the default; invalid/non-positive values are ignored.

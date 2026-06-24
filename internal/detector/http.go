@@ -132,7 +132,7 @@ func (d *HTTPDetector) Detect(ctx context.Context, audioPath string) (Result, er
 		_ = os.Remove(samplePath)
 	}()
 
-	classes, err := d.classify(ctx, samplePath)
+	resp, err := d.classify(ctx, samplePath)
 	d.lastInference = time.Now()
 	if err != nil {
 		return Result{}, err
@@ -140,13 +140,13 @@ func (d *HTTPDetector) Detect(ctx context.Context, audioPath string) (Result, er
 
 	var confidence float64
 	for _, name := range d.instrumentalClasses {
-		confidence += classes[name]
+		confidence += resp.Mean[name]
 	}
 
 	return Result{
 		Instrumental: confidence >= d.minConfidence,
 		Confidence:   confidence,
-		Classes:      classes,
+		Classes:      resp.Mean,
 	}, nil
 }
 
@@ -226,10 +226,20 @@ func ffmpegDetectSampleArgs(audioPath, samplePath string, durationSeconds int) [
 	}
 }
 
-func (d *HTTPDetector) classify(ctx context.Context, samplePath string) (_ map[string]float64, retErr error) {
+// classifyResponse is the decoded /classify body. Mean holds per-class
+// mean-over-frames scores (the music gate); Max holds per-class max-over-frames
+// scores (the vocal gate). A legacy flat-map sidecar populates Mean only, leaving
+// Max nil; Detect treats a nil Max as "vocal gate unavailable" and degrades
+// safely to not-instrumental.
+type classifyResponse struct {
+	Mean map[string]float64 `json:"mean"`
+	Max  map[string]float64 `json:"max"`
+}
+
+func (d *HTTPDetector) classify(ctx context.Context, samplePath string) (_ classifyResponse, retErr error) {
 	f, err := os.Open(samplePath) //nolint:gosec // path comes from our own CreateTemp call
 	if err != nil {
-		return nil, fmt.Errorf("detector: open sample: %w", err)
+		return classifyResponse{}, fmt.Errorf("detector: open sample: %w", err)
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil && retErr == nil {
@@ -241,24 +251,24 @@ func (d *HTTPDetector) classify(ctx context.Context, samplePath string) (_ map[s
 	mw := multipart.NewWriter(&body)
 	fw, err := mw.CreateFormFile("file", filepath.Base(samplePath))
 	if err != nil {
-		return nil, fmt.Errorf("detector: create multipart file: %w", err)
+		return classifyResponse{}, fmt.Errorf("detector: create multipart file: %w", err)
 	}
 	if _, err := io.Copy(fw, f); err != nil {
-		return nil, fmt.Errorf("detector: copy sample: %w", err)
+		return classifyResponse{}, fmt.Errorf("detector: copy sample: %w", err)
 	}
 	if err := mw.Close(); err != nil {
-		return nil, fmt.Errorf("detector: close multipart body: %w", err)
+		return classifyResponse{}, fmt.Errorf("detector: close multipart body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.baseURL+"/classify", &body)
 	if err != nil {
-		return nil, fmt.Errorf("detector: create classify request: %w", err)
+		return classifyResponse{}, fmt.Errorf("detector: create classify request: %w", err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	res, err := d.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrClassifierUnavailable, err)
+		return classifyResponse{}, fmt.Errorf("%w: %w", ErrClassifierUnavailable, err)
 	}
 	defer func() {
 		if closeErr := res.Body.Close(); closeErr != nil && retErr == nil {
@@ -268,21 +278,30 @@ func (d *HTTPDetector) classify(ctx context.Context, samplePath string) (_ map[s
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(res.Body, 8<<10))
-		return nil, fmt.Errorf("%w: status %d: %s", ErrClassifierUnavailable, res.StatusCode, strings.TrimSpace(string(errBody)))
+		return classifyResponse{}, fmt.Errorf("%w: status %d: %s", ErrClassifierUnavailable, res.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
 	const maxResponseSize = 1 << 20
 	b, err := io.ReadAll(io.LimitReader(res.Body, maxResponseSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("detector: read classify response: %w", err)
+		return classifyResponse{}, fmt.Errorf("detector: read classify response: %w", err)
 	}
 	if len(b) > maxResponseSize {
-		return nil, fmt.Errorf("%w: response too large (%d bytes)", ErrInvalidResponse, len(b))
+		return classifyResponse{}, fmt.Errorf("%w: response too large (%d bytes)", ErrInvalidResponse, len(b))
 	}
 
-	var classes map[string]float64
-	if err := json.Unmarshal(b, &classes); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidResponse, err)
+	var resp classifyResponse
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return classifyResponse{}, fmt.Errorf("%w: %w", ErrInvalidResponse, err)
 	}
-	return classes, nil
+	if len(resp.Mean) == 0 && len(resp.Max) == 0 {
+		// Legacy flat-map sidecar (pre-{mean,max}): treat the whole body as means;
+		// Max stays nil so the vocal gate degrades safely (see Detect).
+		var flat map[string]float64
+		if err := json.Unmarshal(b, &flat); err != nil {
+			return classifyResponse{}, fmt.Errorf("%w: %w", ErrInvalidResponse, err)
+		}
+		resp.Mean = flat
+	}
+	return resp, nil
 }

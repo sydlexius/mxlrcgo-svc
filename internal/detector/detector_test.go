@@ -533,3 +533,50 @@ func TestWrapWithPriority(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyParsesMeanMax(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"mean": map[string]float64{"Music": 0.9, "Singing": 0.01},
+			"max":  map[string]float64{"Music": 1.0, "Singing": 0.30},
+		})
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t)})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	resp, err := d.classify(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if resp.Mean["Music"] != 0.9 || resp.Max["Singing"] != 0.30 {
+		t.Fatalf("got mean=%v max=%v", resp.Mean, resp.Max)
+	}
+}
+
+func TestClassifyLegacyFlatMapTreatedAsMeanOnly(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]float64{"Music": 0.95}) // old flat shape
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t)})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	resp, err := d.classify(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if resp.Mean["Music"] != 0.95 || len(resp.Max) != 0 {
+		t.Fatalf("legacy: mean=%v max=%v (max must be empty)", resp.Mean, resp.Max)
+	}
+}

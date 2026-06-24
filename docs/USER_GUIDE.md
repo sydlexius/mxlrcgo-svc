@@ -76,7 +76,7 @@ scrape_configs:
 
 ## Docker
 
-The container runs the webhook service on port `50705` and stores its config and SQLite database under `/config`. Mount your media following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/How-to-set-up/Unraid/) single-mount convention: map your data parent to `/data` and point the app at `/data/media/music`. (The image's built-in default is `/music`, which still works for the simplest single-folder case; just keep `MXLRC_OUTPUT_DIR` at its `/music` default and mount there instead.)
+The container runs the webhook service on port `50705` and stores its config and SQLite database under `/config`. Mount your media following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/How-to-set-up/Unraid/) single-mount convention: map your data parent to `/data` and add your music root with `canticle library add /data/media/music`. In `serve` mode lyrics are written next to each audio file, so the container does not need an output directory: `MXLRC_OUTPUT_DIR` is ignored for normal serve output (it only sets the fallback location for the metadata-only webhook path, where no source file is known). Just mount your media and register the library; there is nothing else to point at an output folder.
 
 Published GHCR tags:
 
@@ -96,7 +96,6 @@ docker run -d \
   -e MXLRC_WEBHOOK_API_KEY=mxlrc_your_webhook_key \
   -e PUID=99 \
   -e PGID=100 \
-  -e MXLRC_OUTPUT_DIR=/data/media/music \
   -v canticle-config:/config \
   -v /path/to/your/data:/data:rw \
   --restart unless-stopped \
@@ -242,6 +241,20 @@ Bootstrap behavior:
 
 If the UI is reachable beyond your local machine, also read [Security considerations](#security-considerations) below: put it behind TLS so the session cookie is not sent in cleartext.
 
+## Web UI: Dashboard
+
+The Dashboard (`/dashboard`) is the default landing page after you sign in - the bare root (`/`) redirects to it. It is a read-only, never-cached observability view that runs live database queries at request time. It shows:
+
+![Canticle Dashboard: work-queue tiles and chart, per-provider hit-rate bars, and a recent-outcomes table classified as synced, unsynced, or instrumental](img/canticle-dashboard.png)
+
+
+- **Work queue tiles and chart.** Counts of work queue items by status (pending, processing, done, failed, deferred), with a doughnut chart of the same segments.
+- **Per-provider effectiveness tiles.** One tile per provider lane showing `hits/attempts` and an inline hit-rate bar (the percent is `hits / (hits + misses)`, where a hit means the lane served the winning result).
+- **Instrumental count.** The number of tracks marked instrumental.
+- **Recent outcomes.** The 20 most recently completed tracks (artist, title, album, result class, the provider lane that served it, and the completion time in the server's timezone when `TZ` is set, otherwise UTC).
+
+The Dashboard requires the web UI to be enabled and an admin session (or a trusted-network request), the same as the other UI pages. For the deeper per-report views (queue summary, recent outcomes, provider effectiveness, instrumental inventory, failure analysis), see the [Reports workspace](#reports-workspace) below.
+
 ## Web UI: Settings page
 
 The Settings page (`/settings`) is the single destination for editing the daemon configuration from the browser. It is available whenever `web_ui_enabled = true` and the operator is signed in as admin (or is accessing from a trusted network).
@@ -280,6 +293,41 @@ Write operations use a double-submit cookie token (`mx-csrf-token`). This is tra
 2. Use the **Advanced** tab for tuning (backoff windows, provider mode, verification thresholds, etc.).
 3. After saving, open the **Raw config** tab to verify the effective state before restarting the daemon.
 4. Restart the daemon to apply changes.
+
+## Webhook API keys
+
+Lidarr (and any other webhook caller) authenticates to the serve listener with a webhook API key. Keys can be managed two ways: from the web UI or from the `canticle keys` CLI. Both write to the same key store in the database, so a key created on the CLI works for the UI list and vice versa.
+
+A key's raw value is shown **exactly once** at creation and is unrecoverable afterward (only a hash is stored). Copy it then; if you lose it, revoke it and create a new one. Keys carry one or more scopes: `webhook` (accept Lidarr webhook calls - the common case) and `admin` (full access, including the status and metrics endpoints).
+
+### From the web UI
+
+The key management page lives at `/settings/keys` (reachable when the web UI is enabled and you are signed in as admin or on a trusted network). It shows a masked list of existing keys - truncated public ID, name, scopes, and the created/revoked timestamps in your local timezone - and a create form. The page never renders raw key material or a full hash.
+
+![The webhook keys page: a create form with name and scope checkboxes, and a table of existing keys showing truncated IDs, scopes, and a revoke action](img/canticle-webhook-keys.png)
+
+- **Create.** Enter a name, choose the scopes (webhook is pre-checked), and submit. The new raw key is revealed once in the result panel.
+- **Revoke.** Revocation is by public ID (the raw key is unrecoverable). A revoked key is shown struck through with its revocation time; it no longer authenticates.
+
+Create and revoke are CSRF-protected (a same-origin form submission with the double-submit token), so direct `curl` POSTs without the page-issued cookie are rejected.
+
+### From the CLI
+
+```sh
+# Create a key (prints the raw key once on stdout - save it).
+canticle keys create --name lidarr --scope webhook
+canticle keys create --name admin-tool --scope admin   # repeat --scope to grant several
+
+# List keys: tab-separated public ID, name, scopes, and revoked-at (empty if active).
+canticle keys list
+
+# Revoke a key by passing its raw value.
+canticle keys revoke <raw-api-key>
+```
+
+`keys create` prints only the raw key on stdout, so you can capture it directly (for example `KEY=$(canticle keys create --name lidarr)`). With no `--scope` flag the key defaults to the `webhook` scope. All three subcommands accept `--config` to point at a non-default config file. Under Docker, run them via `docker exec`, for example `docker exec canticle canticle keys list`.
+
+The CLI and the `MXLRC_WEBHOOK_API_KEY` environment variable are independent ways to supply webhook keys: env/TOML keys (`server.webhook_api_keys`) are static configuration, while `keys create` mints managed keys in the database that can be listed and revoked individually.
 
 ## Windows
 

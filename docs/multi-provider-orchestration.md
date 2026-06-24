@@ -2,17 +2,35 @@
 
 ## Status
 
-This is a design specification, not an implementation. It settles the
-orchestration contracts that must be agreed before a second lyrics provider is
-wired in. No orchestrator code, no provider adapter, and no schema change is
-shipped by this document. Each follow-up is gated on approval of this design
-(see "Out of scope").
+This was originally a design record; the functionality it specified is now
+shipped. Multi-provider orchestration runs in the worker today: the worker
+dispatches each song over one or more provider lanes through
+`internal/orchestrator`, with per-lane circuit breakers. Two dispatch modes are
+selectable via `providers.mode`:
 
-The petitlyrics adapter already exists in `internal/petitlyrics` and is
-selectable today via `providers.primary = "petitlyrics"`, but only one provider
-runs at a time: `providers.Select` picks exactly one and the worker drives a
-single fetch path. This design describes how two or more provider lanes run
-together without races, double-writes, or shared rate-limit state.
+- **`ordered`** (the default) queries the configured lanes in priority order -
+  the primary first, then each entry in `providers.fallback_order` - and returns
+  the first suitable result.
+- **`parallel`** dispatches every lane concurrently and races them; the first
+  suitable result wins, and an unsynced winner is held for a bounded window
+  (`providers.race_wait_seconds`, default 2) so a slower synced result can
+  preempt it.
+
+The petitlyrics adapter in `internal/petitlyrics` is wired as a fallback lane
+(add it to `providers.fallback_order`) as well as being selectable as the
+primary. A single-lane deployment (Musixmatch only, no fallback) behaves
+identically under either mode: one lane, one call. The sections below describe
+how the lanes run together without races, double-writes, or shared rate-limit
+state.
+
+This document is retained for the design rationale and the orchestration
+contracts (cancellation, dedup, suitability/ranking, per-lane breakers); those
+remain accurate. The original "this is unbuilt / out of scope" framing has been
+corrected to reflect the shipped behavior. The implementation landed across
+issues #173 (the `internal/circuit` extraction), #174 (the lane abstraction and
+ordered dispatch), #175 (the petitlyrics fallback lane and `providers_version`
+write-and-compare), and #176 (the parallel-race path with the
+`race_wait_seconds` upgrade window).
 
 ## Topology
 
@@ -46,8 +64,8 @@ the calls that lose the race. Because Musixmatch is the lane we least want to
 spend calls against, parallel race is opt-in and never the default.
 
 In both modes the lane order is the configured fallback priority. A single-lane
-deployment (Musixmatch only, the state after this design's first follow-up
-lands) behaves identically under either mode: one lane, one call.
+deployment (Musixmatch only, with no `providers.fallback_order`) behaves
+identically under either mode: one lane, one call.
 
 ## Cancellation model
 
@@ -313,25 +331,26 @@ outranks the only signal that the track is absent (a benign miss). A stable miss
 is recorded only when every reachable lane returned a benign miss and nothing
 higher.
 
-## Out of scope
+## Implementation status
 
-This document decided contracts; it shipped no behavior of its own. The
-follow-up implementation is now complete: the `internal/circuit` extraction
-(#173), the lane abstraction and ordered dispatch (#174), the petitlyrics
-fallback lane plus `providers_version` write-and-compare (#175), and the
-parallel-race dispatch path with the `race_wait_seconds` upgrade window (#176)
-have all landed. The original out-of-scope notes are retained below for the
-record:
+This document decided contracts; the implementation is now complete. The
+`internal/circuit` extraction (#173), the lane abstraction and ordered dispatch
+(#174), the petitlyrics fallback lane plus `providers_version`
+write-and-compare (#175), and the parallel-race dispatch path with the
+`race_wait_seconds` upgrade window (#176) have all landed. What shipped, against
+the original out-of-scope notes:
 
-- **No provider adapter is implemented here.** A second concurrent provider
-  (for example the CJK/petitlyrics lane in parallel with Musixmatch) is separate
-  work. The petitlyrics adapter exists but is single-select today.
-- **No orchestrator is implemented here.** The lane abstraction, the
-  `internal/circuit` extraction, the ordered and parallel dispatch paths, the
-  `race_wait_seconds` config, and the `providers_version` write-and-compare are
-  all follow-up implementation, sequenced per "Gap 3".
-- **No schema change is made here.** The per-provider cache column is deferred
-  until one of the triggers in "Gap 1" is real.
+- **The petitlyrics fallback lane runs.** A second provider (for example the
+  CJK/petitlyrics lane) is configured via `providers.fallback_order` and runs
+  alongside Musixmatch under ordered fallback or, in `parallel` mode, races it.
+  The adapter is also still selectable as the primary.
+- **The orchestrator is shipped.** The lane abstraction, the `internal/circuit`
+  extraction, the ordered and parallel dispatch paths, the `race_wait_seconds`
+  config, and the `providers_version` write-and-compare are all in the worker,
+  sequenced per "Gap 3".
+- **No schema change was needed.** The per-provider cache column remains
+  deferred until one of the triggers in "Gap 1" is real; ordered fallback and
+  the parallel race both commit exactly one winning result per dispatch.
 
 ## Cross-references
 

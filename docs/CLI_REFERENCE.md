@@ -5,7 +5,7 @@ This page documents every subcommand and flag. For operational guidance (running
 ## Usage
 
 ```text
-Usage: canticle [fetch|serve|scan|library|keys|config|queue|provenance]
+Usage: canticle [fetch|serve|scan|library|keys|secrets|config|queue|provenance|completion]
 
 Commands:
   fetch       fetch lyrics once without HTTP server or DB queue
@@ -13,9 +13,11 @@ Commands:
   scan        scan configured libraries and enqueue missing lyrics
   library     manage library roots
   keys        manage API keys
+  secrets     manage encrypted-at-rest secrets
   config      inspect or update configuration
   queue       inspect or maintain the durable work queue
-  provenance  inject provenance ID tags into .lrc files
+  provenance  embed or inspect provenance tags in .lrc files
+  completion  output a shell completion script (bash, zsh, or fish)
 
 Global flags:
   --version  print the build version and exit
@@ -90,8 +92,43 @@ canticle library list
 canticle scan
 canticle keys create --name lidarr --scope webhook
 canticle keys list
-canticle config get db.path
+canticle keys revoke <raw-api-key>
 ```
+
+`keys` has three subcommands: `create` (`--name`, repeatable `--scope` of `webhook` or `admin`; prints the raw key once), `list` (tab-separated public ID, name, scopes, revoked-at), and `revoke <raw-api-key>`. All accept `--config`. See [Webhook API keys](USER_GUIDE.md#webhook-api-keys) for the full workflow and the web UI equivalent.
+
+## Secrets
+
+The Musixmatch token and the webhook API key can be stored encrypted at rest in the database instead of as plaintext in `config.toml` or environment variables. The encrypted store is the lowest-precedence source, so CLI flags, env vars, and TOML still win over it.
+
+```sh
+# Encrypt the currently-effective secret(s) into the DB store.
+canticle secrets import                 # both token and webhook key
+canticle secrets import --token         # only the Musixmatch token
+canticle secrets import --webhook       # only the webhook API key
+
+# Set one secret by name. The value is read from stdin (prompt or pipe),
+# never from argv. Valid names: musixmatch_token, webhook_api_key.
+canticle secrets set musixmatch_token             # prompts for the value
+printf '%s' "$TOKEN" | canticle secrets set musixmatch_token
+
+# List stored secret names and their updated_at (never the values).
+canticle secrets list
+```
+
+`secrets set` rejects a value passed on the command line (it would land in shell history and `ps`); supply it on stdin. All three subcommands accept `--config`. See [Encrypted secrets](USER_GUIDE.md#encrypted-secrets) for the precedence model and key-loss recovery.
+
+## Config
+
+Inspect or update the configuration file from the CLI.
+
+```sh
+canticle config get db.path        # print one value by dotted key
+canticle config set api.cooldown 30   # update one key, then write the config file
+canticle config list               # print every known key as key=value
+```
+
+`config` has three subcommands: `get <key>` (prints the single value, exit 2 on an unknown key), `set <key> <value>` (applies the change to the effective config and writes the whole file back, creating it at the default path if absent), and `list` (prints every known key as `key=value`). All accept `--config` to target a non-default config file.
 
 ## Queue and scan inspection
 

@@ -18,7 +18,6 @@ services:
       # Supply MXLRC_WEBAUTH_ADMIN_PASSWORD from an uncommitted .env file -- never hardcode it here.
       # MXLRC_WEBAUTH_ADMIN_USER: "admin"
       # MXLRC_WEBAUTH_ADMIN_PASSWORD: "${MXLRC_WEBAUTH_ADMIN_PASSWORD}"
-      MXLRC_OUTPUT_DIR: "/data/media/music"
       PUID: "99"
       PGID: "100"
       MUSIXMATCH_TOKEN: "${MUSIXMATCH_TOKEN}"

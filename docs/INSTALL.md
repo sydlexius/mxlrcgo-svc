@@ -104,7 +104,6 @@ docker run -d \
   -e MUSIXMATCH_TOKEN \
   -e MXLRC_WEBHOOK_API_KEY \
   -e PUID=99 -e PGID=100 \
-  -e MXLRC_OUTPUT_DIR=/data/media/music \
   -v canticle-config:/config \
   -v /path/to/your/data:/data:rw \
   --restart unless-stopped \

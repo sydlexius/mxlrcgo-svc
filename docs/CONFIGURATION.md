@@ -58,6 +58,11 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_WEB_UI_ENABLED` | `false` | Enable the browser UI on the serve listener. Env override of `web_ui_enabled` (precedence: env > file). Restart to apply. |
 | `MXLRC_TRUSTED_CIDRS` | (none) | Comma-separated CIDRs of trusted client networks (serve mode). Loopback is always trusted. Requests from listed CIDRs may scrape `GET /metrics` and bypass the web UI session requirement. |
 | `MXLRC_TRUSTED_PROXIES` | (none) | Comma-separated CIDRs of reverse proxies whose `X-Forwarded-For` is trusted to carry the real client IP (serve mode). Must not overlap `MXLRC_TRUSTED_CIDRS`. |
+| `MXLRC_TLS_CERT_FILE` | (none) | PEM certificate path for the serve listener. Set with `MXLRC_TLS_KEY_FILE` to terminate TLS (minimum TLS 1.2). |
+| `MXLRC_TLS_KEY_FILE` | (none) | PEM private key path. Required together with `MXLRC_TLS_CERT_FILE`. |
+| `MXLRC_TLS_SELF_SIGNED` | `false` | Generate and persist a self-signed certificate on first run under `<dir(db_path)>/tls/`. Mutually exclusive with the cert/key pair. |
+| `MXLRC_TLS_REDIRECT_HTTP` | (none) | Plain-HTTP listen address (e.g. `:80`) that 301-redirects to HTTPS. Honored only when TLS is enabled. |
+| `MXLRC_TLS_SELF_SIGNED_HOSTS` | (none) | Comma-separated extra SAN hostnames/IPs for the self-signed certificate (on top of `localhost`, `canticle`, `127.0.0.1`, `::1`). Honored only when self-signed. |
 | `MXLRC_OUTPUT_DIR` | XDG / `/music` | Output directory for `fetch` mode. **Ignored in `serve` mode** (lyrics are written next to the audio file; the metadata-only webhook fallback uses the internal default). |
 | `MXLRC_EMBEDDED_LYRICS` | `off` | Embedded unsynced lyrics handling. `off` - ignore (default); `respect` - skip fetching when embedded lyrics exist; `extract` - write embedded lyrics to a `.txt` sidecar, then skip fetching. |
 | `MXLRC_BILINGUAL_OUTPUT` | `false` | When `true` and a provider returns a translation track, interleave original and translated lines under shared timestamps in a single `.lrc`. |
@@ -77,6 +82,9 @@ The table below is the complete env-var surface; the watcher and verification se
 | `MXLRC_WORK_INTERVAL` | `0` | Worker poll interval in seconds. `0` falls back to `api.cooldown` (15s floor). |
 | `MXLRC_PROVIDER_PRIMARY` | `musixmatch` | Primary lyrics provider. |
 | `MXLRC_PROVIDERS_DISABLED` | (none) | Comma-separated providers to disable. |
+| `MXLRC_PROVIDERS_MODE` | `ordered` | Multi-provider dispatch strategy: `ordered` (first suitable result in priority order) or `parallel` (race every lane). |
+| `MXLRC_PROVIDERS_RACE_WAIT_SECONDS` | `2` | Parallel-mode synced-upgrade window in seconds. Ignored in `ordered` mode. |
+| `MXLRC_PROVIDERS_FALLBACK_ORDER` | (none) | Comma-separated providers consulted, in order, after the primary returns no suitable result. Empty means primary-only. |
 | `MXLRC_GUARD_ACCEPTED_SCRIPTS` | (none) | Comma-separated allowlist of Unicode script buckets a lyric body may use (Latin, Han, Kana, Hangul, Other). Empty disables the language/script guard. |
 | `MXLRC_GUARD_THRESHOLD` | `0.20` | Maximum tolerated share of foreign-script letters before a result is rejected. Values outside (0, 1] reset to the default. |
 | `MXLRC_QUEUE_RANDOMIZE` | `true` | Shuffle worker dequeue order within each priority tier (anti-fingerprint). `false` restores deterministic order. |
@@ -187,6 +195,29 @@ The first time the UI is enabled there is no admin yet, so every UI page redirec
 
 For headless/Docker deployments, set both `MXLRC_WEBAUTH_ADMIN_USER` and `MXLRC_WEBAUTH_ADMIN_PASSWORD` to bootstrap the admin at startup instead of using the form. This is idempotent (an existing admin is never overwritten), the password (minimum 8 characters) is never logged, and a too-short password is a fatal startup error. Treat them as bootstrap-only: sign in and rotate the password after first run, then drop the variables.
 
+### `[server.tls]`
+
+```toml
+[server.tls]
+# cert_file = "/config/tls/cert.pem"
+# key_file = "/config/tls/key.pem"
+# self_signed = false
+# redirect_http = ""
+# self_signed_hosts = []
+```
+
+Optional transport security for the serve listener. TLS is **off by default** (plain HTTP). Two modes are supported and are mutually exclusive: bring-your-own certificate (`cert_file` + `key_file`, both required together) or a self-signed bootstrap (`self_signed = true`). A contradictory combination is a fatal startup error (env: `MXLRC_TLS_CERT_FILE`, `MXLRC_TLS_KEY_FILE`, `MXLRC_TLS_SELF_SIGNED`, `MXLRC_TLS_REDIRECT_HTTP`, `MXLRC_TLS_SELF_SIGNED_HOSTS`).
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `cert_file` | (none) | PEM-encoded certificate path. With `key_file`, the listener terminates TLS itself (minimum TLS 1.2). |
+| `key_file` | (none) | PEM-encoded private key path. Required together with `cert_file`. |
+| `self_signed` | `false` | Generate and persist a self-signed certificate on first run (ECDSA P-256, ~365-day validity) under `<dir(db_path)>/tls/`, regenerating when missing or expired. Mutually exclusive with `cert_file`/`key_file`. Browsers show an untrusted-certificate prompt. |
+| `redirect_http` | (none) | Optional plain-HTTP listen address (e.g. `:80`) whose every request 301-redirects to the HTTPS address. Empty means no redirect listener. Honored only when TLS is enabled. |
+| `self_signed_hosts` | `[]` | Extra hostnames and IP literals to add as Subject Alternative Names in the generated certificate, on top of the built-in SANs (`localhost`, `canticle`, `127.0.0.1`, `::1`). Invalid entries are a startup error. Honored only when `self_signed` is true. |
+
+TLS is considered enabled when either a `cert_file`+`key_file` pair is set or `self_signed` is true; otherwise the listener stays plain HTTP.
+
 ### `[secrets]`
 
 ```toml
@@ -202,9 +233,22 @@ Key-file location override for encrypted-at-rest secrets (env: `MXLRC_SECRETS_KE
 [providers]
 primary = "musixmatch"
 disabled = []
+# mode = "ordered"          # "ordered" (default) or "parallel"
+# race_wait_seconds = 2     # parallel-mode synced-upgrade window
+# fallback_order = []       # providers consulted after the primary, in order
 ```
 
-Provider selection. Musixmatch is the default provider; the config exposes selection so future providers can be added without changing the fetch and worker paths (env: `MXLRC_PROVIDER_PRIMARY`, `MXLRC_PROVIDERS_DISABLED`).
+Provider selection and multi-provider dispatch. Musixmatch is the default primary provider (env: `MXLRC_PROVIDER_PRIMARY`, `MXLRC_PROVIDERS_DISABLED`, `MXLRC_PROVIDERS_MODE`, `MXLRC_PROVIDERS_RACE_WAIT_SECONDS`, `MXLRC_PROVIDERS_FALLBACK_ORDER`). See [Multi-provider orchestration](multi-provider-orchestration.md) for the full dispatch model.
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `primary` | `musixmatch` | The primary lyrics provider, always the first lane. |
+| `disabled` | `[]` | Provider names to disable. |
+| `mode` | `ordered` | Dispatch strategy. `ordered` queries lanes in priority order (primary, then each `fallback_order` entry) and returns the first suitable result. `parallel` dispatches every lane concurrently and races them. Any other value is rejected at load. |
+| `race_wait_seconds` | `2` | Parallel-mode only: after a suitable unsynced result arrives, wait up to this many seconds for a synced result (a strict quality upgrade) to preempt it. Non-positive values are reset to the default. Ignored in `ordered` mode. |
+| `fallback_order` | `[]` | Provider names consulted, in order, after the primary when it returns no suitable result. Each name must be a known provider; unknown names are rejected at load. Empty means no fallback (only the primary lane runs). |
+
+`parallel` mode makes more upstream calls (every lane is queried per dispatch), so it is not advised against rate-limited providers unless latency matters more than call volume.
 
 ### `[verification]`
 
@@ -285,6 +329,23 @@ randomize = true
 ```
 
 The worker shuffles its dequeue order within each priority tier so it stops querying the upstream API in strict alphabetical (library insertion) order, which is a plausible scraping fingerprint. This is **on by default** and affects only the library/serve worker path (`Dequeue`); inspection output (`queue list`) stays deterministic, and the one-shot `fetch` CLI never touches the work queue. Set `randomize = false` (or `MXLRC_QUEUE_RANDOMIZE=false`) to restore the deterministic `created_at`/`id` ordering. The env var overrides the TOML key; an invalid value warns and keeps the current setting.
+
+### `[watcher]`
+
+```toml
+[watcher]
+# enabled = false
+# debounce_ms = 2000
+# max_dirs = 100000
+```
+
+Optional low-latency filesystem watcher that layers targeted scans over the periodic scheduler (env: `MXLRCGO_WATCH_ENABLED`, `MXLRCGO_WATCH_DEBOUNCE_MS`, `MXLRCGO_WATCH_MAX_DIRS`). It is **off by default**. See [Filesystem watcher](USER_GUIDE.md#filesystem-watcher-optional-low-latency-scans) in the User Guide for the operational detail.
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `enabled` | `false` | Master switch for the watcher. |
+| `debounce_ms` | `2000` | Quiet period in milliseconds after the last filesystem event before a targeted scan fires; coalesces event storms. A non-positive value is clamped to the default at construction. |
+| `max_dirs` | `100000` | Caps how many directories may be watched before startup fails - a safety valve so a misconfigured root fails fast instead of exhausting the kernel inotify watch budget. A non-positive value is clamped to the default. |
 
 ### `[logging]`
 

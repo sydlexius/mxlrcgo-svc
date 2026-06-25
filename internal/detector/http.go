@@ -342,6 +342,11 @@ func (d *HTTPDetector) spreadExpr(ctx context.Context, audioPath string) string 
 	// exceeds sampleDuration: with more windows than seconds, segLen would floor
 	// to 1 and numWindows*1 would overshoot the budget (multiplying inference work).
 	numWindows := d.spreadSamples
+	if numWindows < 1 {
+		// Unreachable today (the spreadSamples < 2 guard above returns first), but
+		// keep the division's divisor-positive invariant local so it cannot panic.
+		numWindows = 1
+	}
 	if numWindows > d.sampleDuration {
 		numWindows = d.sampleDuration
 	}

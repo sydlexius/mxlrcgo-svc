@@ -121,8 +121,8 @@ The app container needs **both** `ffmpeg` and `ffprobe` on PATH:
 If `ffmpeg` was auto-provisioned by Canticle it ships **no** `ffprobe`; set
 `ffprobe_path` (or install `ffprobe` on PATH) or the detector silently falls back
 to a single window from the start and loses late-vocal protection. See
-[Configuration -> ffmpeg resolution](CONFIGURATION.md) for how `ffmpeg` is
-located.
+[Configuration -> ffmpeg resolution](CONFIGURATION.md#ffmpeg-resolution) for how
+`ffmpeg` is located.
 
 ### Upgrade ordering (important)
 

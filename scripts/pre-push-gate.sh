@@ -105,6 +105,20 @@ else
   echo "    (install claude-kit for the local check)"
 fi
 
+echo "==> coverage floor (per-package ratchet)"
+# Reuse the profile from the test step; enforce the per-package floor recorded in
+# scripts/coverage-floor.json so a whole-package coverage regression is caught
+# locally, complementing the line-level patch-coverage gate above. internal/web is
+# absent from the floor JSON, so the extra packages in the ./... profile are simply
+# not evaluated. Unlike patch coverage this has no external dependency, so it always
+# runs (the CI "Coverage Floor" job enforces the same check on every PR).
+# The test step above writes "$COVER_OUT" (and fails the gate otherwise), so this
+# guard only trips on an unexpected empty/missing profile -- and reports that
+# plainly instead of the misleading floor-breach message below.
+[ -s "$COVER_OUT" ] || fail "coverage floor: coverage profile missing or empty ($COVER_OUT)"
+bash scripts/coverage-floor.sh --cover "$COVER_OUT" \
+  || fail "coverage floor (a package dropped below scripts/coverage-floor.json; add tests, or run 'bash scripts/coverage-floor.sh --bump <pkg>' if the higher coverage is intentional)"
+
 echo "==> codecov report validation (codecovcli dry-run)"
 # OPTIONAL local enhancement: validate that the coverage report parses and would
 # upload cleanly BEFORE burning PR/CI wall time. The dry-run runs the same CLI

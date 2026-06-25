@@ -33,10 +33,10 @@ page and install it with your package manager:
 
 ```sh
 # Debian / Ubuntu
-sudo dpkg -i canticle_*.deb
+sudo apt install ./canticle_*.deb
 
 # RHEL / Fedora / Rocky
-sudo rpm -i canticle_*.rpm
+sudo dnf install ./canticle_*.rpm
 
 # Alpine
 sudo apk add --allow-untrusted canticle_*.apk

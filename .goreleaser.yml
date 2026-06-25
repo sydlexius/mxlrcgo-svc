@@ -95,19 +95,23 @@ nfpms:
     # Upgrade path from the pre-rebrand package (issue #388). The Linux packages
     # were named "mxlrcgo-svc" through v1.9.1; this transitions installs to the
     # "canticle" name in a single step. nfpm maps these per format:
-    #   deb -> Replaces + Provides + Conflicts
-    #   rpm -> Obsoletes + Provides + Conflicts
+    #   deb -> Replaces + Provides (+ Conflicts, set in overrides.deb below)
+    #   rpm -> Obsoletes + Provides
     #   apk -> replaces + provides
-    # Obsoletes/Replaces remove the old mxlrcgo-svc package outright, so any
+    # Replaces/Obsoletes remove the old mxlrcgo-svc package outright, so any
     # stale binary it owned (v1.6.0/v1.7.0 installed /usr/local/bin/mxlrcgo-svc;
     # v1.8.0+ already ship /usr/local/bin/canticle) is cleaned up. The unit,
     # config, and state paths stay under /var/lib/mxlrcgo-svc et al. so the
     # SQLite DB and any (non-Docker) service install survive the transition.
+    #
+    # Conflicts is deb-only (set in overrides.deb), NOT a top-level field: the
+    # Debian rename idiom is Replaces+Conflicts to force removal of the old
+    # package, but the Fedora idiom is Obsoletes+Provides WITHOUT Conflicts -- an
+    # rpm Conflicts tag makes `rpm`/`dnf` treat mxlrcgo-svc as a blocking
+    # conflict and breaks the in-place upgrade. apk needs only replaces+provides.
     replaces:
       - mxlrcgo-svc
     provides:
-      - mxlrcgo-svc
-    conflicts:
       - mxlrcgo-svc
     vendor: sydlexius
     homepage: https://sydlexius.github.io/canticle/
@@ -133,6 +137,11 @@ nfpms:
     overrides:
       # Debian places systemd units under /lib/systemd/system/.
       deb:
+        # Conflicts is the Debian rename idiom (with Replaces) and forces the old
+        # mxlrcgo-svc package's removal on upgrade. Kept out of rpm/apk on purpose
+        # (see the package-rename note above).
+        conflicts:
+          - mxlrcgo-svc
         contents:
           - src: config.example.toml
             dst: /etc/mxlrcgo-svc/config.example.toml

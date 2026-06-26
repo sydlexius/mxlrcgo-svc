@@ -115,10 +115,17 @@ echo "==> coverage floor (per-package ratchet -- informational; CI enforces)"
 # locally. internal/web is absent from the floor JSON, so the extra packages in the
 # ./... profile are not evaluated.
 if [ -s "$COVER_OUT" ]; then
-  if ! bash scripts/coverage-floor.sh --cover "$COVER_OUT"; then
+  # Distinguish coverage-floor.sh exit codes: 1 == below floor (informational
+  # only -- CI enforces); anything else (2 == config/parser error, etc.) is a
+  # real failure and must still fail the gate, not be silently downgraded.
+  floor_status=0
+  bash scripts/coverage-floor.sh --cover "$COVER_OUT" || floor_status=$?
+  if [ "$floor_status" -eq 1 ]; then
     echo "    NOTE: a package is below its coverage floor locally (informational only)."
     echo "    The CI 'Coverage Floor' job is the enforced gate; if this persists there,"
     echo "    add tests or run 'bash scripts/coverage-floor.sh --bump <pkg>' when intended."
+  elif [ "$floor_status" -ne 0 ]; then
+    fail "coverage floor: coverage-floor.sh exited $floor_status (config/parser error, not a below-floor result)"
   fi
 else
   echo "    coverage profile missing or empty; skipping local floor check."

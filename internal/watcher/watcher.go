@@ -29,6 +29,12 @@ type Watcher struct {
 	cfg       Config
 	libraries LibraryLister
 	scan      ScanFunc
+
+	// armed, when non-nil, is invoked with a path each time its debounce timer is
+	// set or reset in dispatch. It is a test-only synchronization seam (default
+	// nil = no-op in production) that lets tests place a second event mid-window
+	// deterministically -- observing the reset arming -- instead of sleeping.
+	armed func(path string)
 }
 
 // New creates a Watcher. scan is invoked (after debouncing) with the owning
@@ -148,6 +154,9 @@ func (w *Watcher) dispatch(ctx context.Context, events <-chan libEvent) {
 				p.lib = ev.lib
 				p.timer.Stop()
 				p.timer.Reset(w.cfg.Debounce)
+				if w.armed != nil {
+					w.armed(ev.path)
+				}
 				continue
 			}
 			path := ev.path
@@ -159,6 +168,9 @@ func (w *Watcher) dispatch(ctx context.Context, events <-chan libEvent) {
 					case <-ctx.Done():
 					}
 				}),
+			}
+			if w.armed != nil {
+				w.armed(path)
 			}
 		case path := <-fired:
 			p, ok := timers[path]

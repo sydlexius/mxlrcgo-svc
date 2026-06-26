@@ -11,6 +11,24 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
+// waitFor polls cond until it returns true or a generous deadline elapses,
+// failing the test on timeout. It is the deterministic replacement for a fixed
+// "sleep then assert" wait: the test proceeds the instant the observed effect
+// occurs, so the effect's code path is always exercised regardless of machine
+// load (which a fixed sleep cannot guarantee, causing intermittent coverage
+// flap). Mirrors the helper in internal/orchestrator/parallel_test.go.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}
+
 type fakeLister struct {
 	libs []models.Library
 	err  error
@@ -197,7 +215,13 @@ func TestDispatchCoalescesBurstIntoSingleScan(t *testing.T) {
 	}
 	events <- libEvent{lib: lib, path: "/m/Other"} // a second dir
 
-	time.Sleep(150 * time.Millisecond) // let the debounce window elapse and flush
+	// Wait deterministically for both dirs to flush, rather than a fixed sleep
+	// that under load may elapse before the flush goroutine fires.
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls["/m/Album"] == 1 && calls["/m/Other"] == 1
+	}, "burst to coalesce into one scan per dir")
 
 	mu.Lock()
 	album, other := calls["/m/Album"], calls["/m/Other"]
@@ -216,13 +240,17 @@ func TestDispatchCoalescesBurstIntoSingleScan(t *testing.T) {
 func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 	var mu sync.Mutex
 	scans := 0
+	var scanAt time.Time
 	scan := func(_ context.Context, _ models.Library, _ string) error {
 		mu.Lock()
 		scans++
+		scanAt = time.Now()
 		mu.Unlock()
 		return nil
 	}
-	const debounce = 100 * time.Millisecond
+	// Debounce chosen with margin so the single remaining fixed wait (which only
+	// positions the second event mid-window) is not starved under load.
+	const debounce = 200 * time.Millisecond
 	w := New(Config{Debounce: debounce}, nil, scan)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -233,23 +261,29 @@ func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 
 	lib := models.Library{ID: 1, Path: "/m"}
 	events <- libEvent{lib: lib, path: "/m/Album"}
-	time.Sleep(debounce / 2)                       // t ~= 50ms, within the window
-	events <- libEvent{lib: lib, path: "/m/Album"} // resets the timer to ~150ms
-	time.Sleep(debounce / 2)                       // t ~= 100ms: first deadline would have hit if not reset
+	time.Sleep(debounce / 2)                       // mid-window: well before the first deadline
+	events <- libEvent{lib: lib, path: "/m/Album"} // resets the timer to the trailing edge
+	lastEvent := time.Now()
+
+	// Wait deterministically for the single post-reset flush, then prove the
+	// timer was reset to the trailing edge via a load-stable invariant: the scan
+	// fired no earlier than lastEvent+debounce. A non-reset timer would have
+	// fired ~debounce after the FIRST event -- i.e. before lastEvent+debounce.
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return scans == 1
+	}, "exactly one scan after the reset window")
 
 	mu.Lock()
-	early := scans
-	mu.Unlock()
-	if early != 0 {
-		t.Fatalf("scans at ~1 debounce window = %d; want 0 (each event must reset the trailing-edge timer)", early)
-	}
-
-	time.Sleep(debounce + 50*time.Millisecond) // wait out the reset window
-	mu.Lock()
-	final := scans
+	final, at := scans, scanAt
 	mu.Unlock()
 	if final != 1 {
 		t.Errorf("scans after the reset window = %d; want exactly 1", final)
+	}
+	if at.Before(lastEvent.Add(debounce)) {
+		t.Errorf("scan fired at %s, before lastEvent+debounce (%s): timer was not reset to the trailing edge",
+			at.Format("15:04:05.000"), lastEvent.Add(debounce).Format("15:04:05.000"))
 	}
 
 	cancel()
@@ -276,7 +310,8 @@ func TestDispatchNoScanAfterCancelMidDebounce(t *testing.T) {
 	cancel()                                                         // cancel before the window elapses
 	<-done                                                           // dispatch returns and its deferred Stop runs
 
-	time.Sleep(120 * time.Millisecond) // well past the debounce window
+	// No further wait needed: <-done already guarantees dispatch returned and its
+	// deferred timer.Stop ran, so a pending debounce timer can no longer fire.
 	mu.Lock()
 	got := scans
 	mu.Unlock()

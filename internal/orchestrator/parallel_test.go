@@ -191,7 +191,12 @@ func TestParallelParentCancelReturnsErr(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		// Cancel once the lane is genuinely in flight (deterministic, load-stable)
+		// rather than after a fixed sleep that may fire before the lane starts.
+		deadline := time.Now().Add(2 * time.Second)
+		for atomic.LoadInt32(&slow.started) == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
 		cancel()
 	}()
 
@@ -215,7 +220,12 @@ func TestParallelParentCancelAfterHeldReturnsErr(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(50 * time.Millisecond) // after the fast unsynced is held + window armed
+		// Cancel once the fast unsynced result is held and the slow lane is in
+		// flight (the race window is armed), instead of a fixed sleep.
+		deadline := time.Now().Add(2 * time.Second)
+		for (atomic.LoadInt32(&fast.finished) == 0 || atomic.LoadInt32(&slow.started) == 0) && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
 		cancel()
 	}()
 

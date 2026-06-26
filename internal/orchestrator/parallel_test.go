@@ -190,12 +190,19 @@ func TestParallelParentCancelReturnsErr(t *testing.T) {
 	o, _ := New("parallel", delayLane(slow))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
+		_, err := o.FindLyrics(ctx, models.Track{})
+		errCh <- err
 	}()
+	// Require the lane to be genuinely in flight before canceling; fail loudly if
+	// it never is, so the test cannot pass without exercising the in-flight branch.
+	waitFor(t, func() bool {
+		return atomic.LoadInt32(&slow.started) != 0
+	}, "slow lane never entered the in-flight state before cancel")
+	cancel()
 
-	_, err := o.FindLyrics(ctx, models.Track{})
+	err := <-errCh
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want context.Canceled (parent canceled mid-flight)", err)
 	}
@@ -214,12 +221,19 @@ func TestParallelParentCancelAfterHeldReturnsErr(t *testing.T) {
 	o.SetRaceWait(5 * time.Second) // wide window: the held unsynced is parked when cancel lands
 
 	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond) // after the fast unsynced is held + window armed
-		cancel()
+		_, err := o.FindLyrics(ctx, models.Track{})
+		errCh <- err
 	}()
+	// Require the held-unsynced + armed-race-window state before canceling; fail
+	// loudly if it is never reached, so the test cannot pass without exercising it.
+	waitFor(t, func() bool {
+		return atomic.LoadInt32(&fast.finished) != 0 && atomic.LoadInt32(&slow.started) != 0
+	}, "held-unsynced / race-window state was never reached before cancel")
+	cancel()
 
-	_, err := o.FindLyrics(ctx, models.Track{})
+	err := <-errCh
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want context.Canceled (cancel must beat a held unsynced commit)", err)
 	}

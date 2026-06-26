@@ -105,19 +105,31 @@ else
   echo "    (install claude-kit for the local check)"
 fi
 
-echo "==> coverage floor (per-package ratchet)"
-# Reuse the profile from the test step; enforce the per-package floor recorded in
-# scripts/coverage-floor.json so a whole-package coverage regression is caught
-# locally, complementing the line-level patch-coverage gate above. internal/web is
-# absent from the floor JSON, so the extra packages in the ./... profile are simply
-# not evaluated. Unlike patch coverage this has no external dependency, so it always
-# runs (the CI "Coverage Floor" job enforces the same check on every PR).
-# The test step above writes "$COVER_OUT" (and fails the gate otherwise), so this
-# guard only trips on an unexpected empty/missing profile -- and reports that
-# plainly instead of the misleading floor-breach message below.
-[ -s "$COVER_OUT" ] || fail "coverage floor: coverage profile missing or empty ($COVER_OUT)"
-bash scripts/coverage-floor.sh --cover "$COVER_OUT" \
-  || fail "coverage floor (a package dropped below scripts/coverage-floor.json; add tests, or run 'bash scripts/coverage-floor.sh --bump <pkg>' if the higher coverage is intentional)"
+echo "==> coverage floor (per-package ratchet -- informational; CI enforces)"
+# CI-only enforcement (#399): the *enforced* gate is the required "Coverage Floor"
+# CI job, which runs on a clean runner. Locally this is INFORMATIONAL only -- a
+# loaded dev machine can transiently flap a timing-sensitive package's coverage
+# (e.g. a debounce/event branch missing its window under CPU pressure), and a
+# false local failure must not block a push. The check still runs and prints, so a
+# genuine whole-package regression is visible here too; it is simply not fatal
+# locally. internal/web is absent from the floor JSON, so the extra packages in the
+# ./... profile are not evaluated.
+if [ -s "$COVER_OUT" ]; then
+  # Distinguish coverage-floor.sh exit codes: 1 == below floor (informational
+  # only -- CI enforces); anything else (2 == config/parser error, etc.) is a
+  # real failure and must still fail the gate, not be silently downgraded.
+  floor_status=0
+  bash scripts/coverage-floor.sh --cover "$COVER_OUT" || floor_status=$?
+  if [ "$floor_status" -eq 1 ]; then
+    echo "    NOTE: a package is below its coverage floor locally (informational only)."
+    echo "    The CI 'Coverage Floor' job is the enforced gate; if this persists there,"
+    echo "    add tests or run 'bash scripts/coverage-floor.sh --bump <pkg>' when intended."
+  elif [ "$floor_status" -ne 0 ]; then
+    fail "coverage floor: coverage-floor.sh exited $floor_status (config/parser error, not a below-floor result)"
+  fi
+else
+  echo "    coverage profile missing or empty; skipping local floor check."
+fi
 
 echo "==> codecov report validation (codecovcli dry-run)"
 # OPTIONAL local enhancement: validate that the coverage report parses and would

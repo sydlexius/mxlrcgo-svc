@@ -11,6 +11,24 @@ import (
 	"github.com/sydlexius/mxlrcgo-svc/internal/models"
 )
 
+// waitFor polls cond until it returns true or a generous deadline elapses,
+// failing the test on timeout. It is the deterministic replacement for a fixed
+// "sleep then assert" wait: the test proceeds the instant the observed effect
+// occurs, so the effect's code path is always exercised regardless of machine
+// load (which a fixed sleep cannot guarantee, causing intermittent coverage
+// flap). Mirrors the helper in internal/orchestrator/parallel_test.go.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}
+
 type fakeLister struct {
 	libs []models.Library
 	err  error
@@ -197,7 +215,13 @@ func TestDispatchCoalescesBurstIntoSingleScan(t *testing.T) {
 	}
 	events <- libEvent{lib: lib, path: "/m/Other"} // a second dir
 
-	time.Sleep(150 * time.Millisecond) // let the debounce window elapse and flush
+	// Wait deterministically for both dirs to flush, rather than a fixed sleep
+	// that under load may elapse before the flush goroutine fires.
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls["/m/Album"] == 1 && calls["/m/Other"] == 1
+	}, "burst to coalesce into one scan per dir")
 
 	mu.Lock()
 	album, other := calls["/m/Album"], calls["/m/Other"]
@@ -216,14 +240,26 @@ func TestDispatchCoalescesBurstIntoSingleScan(t *testing.T) {
 func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 	var mu sync.Mutex
 	scans := 0
+	var scanAt, lastArmAt time.Time
 	scan := func(_ context.Context, _ models.Library, _ string) error {
 		mu.Lock()
 		scans++
+		scanAt = time.Now()
 		mu.Unlock()
 		return nil
 	}
-	const debounce = 100 * time.Millisecond
+	const debounce = 50 * time.Millisecond
 	w := New(Config{Debounce: debounce}, nil, scan)
+	armed := make(chan string, 4)
+	// The callback runs synchronously inside dispatch immediately after the timer
+	// is set/reset, so lastArmAt tracks the real dispatch-side arm time (not a
+	// jittery test-goroutine timestamp).
+	w.armed = func(p string) {
+		mu.Lock()
+		lastArmAt = time.Now()
+		mu.Unlock()
+		armed <- p
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -232,24 +268,44 @@ func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 	go func() { w.dispatch(ctx, events); close(done) }()
 
 	lib := models.Library{ID: 1, Path: "/m"}
+	// The first event arms the timer; the second event for the same path RESETS
+	// it. Gate the second send on observing the first arming, and prove the reset
+	// by observing a SECOND arming for the same path (only dispatch's reset branch
+	// emits it) -- fully deterministic, no mid-window sleep.
 	events <- libEvent{lib: lib, path: "/m/Album"}
-	time.Sleep(debounce / 2)                       // t ~= 50ms, within the window
-	events <- libEvent{lib: lib, path: "/m/Album"} // resets the timer to ~150ms
-	time.Sleep(debounce / 2)                       // t ~= 100ms: first deadline would have hit if not reset
-
-	mu.Lock()
-	early := scans
-	mu.Unlock()
-	if early != 0 {
-		t.Fatalf("scans at ~1 debounce window = %d; want 0 (each event must reset the trailing-edge timer)", early)
+	if p := <-armed; p != "/m/Album" {
+		t.Fatalf("first arm = %q; want /m/Album", p)
 	}
-
-	time.Sleep(debounce + 50*time.Millisecond) // wait out the reset window
+	events <- libEvent{lib: lib, path: "/m/Album"}
+	if p := <-armed; p != "/m/Album" {
+		t.Fatalf("reset arm = %q; want /m/Album (second event must reset the timer)", p)
+	}
 	mu.Lock()
-	final := scans
+	secondArmAt := lastArmAt
+	mu.Unlock()
+
+	// Exactly one scan flushes: the two events coalesced into a single
+	// trailing-edge scan.
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return scans == 1
+	}, "exactly one scan after the reset window")
+
+	mu.Lock()
+	final, at := scans, scanAt
 	mu.Unlock()
 	if final != 1 {
-		t.Errorf("scans after the reset window = %d; want exactly 1", final)
+		t.Errorf("scans after the reset window = %d; want exactly 1 (trailing-edge coalesced)", final)
+	}
+	// Trailing-edge timing: the scan must fire no earlier than the RESET arm plus
+	// the full debounce. A timer fires exactly debounce after Reset (captured at
+	// secondArmAt inside dispatch), so a correctly reset timer always satisfies
+	// this and it can never false-positive; a timer firing earlier means the
+	// debounce was not honored from the trailing (second) event.
+	if at.Before(secondArmAt.Add(debounce)) {
+		t.Errorf("scan fired %s before secondArm+debounce; debounce not honored from the trailing edge",
+			secondArmAt.Add(debounce).Sub(at))
 	}
 
 	cancel()
@@ -276,7 +332,8 @@ func TestDispatchNoScanAfterCancelMidDebounce(t *testing.T) {
 	cancel()                                                         // cancel before the window elapses
 	<-done                                                           // dispatch returns and its deferred Stop runs
 
-	time.Sleep(120 * time.Millisecond) // well past the debounce window
+	// No further wait needed: <-done already guarantees dispatch returned and its
+	// deferred timer.Stop ran, so a pending debounce timer can no longer fire.
 	mu.Lock()
 	got := scans
 	mu.Unlock()

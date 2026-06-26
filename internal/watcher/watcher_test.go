@@ -240,15 +240,26 @@ func TestDispatchCoalescesBurstIntoSingleScan(t *testing.T) {
 func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 	var mu sync.Mutex
 	scans := 0
+	var scanAt, lastArmAt time.Time
 	scan := func(_ context.Context, _ models.Library, _ string) error {
 		mu.Lock()
 		scans++
+		scanAt = time.Now()
 		mu.Unlock()
 		return nil
 	}
-	w := New(Config{Debounce: 50 * time.Millisecond}, nil, scan)
+	const debounce = 50 * time.Millisecond
+	w := New(Config{Debounce: debounce}, nil, scan)
 	armed := make(chan string, 4)
-	w.armed = func(p string) { armed <- p } // test seam: each timer set/reset signals here
+	// The callback runs synchronously inside dispatch immediately after the timer
+	// is set/reset, so lastArmAt tracks the real dispatch-side arm time (not a
+	// jittery test-goroutine timestamp).
+	w.armed = func(p string) {
+		mu.Lock()
+		lastArmAt = time.Now()
+		mu.Unlock()
+		armed <- p
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -269,10 +280,12 @@ func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 	if p := <-armed; p != "/m/Album" {
 		t.Fatalf("reset arm = %q; want /m/Album (second event must reset the timer)", p)
 	}
+	mu.Lock()
+	secondArmAt := lastArmAt
+	mu.Unlock()
 
 	// Exactly one scan flushes: the two events coalesced into a single
-	// trailing-edge scan. A non-reset timer would also have produced a second
-	// (premature) scan; asserting exactly 1 confirms coalescing via the reset.
+	// trailing-edge scan.
 	waitFor(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -280,10 +293,19 @@ func TestDispatchTrailingEdgeResetsTimer(t *testing.T) {
 	}, "exactly one scan after the reset window")
 
 	mu.Lock()
-	final := scans
+	final, at := scans, scanAt
 	mu.Unlock()
 	if final != 1 {
 		t.Errorf("scans after the reset window = %d; want exactly 1 (trailing-edge coalesced)", final)
+	}
+	// Trailing-edge timing: the scan must fire no earlier than the RESET arm plus
+	// the full debounce. A timer fires exactly debounce after Reset (captured at
+	// secondArmAt inside dispatch), so a correctly reset timer always satisfies
+	// this and it can never false-positive; a timer firing earlier means the
+	// debounce was not honored from the trailing (second) event.
+	if at.Before(secondArmAt.Add(debounce)) {
+		t.Errorf("scan fired %s before secondArm+debounce; debounce not honored from the trailing edge",
+			secondArmAt.Add(debounce).Sub(at))
 	}
 
 	cancel()

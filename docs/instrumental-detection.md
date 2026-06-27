@@ -104,9 +104,15 @@ for it; you build it on the host from the vendored source.
 - **Source:** `deploy/yamnet-detector/` in this repo (Dockerfile + FastAPI app).
 - **Response contract:** `POST /classify` returns
   `{"mean": {<class>: <prob>, ...}, "max": {<class>: <prob>, ...}}` - both the
-  mean and the max-over-frames reduction for every AudioSet class. The vocal gate
-  needs the `max` map; a legacy mean-only sidecar degrades safely to
-  never-instrumental rather than producing wrong markers.
+  mean and the max-over-frames reduction for **every** AudioSet class (a full map,
+  no thresholding or top-N). The vocal gate needs the `max` map; a legacy mean-only
+  sidecar degrades safely to never-instrumental rather than producing wrong
+  markers. The full-map guarantee matters: Canticle records the vocal classes a
+  healthy response carries and, on every later decision, treats a configured vocal
+  class **missing** from a non-empty `max` map as a partial/contract-violating
+  response and fails safe to not-instrumental (see Operations below). A custom
+  sidecar that omits zero-scored classes would trip this on normal tracks, so any
+  replacement must honor the full-map contract.
 - **Wire it up:** point `classifier_url` at the service, e.g.
   `http://yamnet:8080`.
 
@@ -179,6 +185,22 @@ computed `music_sum`, the `vocal_peak`, and the resulting verdict, so you can se
 - **A false instrumental** (a vocal track wrongly marked) usually means a vocal
   that the sample under-weighted - check that `ffprobe` is present and spread
   sampling is actually running (a single-window fallback is the common culprit).
+- **Partial classifier responses.** A non-empty `max` map that omits a vocal class
+  the sidecar normally returns is a contract violation (a truncated/corrupt
+  response): the absent class would silently contribute 0 to `vocal_peak` and
+  weaken the gate, so the detector treats that decision as **not instrumental** and
+  logs `detector: vocal classes missing from a non-empty classifier max map` at
+  `Error` on **every** occurrence (not once per process). A configured vocal class
+  the sidecar *never* returns is instead a permanent config/contract mismatch: it
+  is logged once and dropped from the baseline so the gate keeps running on the
+  classes the sidecar does emit. Note the deliberate severity split: a *fully*
+  absent `max` map is the expected legacy mean-only degradation and stays at
+  `Warn`, while a present-but-partial map is the unexpected violation at `Error`.
+  This fail-safe is scoped to the partial-response case only - it does not explain
+  the conservative `0.03-0.05` borderline band (by design) or other separately
+  tracked refinements (cross-version model drift, `Speech` activation on
+  non-lyrical audio). Persisting per-decision telemetry (scores + model version)
+  for auditability is a separate follow-up.
 - **Re-classifying / clearing stale markers.** After changing thresholds or
   fixing the sidecar, force a re-check of affected tracks with `--update` (a full
   re-fetch). Instrumental markers are otherwise sticky - `--upgrade` skips them

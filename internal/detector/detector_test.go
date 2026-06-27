@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 )
 
@@ -706,6 +707,86 @@ func TestDetectMissingMaxMapIsNotInstrumental(t *testing.T) {
 	}
 	if res.Instrumental {
 		t.Fatal("missing max map must degrade to NOT instrumental (safe)")
+	}
+}
+
+// A non-empty max map that DROPS a baseline vocal class (a class present in the
+// first healthy response) is a partial/contract-violating response and must fail
+// safe to NOT instrumental on that decision - a missing class otherwise silently
+// contributes 0 and weakens the vocal gate (the #402 production signature).
+func TestDetectPartialMaxMapDropsBaselineClassIsNotInstrumental(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"mean": map[string]float64{"Music": 0.95, "Musical instrument": 0.05, "Singing": 0.001, "Speech": 0.001},
+			"max":  map[string]float64{"Music": 1.0, "Singing": 0.004, "Speech": 0.003},
+		}
+		if calls.Add(1) >= 2 {
+			// Partial response: the Speech baseline class is dropped from max.
+			resp["max"] = map[string]float64{"Music": 1.0, "Singing": 0.004}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t),
+		InstrumentalClasses: []string{"Music", "Musical instrument"},
+		VocalClasses:        []string{"Singing", "Speech"}, VocalMaxConfidence: 0.05})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	// First (healthy) decision establishes the baseline {Singing, Speech} and is instrumental.
+	first, err := d.Detect(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("detect 1: %v", err)
+	}
+	if !first.Instrumental {
+		t.Fatalf("first healthy decision must be instrumental; vocal_peak=%.3f", first.VocalConfidence)
+	}
+	// Second decision drops the Speech baseline class -> partial response -> fail safe.
+	second, err := d.Detect(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("detect 2: %v", err)
+	}
+	if second.Instrumental {
+		t.Fatal("a baseline vocal class missing from a non-empty max map must force NOT instrumental")
+	}
+}
+
+// A configured vocal class the sidecar NEVER returns is a permanent config/contract
+// mismatch: it is dropped from the baseline (logged once) so the gate keeps running
+// on the classes the sidecar actually emits, rather than failing every decision.
+func TestDetectPermanentlyAbsentVocalClassKeepsGateRunning(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// "Yodeling" is configured but never present in max.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"mean": map[string]float64{"Music": 0.95, "Musical instrument": 0.05},
+			"max":  map[string]float64{"Music": 1.0, "Singing": 0.004, "Speech": 0.003},
+		})
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t),
+		InstrumentalClasses: []string{"Music", "Musical instrument"},
+		VocalClasses:        []string{"Singing", "Speech", "Yodeling"}, VocalMaxConfidence: 0.05})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	// Two decisions: the permanently-absent "Yodeling" must not force NOT-instrumental.
+	for i := 0; i < 2; i++ {
+		res, err := d.Detect(context.Background(), audioPath)
+		if err != nil {
+			t.Fatalf("detect %d: %v", i, err)
+		}
+		if !res.Instrumental {
+			t.Fatalf("decision %d: a permanently-absent configured vocal class must be dropped from the baseline, not fail the gate", i)
+		}
 	}
 }
 

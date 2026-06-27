@@ -70,3 +70,28 @@ def test_classify_returns_mean_and_max():
     assert abs(body["max"]["Singing"] - 0.7) < 1e-6
     assert abs(body["mean"]["Singing"] - (0.0 + 0.7 + 0.1) / 3) < 1e-6
     assert abs(body["max"]["Music"] - 0.9) < 1e-6
+
+
+def test_classify_returns_every_class_in_both_maps():
+    """Full-map contract: every configured class appears in BOTH mean and max.
+
+    Canticle's vocal gate (#402) fails safe to not-instrumental when a configured
+    vocal class is absent from a non-empty max map, treating absence as a partial
+    (contract-violating) response. That guard is only correct if this sidecar
+    returns the FULL class set - no thresholding or top-N - on every response.
+    Assert that contract here so a future change that drops zero-scored classes is
+    caught rather than silently turning Canticle's gate into "never instrumental".
+    """
+    from fastapi.testclient import TestClient
+
+    classes = ["Music", "Musical instrument", "Singing", "Speech"]
+    appmod._state["model"] = _StubModel()
+    appmod._state["classes"] = classes
+
+    client = TestClient(appmod.app)
+    resp = client.post("/classify", files={"file": ("s.wav", _wav_bytes(), "audio/wav")})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body["mean"].keys()) == set(classes)
+    assert set(body["max"].keys()) == set(classes)

@@ -43,7 +43,11 @@ LABEL org.opencontainers.image.source="https://github.com/sydlexius/canticle" \
       org.opencontainers.image.licenses="GPL-3.0" \
       net.unraid.docker.webui="http://[IP]:[PORT:50705]/"
 
-RUN apk add --no-cache bash ca-certificates ffmpeg su-exec tzdata && \
+# ffmpeg floor pinned to remediate CVE-2026-8461 (HIGH, fixed in Alpine 8.1.2-r0).
+# The explicit version also cache-busts the GHA BuildKit layer so the image scan
+# stops reusing a stale 8.1.1-r0 layer. Keep in sync with Dockerfile.goreleaser;
+# raise/drop the floor when the base apk index ships a newer ffmpeg by default.
+RUN apk add --no-cache bash ca-certificates "ffmpeg>=8.1.2-r0" su-exec tzdata && \
     apk upgrade --no-cache && \
     { grep -q "^mxlrcgo:" /etc/group || addgroup mxlrcgo; } && \
     { id -u mxlrcgo >/dev/null 2>&1 || adduser -u 99 -G mxlrcgo -s /bin/bash -D mxlrcgo; } && \

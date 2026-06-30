@@ -20,6 +20,41 @@ import (
 // before the marker line. The writer appends "\n" when writing the bare .txt form.
 const InstrumentalMarker = "♪ Instrumental ♪"
 
+// SidecarName derives the base file name WriteLRC writes for a track, applying the
+// same extension selection and base-name safety checks the writer uses. synced
+// selects the extension: ".lrc" for synced lyrics, ".txt" otherwise (unsynced
+// lyrics or the instrumental marker). When filename is non-empty it must be a
+// single path component (its extension is swapped to match the content type);
+// otherwise the name is derived from "artist - track" via Slugify. It returns an
+// error if the provided or derived name is not a safe base name (rejecting ".",
+// "..", any path separator, or an absolute path so a crafted name cannot traverse
+// out of the output dir). Reconcile (#405) uses this to locate the exact .txt
+// sidecar an instrumental marker would occupy, guaranteeing its path logic matches
+// the writer's rather than re-implementing it.
+func SidecarName(artist, track, filename string, synced bool) (string, error) {
+	ext := ".txt"
+	if synced {
+		ext = ".lrc"
+	}
+	var fn string
+	if filename != "" {
+		if filename == "." || filename == ".." || filename != filepath.Base(filename) ||
+			isUnsafeBaseName(filename) {
+			return "", fmt.Errorf("refusing to write: output filename %q is not a base name", filename)
+		}
+		fn = strings.TrimSuffix(filename, filepath.Ext(filename)) + ext
+	} else {
+		fn = Slugify(fmt.Sprintf("%s - %s", artist, track)) + ext
+	}
+	// Defense in depth: re-check the derived name after the extension swap or
+	// Slugify, keeping the base-name invariant local and failing closed if either
+	// branch ever regresses.
+	if isUnsafeBaseName(fn) {
+		return "", fmt.Errorf("refusing to write: derived output name %q is not a base name", fn)
+	}
+	return fn, nil
+}
+
 // Writer abstracts LRC file output.
 type Writer interface {
 	WriteLRC(song models.Song, filename string, outdir string) error
@@ -115,37 +150,11 @@ func (w *LRCWriter) WriteLRC(song models.Song, filename string, outdir string) (
 		return fmt.Errorf("nothing to save for %s - %s", song.Track.ArtistName, song.Track.TrackName)
 	}
 
-	ext := ".txt"
-	if synced {
-		ext = ".lrc"
-	}
-
-	var fn string
-	if filename != "" {
-		// The provided filename must be a single path component. Reject ".",
-		// "..", any path separator, or an absolute path so a crafted filename
-		// cannot traverse out of outdir (or target outdir/its parent) via the
-		// filepath.Join below -- defense in depth alongside the confinement-root
-		// re-resolution that follows. Validate the raw input here, before the
-		// extension swap turns "."/".." into harmless-looking ".lrc"/"..lrc".
-		if filename == "." || filename == ".." || filename != filepath.Base(filename) ||
-			isUnsafeBaseName(filename) {
-			return fmt.Errorf("refusing to write: output filename %q is not a base name", filename)
-		}
-		// In dir mode the scanner sets an explicit .lrc filename. Swap the
-		// extension to match the content type (.lrc only for synced lyrics).
-		fn = strings.TrimSuffix(filename, filepath.Ext(filename)) + ext
-	} else {
-		fn = Slugify(fmt.Sprintf("%s - %s", song.Track.ArtistName, song.Track.TrackName)) + ext
-	}
-
-	// Defense in depth: re-check the derived name after the extension swap or
-	// Slugify. The raw-input guard above covers the provided-filename branch and
-	// Slugify strips separators (see TestSlugifyNeverReturnsSeparatorsOrAbs), so
-	// this is expected to be unreachable -- but it keeps the base-name invariant
-	// local to the write and fails closed if either branch ever regresses.
-	if isUnsafeBaseName(fn) {
-		return fmt.Errorf("refusing to write: derived output name %q is not a base name", fn)
+	// Derive the sidecar base name (extension selection + base-name safety) via
+	// the shared helper so reconcile (#405) locates the exact same .txt path.
+	fn, err := SidecarName(song.Track.ArtistName, song.Track.TrackName, filename, synced)
+	if err != nil {
+		return err
 	}
 
 	// When the output directory falls under a confinement root, re-resolve and

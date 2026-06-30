@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -128,8 +129,21 @@ type ScanCmd struct {
 	NoDetectInstrumental bool     `arg:"--no-detect-instrumental" help:"force instrumental detection off for tracks enqueued by this scan, overriding per-library and global settings; mutually exclusive with --detect-instrumental"`
 	Libraries            []string `arg:"--only,separate" help:"limit scan to named or numeric libraries; repeat to select more than one. Distinct from subcommand --library flags (which target a single library row)"`
 
-	Results *ScanResultsCmd `arg:"subcommand:results" help:"list persisted scan_results rows"`
-	Clear   *ScanClearCmd   `arg:"subcommand:clear" help:"delete persisted scan_results rows for a library"`
+	Results   *ScanResultsCmd   `arg:"subcommand:results" help:"list persisted scan_results rows"`
+	Clear     *ScanClearCmd     `arg:"subcommand:clear" help:"delete persisted scan_results rows for a library"`
+	Reconcile *ScanReconcileCmd `arg:"subcommand:reconcile" help:"re-validate instrumental markers against the current detector and clear stale ones"`
+}
+
+// ScanReconcileCmd re-runs the audio detector over instrumental-tagged tracks and,
+// for tracks the current detector no longer classifies as instrumental, deletes the
+// exact-match instrumental .txt marker and re-queues the row. Dry-run unless --yes.
+type ScanReconcileCmd struct {
+	Library    string `arg:"--library" help:"limit to a single library (name or numeric id)" default:""`
+	All        bool   `arg:"--all" help:"re-infer every instrumental-tagged row; default re-infers only borderline / cross-version / un-scored rows via stored telemetry"`
+	Yes        bool   `arg:"--yes" help:"actually delete markers and re-queue rows (without it, prints what would change)"`
+	Limit      int    `arg:"--limit" help:"maximum number of candidate rows to process (0 = unlimited)" default:"0"`
+	Backup     string `arg:"--backup" help:"path for the JSONL backup of cleared rows (default: <db-dir>/reconcile-backup-<ts>.jsonl)" default:""`
+	ConfigPath string `arg:"--config" help:"path to config file (default: XDG)" default:""`
 }
 
 // ScanResultsCmd lists persisted scan results, optionally filtered.
@@ -1407,6 +1421,7 @@ func newAudioDetector(cfg config.Config, ffmpegPath string) (detector.Detector, 
 		FFmpegPath:            ffmpegPath,
 		FFprobePath:           cfg.InstrumentalDetector.FFprobePath,
 		CooldownSeconds:       cfg.InstrumentalDetector.CooldownSeconds,
+		Version:               version, // version is the package-level var in version.go mirroring appversion.Version
 	})
 }
 
@@ -1547,6 +1562,12 @@ func runScanCmd(ctx context.Context, out io.Writer, args ScanCmd) int {
 			sub.ConfigPath = args.ConfigPath
 		}
 		return runScanClear(ctx, out, sub)
+	case args.Reconcile != nil:
+		sub := *args.Reconcile
+		if sub.ConfigPath == "" {
+			sub.ConfigPath = args.ConfigPath
+		}
+		return runScanReconcile(ctx, out, sub)
 	default:
 		return runScan(ctx, out, args)
 	}
@@ -2734,4 +2755,272 @@ func runScanClear(ctx context.Context, out io.Writer, args ScanClearCmd) int {
 	}
 	_, _ = fmt.Fprintf(out, "deleted %d scan_results rows and canceled %d / updated %d work_queue rows for library %q (id=%d)\n", deleted, qDel, qUpd, lib.Name, lib.ID)
 	return 0
+}
+
+// runScanReconcile re-runs the audio detector over instrumental-tagged tracks and,
+// for any the current detector no longer classifies as instrumental, deletes the
+// exact-match instrumental .txt marker and re-queues the work_queue row so the
+// scheduler re-fetches it behind foreground work. Dry-run by default; --yes
+// applies. By default it re-infers only the telemetry-narrowed candidate set
+// (borderline / cross-version / un-scored rows); --all re-infers every tagged row.
+func runScanReconcile(ctx context.Context, out io.Writer, args ScanReconcileCmd) int {
+	cfg, err := config.Load(args.ConfigPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		return 1
+	}
+	sqlDB, err := db.Open(ctx, cfg.DB.Path)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		return 1
+	}
+	defer sqlDB.Close() //nolint:errcheck // best-effort close on shutdown
+
+	var libraryID *int64
+	var libLabel string
+	if strings.TrimSpace(args.Library) != "" {
+		lib, err := resolveLibrary(ctx, library.New(sqlDB), args.Library)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				_, _ = fmt.Fprintf(out, "library %q not found\n", args.Library)
+				return 1
+			}
+			slog.Error("failed to resolve library", "error", err)
+			return 1
+		}
+		id := lib.ID
+		libraryID = &id
+		libLabel = fmt.Sprintf(" (library %q, id=%d)", lib.Name, lib.ID)
+	}
+
+	// Bail before resolving (or auto-downloading) ffmpeg when no classifier is
+	// configured: reconcile is inert without the detector.
+	if strings.TrimSpace(cfg.InstrumentalDetector.ClassifierURL) == "" {
+		_, _ = fmt.Fprintln(out, "instrumental detector is not configured (set instrumental_detector.classifier_url); cannot reconcile")
+		return 1
+	}
+
+	// Build the detector from the same config/ffmpeg/cooldown wiring serve uses, so
+	// reconcile inherits the cooldown and low-priority ffmpeg sampling. The detector
+	// is process-local: it does not coordinate cooldown with a concurrently running
+	// serve process against the same classifier (queue-level starvation is instead
+	// guaranteed by the deferred + priority=-100 reset).
+	ffmpegPath, err := resolveFFmpeg(ctx, cfg)
+	if err != nil {
+		slog.Error("failed to resolve ffmpeg", "error", err)
+		return 1
+	}
+	det, err := newAudioDetector(cfg, ffmpegPath)
+	if err != nil {
+		slog.Error("failed to construct audio detector", "error", err)
+		return 1
+	}
+	if det == nil {
+		_, _ = fmt.Fprintln(out, "instrumental detector is not configured (set instrumental_detector.classifier_url); cannot reconcile")
+		return 1
+	}
+
+	workQueue := queue.NewDBQueue(sqlDB)
+	workQueue.SetRandomized(cfg.Queue.Randomize)
+
+	total, err := workQueue.CountInstrumental(ctx)
+	if err != nil {
+		slog.Error("failed to count instrumental rows", "error", err)
+		return 1
+	}
+	candidates, err := workQueue.ListInstrumental(ctx, queue.ListInstrumentalOptions{
+		LibraryID:      libraryID,
+		Limit:          args.Limit,
+		All:            args.All,
+		CurrentVersion: version,
+	})
+	if err != nil {
+		slog.Error("failed to list instrumental rows", "error", err)
+		return 1
+	}
+	mode := "telemetry-narrowed"
+	if args.All {
+		mode = "full"
+	}
+	suffix := ""
+	if !args.Yes {
+		suffix = " [dry run; pass --yes to apply]"
+	}
+	_, _ = fmt.Fprintf(out, "reconcile%s: %d instrumental-tagged rows total; %d candidate(s) to re-infer (%s mode)%s\n",
+		libLabel, total, len(candidates), mode, suffix)
+
+	var (
+		checked, confirmed, disagreed    int
+		sidecarsDeleted, rowsReset       int
+		skippedNoSource, skippedNoMarker int
+		errCount                         int
+	)
+
+	backupPath := args.Backup
+	if backupPath == "" {
+		backupPath = filepath.Join(filepath.Dir(cfg.DB.Path), fmt.Sprintf("reconcile-backup-%s.jsonl", time.Now().UTC().Format("20060102-150405")))
+	}
+	var backup *os.File
+	defer func() {
+		if backup != nil {
+			_ = backup.Close()
+		}
+	}()
+
+	for _, item := range candidates {
+		if err := ctx.Err(); err != nil {
+			_, _ = fmt.Fprintf(out, "interrupted: %v\n", err)
+			break
+		}
+		src := strings.TrimSpace(item.Inputs.SourcePath)
+		if src == "" {
+			skippedNoSource++
+			continue
+		}
+		res, derr := det.Detect(ctx, src)
+		if derr != nil {
+			slog.Warn("reconcile: detection failed; skipping row", "id", item.ID, "error", derr)
+			errCount++
+			continue
+		}
+		checked++
+		if res.Instrumental {
+			confirmed++
+			continue
+		}
+		disagreed++
+
+		markerPaths := exactInstrumentalSidecars(item)
+		if len(markerPaths) == 0 {
+			// Disagreement, but no on-disk file is exactly the instrumental marker
+			// (missing, edited, or genuine unsynced lyrics). Leave the row untouched
+			// so reconcile never clears a verdict whose marker it did not remove and
+			// never clobbers real lyrics.
+			skippedNoMarker++
+			slog.Info("reconcile: disagreement but no exact instrumental-marker sidecar; leaving row untouched", "id", item.ID, "source", src)
+			continue
+		}
+
+		if !args.Yes {
+			_, _ = fmt.Fprintf(out, "would clear: id=%d  %s  -> delete %d marker(s) + re-queue\n", item.ID, src, len(markerPaths))
+			continue
+		}
+
+		// Apply order: backup first (abort the row's mutation if it fails), then
+		// delete markers, then reset the row.
+		if backup == nil {
+			f, err := os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // G304: backupPath is operator-supplied (--backup) or derived from the configured db dir, not untrusted input
+			if err != nil {
+				slog.Error("failed to open reconcile backup file", "path", backupPath, "error", err)
+				return 1
+			}
+			backup = f
+		}
+		if err := appendReconcileBackup(backup, item, markerPaths, res); err != nil {
+			slog.Error("reconcile: backup write failed; skipping row mutation", "id", item.ID, "error", err)
+			errCount++
+			continue
+		}
+		for _, p := range markerPaths {
+			if err := os.Remove(p); err != nil {
+				slog.Warn("reconcile: failed to delete marker; continuing", "id", item.ID, "path", p, "error", err)
+				errCount++
+				continue
+			}
+			sidecarsDeleted++
+		}
+		if n, err := workQueue.ResetInstrumental(ctx, item.ID); err != nil {
+			slog.Warn("reconcile: failed to reset row (marker already deleted)", "id", item.ID, "error", err)
+			errCount++
+		} else {
+			rowsReset += int(n)
+		}
+	}
+
+	_, _ = fmt.Fprintf(out, "reconcile done: checked=%d confirmed=%d disagreed=%d markers-deleted=%d rows-reset=%d skipped(no-source=%d,no-marker=%d) errors=%d\n",
+		checked, confirmed, disagreed, sidecarsDeleted, rowsReset, skippedNoSource, skippedNoMarker, errCount)
+	if args.Yes && rowsReset > 0 {
+		_, _ = fmt.Fprintf(out, "backup of cleared rows written to %s\n", backupPath)
+	}
+	if errCount > 0 {
+		return 1
+	}
+	return 0
+}
+
+// exactInstrumentalSidecars returns the .txt sidecar paths for item whose on-disk
+// content is exactly the instrumental marker. Paths derived via lyrics.SidecarName
+// (the same logic the writer uses) that are missing, unreadable, or do not match
+// the marker exactly are omitted, so genuine unsynced .txt lyrics are never
+// returned for deletion.
+func exactInstrumentalSidecars(item queue.WorkItem) []string {
+	paths := item.Inputs.OutputPaths
+	if len(paths) == 0 {
+		paths = []models.OutputPath{{Outdir: item.Inputs.Outdir, Filename: item.Inputs.Filename}}
+	}
+	var matched []string
+	for _, op := range paths {
+		name, err := lyrics.SidecarName(item.Inputs.Track.ArtistName, item.Inputs.Track.TrackName, op.Filename, false)
+		if err != nil {
+			continue
+		}
+		p := filepath.Join(op.Outdir, name)
+		if isExactInstrumentalMarker(p) {
+			matched = append(matched, p)
+		}
+	}
+	return matched
+}
+
+// isExactInstrumentalMarker reports whether the file at path exists and its content
+// trimmed of trailing whitespace equals lyrics.InstrumentalMarker exactly - a
+// stricter guard than a substring check so reconcile never deletes a .txt that
+// carries real unsynced lyrics.
+func isExactInstrumentalMarker(path string) bool {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: path is derived from the queue row's stored output dir + the writer's own SidecarName; content is verified here before any deletion
+	if err != nil {
+		return false
+	}
+	return strings.TrimRight(string(b), " \t\r\n") == lyrics.InstrumentalMarker
+}
+
+// reconcileBackupRecord is one JSONL line capturing a cleared row so the operation
+// is restorable.
+type reconcileBackupRecord struct {
+	WorkItemID   int64                  `json:"work_item_id"`
+	Inputs       models.Inputs          `json:"inputs"`
+	DeletedPaths []string               `json:"deleted_paths"`
+	NewResult    reconcileVerdictRecord `json:"new_result"`
+}
+
+// reconcileVerdictRecord is the detector verdict that justified clearing a row.
+type reconcileVerdictRecord struct {
+	Instrumental      bool    `json:"instrumental"`
+	MusicSum          float64 `json:"music_sum"`
+	VocalPeak         float64 `json:"vocal_peak"`
+	SpeechMean        float64 `json:"speech_mean"`
+	WinningVocalClass string  `json:"winning_vocal_class"`
+}
+
+func appendReconcileBackup(f *os.File, item queue.WorkItem, deleted []string, res detector.Result) error {
+	rec := reconcileBackupRecord{
+		WorkItemID:   item.ID,
+		Inputs:       item.Inputs,
+		DeletedPaths: deleted,
+		NewResult: reconcileVerdictRecord{
+			Instrumental:      res.Instrumental,
+			MusicSum:          res.Confidence,
+			VocalPeak:         res.VocalConfidence,
+			SpeechMean:        res.SpeechConfidence,
+			WinningVocalClass: res.WinningVocalClass,
+		},
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("marshal reconcile backup record: %w", err)
+	}
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("write reconcile backup record: %w", err)
+	}
+	return nil
 }

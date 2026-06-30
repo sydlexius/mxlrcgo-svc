@@ -96,12 +96,15 @@ func TestDetectInstrumental_WantedButNoClassifierLoudSkips(t *testing.T) {
 
 	w := New(&fakeQueue{}, &fakeCache{}, &fakeFetcher{}, &fakeWriter{})
 	// no EnableAudioDetector: classifier unconfigured
-	instrumental, err := w.detectInstrumental(context.Background(), detectItem(303, boolPtr(true)))
+	res, ran, err := w.detectInstrumental(context.Background(), detectItem(303, boolPtr(true)))
 	if err != nil {
 		t.Fatalf("detectInstrumental err = %v; want nil (non-fatal loud-skip)", err)
 	}
-	if instrumental {
+	if res.Instrumental {
 		t.Error("instrumental = true; want false when no classifier configured")
+	}
+	if ran {
+		t.Error("ran = true; want false when no classifier configured (loud-skip path)")
 	}
 	logged := buf.String()
 	if !strings.Contains(logged, "level=ERROR") || !strings.Contains(logged, "no classifier") {

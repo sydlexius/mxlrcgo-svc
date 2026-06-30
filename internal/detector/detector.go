@@ -91,6 +91,14 @@ type Result struct {
 	// (the speech score). A high value means speech is sustained across the
 	// sample (a spoken-word track), as opposed to a brief incidental transient.
 	SpeechConfidence float64
+	// WinningVocalClass is the name of the configured VocalClass that produced
+	// VocalConfidence (the vocal peak). Empty when no vocal class scored or when
+	// the sidecar returns no max map (legacy sidecar).
+	WinningVocalClass string
+	// Version is the detector version string populated from Config.Version at
+	// construction time, sourced from the app version (internal/version). Empty
+	// when the detector was constructed without a version (e.g. in tests).
+	Version string
 	// Classes is the per-class MEAN probability map from the classified sample,
 	// retained for debugging and observability.
 	Classes map[string]float64
@@ -131,6 +139,12 @@ type Config struct {
 	FFmpegPath          string
 	FFprobePath         string
 	CooldownSeconds     int
+	// Version is stamped onto every Result.Version returned by Detect. It is
+	// sourced from the app version (internal/version) at detector construction
+	// time in the commands layer, so each persisted telemetry row records which
+	// app build produced the decision. Empty is valid (leaves Result.Version
+	// empty); tests that do not need version tracking can omit it.
+	Version string
 }
 
 // clampSampleDuration clamps d to [minSampleDurationSeconds, maxSampleDurationSeconds].

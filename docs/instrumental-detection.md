@@ -237,9 +237,68 @@ verdict, so you can see *why* a track was or was not marked.
   the conservative `0.03-0.05` borderline band (by design) or other separately
   tracked refinements (cross-version model drift). `Speech` activation on
   non-lyrical audio is now handled by the dedicated sustained-mean speech gate
-  (#403). Persisting per-decision telemetry (scores + model version) for
-  auditability is a separate follow-up.
+  (#403). Per-decision telemetry (the scores, the winning vocal class, and the
+  detector version) is persisted on the `work_queue` row - see *Decision
+  telemetry* below.
 - **Re-classifying / clearing stale markers.** After changing thresholds or
-  fixing the sidecar, force a re-check of affected tracks with `--update` (a full
-  re-fetch). Instrumental markers are otherwise sticky - `--upgrade` skips them
-  by design.
+  fixing the sidecar, re-validate existing markers with `scan reconcile` (see
+  below) rather than a blanket `--update`. Instrumental markers are otherwise
+  sticky - `--upgrade` skips them by design.
+
+### Decision telemetry on `work_queue`
+
+When the detector renders a verdict it stamps the decision inputs onto the
+`work_queue` row (migration 025), alongside the boolean `instrumental_result`, in
+a single atomic update:
+
+| column | meaning |
+| --- | --- |
+| `music_sum` | summed music-gate score (`Result.Confidence`) |
+| `vocal_peak` | peak sung-vocal score (`Result.VocalConfidence`) |
+| `speech_mean` | summed speech-gate score (`Result.SpeechConfidence`) |
+| `vocal_class` | the configured vocal class that produced `vocal_peak` (empty when none scored) |
+| `detector_version` | the Canticle app version (`internal/version`) at decision time |
+
+All five are **nullable**: `NULL` means detection did not run for that row
+(detection disabled, no source path, or a row written before migration 025). They
+make borderline review and drift detection a query rather than a 40-minute
+re-inference pass:
+
+```sql
+-- borderline sung-vocal tracks worth a human look
+SELECT id, source_path, vocal_peak FROM work_queue
+WHERE instrumental_result = 1 AND vocal_peak BETWEEN 0.03 AND 0.05;
+
+-- markers written by an older detector build (model/threshold drift)
+SELECT id, source_path, detector_version FROM work_queue
+WHERE instrumental_result = 1 AND detector_version <> '<current-version>';
+```
+
+> The version is the Canticle app version, which captures Go-side gate/threshold
+> drift. If sidecar/model identity is wanted later, derive it from the sidecar's
+> `YAMNET_HANDLE` config or image tag rather than a new `/health` field.
+
+### Reconciling stale markers (`scan reconcile`)
+
+`scan reconcile` re-runs the detector over instrumental-tagged tracks and, for any
+the current detector no longer classifies as instrumental, deletes the exact
+instrumental `.txt` marker and re-queues the row so the scheduler re-fetches it.
+
+- **Dry-run by default.** It prints what would change; pass `--yes` to apply.
+- **Cheap by default.** Using the telemetry above, it re-infers only the
+  *candidate* set - borderline `vocal_peak`/`speech_mean`, cross-version, or
+  un-scored (pre-telemetry) rows - instead of every tagged track. `--all` forces a
+  full re-inference of every `instrumental_result = 1` row.
+- **Safe deletes.** A `.txt` is removed only when its content is *exactly* the
+  instrumental marker, so genuine unsynced `.txt` lyrics are never touched. Every
+  cleared row is written to a JSONL backup first (`--backup <path>`, default
+  `<db-dir>/reconcile-backup-<timestamp>.jsonl`).
+- **No starvation.** Re-queued rows are deferred at `priority = -100`, so a bulk
+  reconcile is dequeued strictly behind foreground work.
+- `--library <name|id>` scopes the run; `--limit <n>` caps it.
+
+```sh
+mxlrcgo-svc scan reconcile                 # dry run, narrowed candidate set
+mxlrcgo-svc scan reconcile --yes           # apply
+mxlrcgo-svc scan reconcile --all --yes     # re-infer every tagged track
+```

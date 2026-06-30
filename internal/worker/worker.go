@@ -36,10 +36,12 @@ type Queue interface {
 	// marking the track as terminal. The scan layer will show the track as done
 	// (not pending) so it is not mistaken for an in-flight item.
 	RetireMiss(ctx context.Context, id int64) (queue.WorkItem, error)
-	// SetInstrumentalResult stamps the audio-detection outcome onto a work_queue
-	// row. result=1 means instrumental confirmed; result=0 means not instrumental.
-	// Call before Complete while the row is still in processing status.
-	SetInstrumentalResult(ctx context.Context, id int64, result int) error
+	// SetInstrumentalResult stamps the audio-detection outcome and telemetry onto
+	// a work_queue row. result=1 means instrumental confirmed; result=0 means not
+	// instrumental. tel carries the five score fields written atomically with
+	// instrumental_result. Call before Complete while the row is still in
+	// processing status.
+	SetInstrumentalResult(ctx context.Context, id int64, result int, tel queue.InstrumentalTelemetry) error
 	// SetOutcomeType records what was actually written for a completed row
 	// ("synced" | "unsynced" | "instrumental"), so reports classify by the real
 	// outcome instead of the enqueue-time output_paths filename, which is always
@@ -681,16 +683,25 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			// misses (no lyrics and not already flagged instrumental). Errors are
 			// non-fatal: starvation of the detector sidecar is acceptable; the miss
 			// path continues unchanged when the detector is absent or fails.
-			instrumental, detErr := w.detectInstrumental(ctx, item)
+			detResult, detRan, detErr := w.detectInstrumental(ctx, item)
 			if detErr != nil {
 				slog.Warn("worker instrumental detection failed; treating as miss", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "error", detErr)
 			}
-			if instrumental {
+			if detResult.Instrumental {
 				slog.Info("worker audio detector: instrumental track confirmed; writing marker", "id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName, "kind", "instrumental")
-				// Stamp the audio-detection result (1 = instrumental) on the queue row
-				// before Complete so the /metrics gauge reflects the outcome durably.
-				// Errors are non-fatal: a failed stamp is not worth aborting the write.
-				if stampErr := w.queue.SetInstrumentalResult(context.WithoutCancel(ctx), item.ID, 1); stampErr != nil {
+				// Stamp the audio-detection result (1 = instrumental) and telemetry on
+				// the queue row before Complete so the /metrics gauge reflects the
+				// outcome durably and the scores are queryable without re-running
+				// inference. Errors are non-fatal: a failed stamp is not worth aborting
+				// the write.
+				tel := queue.InstrumentalTelemetry{
+					MusicSum:        detResult.Confidence,
+					VocalPeak:       detResult.VocalConfidence,
+					SpeechMean:      detResult.SpeechConfidence,
+					VocalClass:      detResult.WinningVocalClass,
+					DetectorVersion: detResult.Version,
+				}
+				if stampErr := w.queue.SetInstrumentalResult(context.WithoutCancel(ctx), item.ID, 1, tel); stampErr != nil {
 					slog.Warn("worker instrumental detection: stamp result failed; continuing", "id", item.ID, "error", stampErr)
 				}
 				instrumentalSong := models.Song{
@@ -739,17 +750,21 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 				w.consecutiveFailures = 0
 				return nil
 			}
-			// Detection ran but the track is not instrumental: stamp result=0 so the
-			// row is distinguishable from "never detected" (NULL).
-			if detErr == nil {
-				detect := w.detectInstrumentalDefault
-				if item.DetectInstrumental != nil {
-					detect = *item.DetectInstrumental
+			// Detection ran but the track is not instrumental: stamp result=0 and
+			// the telemetry so the row is distinguishable from "never detected"
+			// (NULL) and the borderline scores are queryable. Only stamp when
+			// detection actually ran (detRan=true); a disabled/no-source/no-detector
+			// path leaves the columns NULL.
+			if detErr == nil && detRan {
+				tel := queue.InstrumentalTelemetry{
+					MusicSum:        detResult.Confidence,
+					VocalPeak:       detResult.VocalConfidence,
+					SpeechMean:      detResult.SpeechConfidence,
+					VocalClass:      detResult.WinningVocalClass,
+					DetectorVersion: detResult.Version,
 				}
-				if detect && w.audioDetector != nil && strings.TrimSpace(item.Inputs.SourcePath) != "" {
-					if stampErr := w.queue.SetInstrumentalResult(context.WithoutCancel(ctx), item.ID, 0); stampErr != nil {
-						slog.Warn("worker instrumental detection: stamp non-instrumental result failed; continuing", "id", item.ID, "error", stampErr)
-					}
+				if stampErr := w.queue.SetInstrumentalResult(context.WithoutCancel(ctx), item.ID, 0, tel); stampErr != nil {
+					slog.Warn("worker instrumental detection: stamp non-instrumental result failed; continuing", "id", item.ID, "error", stampErr)
 				}
 			}
 			if derr := w.requeueDeferred(ctx, item, err); derr != nil {
@@ -865,32 +880,37 @@ func (w *Worker) verify(ctx context.Context, item queue.WorkItem, song models.So
 // detectInstrumental invokes the audio detector on the item's source path when
 // instrumental detection is enabled for this item. The decision is resolved from
 // the per-item stamp (item.DetectInstrumental) falling back to the global default
-// when nil (NULL rows). It returns (false, nil) when detection is off for the
-// item or the source path is absent. When an item requests detection but no
-// classifier is configured, it logs an error and proceeds without detection
-// (loud-skip, never a silent no-op). Any detector error is returned non-fatally:
-// the caller logs a warning and falls through to normal miss handling.
-func (w *Worker) detectInstrumental(ctx context.Context, item queue.WorkItem) (bool, error) {
+// when nil (NULL rows). It returns (Result{}, false, nil) when detection is off
+// for the item or the source path is absent - the false "ran" flag tells the
+// caller not to stamp telemetry (keeping the five telemetry columns NULL, which
+// preserves the pre-telemetry / detection-disabled semantics). When an item
+// requests detection but no classifier is configured, it logs an error and
+// proceeds without detection (loud-skip, never a silent no-op). Any detector
+// error is returned non-fatally: the caller logs a warning and falls through to
+// normal miss handling. The returned Result carries the full telemetry (scores +
+// winning class + version) on success; it is zero-valued when ran=false or on
+// error.
+func (w *Worker) detectInstrumental(ctx context.Context, item queue.WorkItem) (detector.Result, bool, error) {
 	detect := w.detectInstrumentalDefault
 	if item.DetectInstrumental != nil {
 		detect = *item.DetectInstrumental
 	}
 	if !detect {
-		return false, nil
+		return detector.Result{}, false, nil
 	}
 	if w.audioDetector == nil {
 		slog.Error("instrumental detection requested for item but no classifier is configured; skipping detection",
 			"id", item.ID, "artist", item.Inputs.Track.ArtistName, "track", item.Inputs.Track.TrackName)
-		return false, nil
+		return detector.Result{}, false, nil
 	}
 	if strings.TrimSpace(item.Inputs.SourcePath) == "" {
-		return false, nil
+		return detector.Result{}, false, nil
 	}
 	res, err := w.audioDetector.Detect(ctx, item.Inputs.SourcePath)
 	if err != nil {
-		return false, err
+		return detector.Result{}, false, err
 	}
-	return res.Instrumental, nil
+	return res, true, nil
 }
 
 // song looks up or fetches lyrics for track. The caller is responsible for

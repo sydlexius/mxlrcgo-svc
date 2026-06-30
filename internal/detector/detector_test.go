@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -1142,5 +1144,141 @@ func TestLegacyVocalSpeechDeDupBehavior(t *testing.T) {
 	}
 	if res.Instrumental {
 		t.Fatalf("sustained Speech mean %.3f >= 0.20 must block even with legacy config", res.SpeechConfidence)
+	}
+}
+
+// TestDetectWinningVocalClassCaptured verifies that Result.WinningVocalClass is
+// set to the vocal class that produced the highest peak and left empty when no
+// vocal class scored.
+func TestDetectWinningVocalClassCaptured(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"mean": map[string]float64{"Music": 0.93, "Musical instrument": 0.05, "Singing": 0.002, "Vocal music": 0.001},
+			// Vocal music peaks higher than Singing so it is the winner.
+			"max": map[string]float64{"Music": 1.0, "Singing": 0.01, "Vocal music": 0.03},
+		})
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t),
+		InstrumentalClasses: []string{"Music", "Musical instrument"},
+		VocalClasses:        []string{"Singing", "Vocal music"}, VocalMaxConfidence: 0.05})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	res, err := d.Detect(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	// vocal_peak = 0.03 (Vocal music wins over Singing 0.01); below 0.05 -> instrumental.
+	if res.WinningVocalClass != "Vocal music" {
+		t.Errorf("WinningVocalClass = %q; want Vocal music (highest peak)", res.WinningVocalClass)
+	}
+	if res.VocalConfidence != 0.03 {
+		t.Errorf("VocalConfidence = %v; want 0.03", res.VocalConfidence)
+	}
+}
+
+// TestDetectWinningVocalClassEmptyWhenNoMaxMap verifies that WinningVocalClass
+// is empty when the sidecar returns no max map (legacy sidecar path).
+func TestDetectWinningVocalClassEmptyWhenNoMaxMap(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Legacy flat-map sidecar: no "max" key, so Max will be nil.
+		_ = json.NewEncoder(w).Encode(map[string]float64{"Music": 0.95, "Singing": 0.4})
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t),
+		InstrumentalClasses: []string{"Music"},
+		VocalClasses:        []string{"Singing"}, VocalMaxConfidence: 0.05})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	res, err := d.Detect(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	// No max map -> vocal gate cannot run -> not instrumental, no winning class.
+	if res.WinningVocalClass != "" {
+		t.Errorf("WinningVocalClass = %q; want empty when no max map", res.WinningVocalClass)
+	}
+}
+
+// TestDetectVersionPropagatedToResult verifies that Config.Version is carried
+// through NewHTTPDetector onto every Result returned by Detect.
+func TestDetectVersionPropagatedToResult(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"mean": map[string]float64{"Music": 0.95, "Singing": 0.001},
+			"max":  map[string]float64{"Music": 1.0, "Singing": 0.005},
+		})
+	}))
+	defer srv.Close()
+	const wantVersion = "v1.2.3-test"
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t),
+		InstrumentalClasses: []string{"Music"},
+		VocalClasses:        []string{"Singing"}, VocalMaxConfidence: 0.05,
+		Version: wantVersion})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+	res, err := d.Detect(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if res.Version != wantVersion {
+		t.Errorf("Result.Version = %q; want %q", res.Version, wantVersion)
+	}
+}
+
+// TestDetectLogLineIncludesVocalClassAndVersion verifies the slog.Info decision
+// line emitted by Detect includes vocal_class and detector_version attributes.
+func TestDetectLogLineIncludesVocalClassAndVersion(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "song.flac")
+	if err := os.WriteFile(audioPath, []byte("a"), 0600); err != nil {
+		t.Fatalf("write audio: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"mean": map[string]float64{"Music": 0.95, "Singing": 0.001},
+			"max":  map[string]float64{"Music": 1.0, "Singing": 0.008},
+		})
+	}))
+	defer srv.Close()
+	d, err := NewHTTPDetector(Config{ClassifierURL: srv.URL, FFmpegPath: fakeFFmpeg(t),
+		InstrumentalClasses: []string{"Music"},
+		VocalClasses:        []string{"Singing"}, VocalMaxConfidence: 0.05,
+		Version: "v9.9.9"})
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+
+	// Capture slog output via a text handler writing to a buffer, then assert the
+	// new structured attributes appear on the decision line.
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(prev)
+
+	if _, err := d.Detect(context.Background(), audioPath); err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "vocal_class=Singing") {
+		t.Errorf("log line missing vocal_class=Singing; got: %s", logged)
+	}
+	if !strings.Contains(logged, "detector_version=v9.9.9") {
+		t.Errorf("log line missing detector_version=v9.9.9; got: %s", logged)
 	}
 }

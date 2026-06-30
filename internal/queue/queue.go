@@ -1098,15 +1098,49 @@ func (q *DBQueue) SetProviderLane(ctx context.Context, id int64, lane string) er
 	return nil
 }
 
-// SetInstrumentalResult stamps the audio-detection outcome onto a work_queue row.
-// result=1 means the audio detector confirmed instrumental; result=0 means the
-// detector ran but the track is not instrumental. Call before Complete so the row
-// is still in 'processing' status (the UPDATE is a no-op on any other status,
-// which is benign).
-func (q *DBQueue) SetInstrumentalResult(ctx context.Context, id int64, result int) error {
+// InstrumentalTelemetry carries the five score fields from an audio detection
+// run. All fields are set when detection ran; the zero value (empty struct) is
+// used on the not-ran path, keeping the five DB columns NULL (pre-telemetry /
+// detection-disabled semantics are preserved by the caller passing no telemetry
+// struct in that case).
+type InstrumentalTelemetry struct {
+	// MusicSum is the summed instrumental-class MEAN probability (music gate score).
+	MusicSum float64
+	// VocalPeak is the peak (max-over-frames) of the winning vocal class (sung-vocal gate score).
+	VocalPeak float64
+	// SpeechMean is the summed frame-MEAN of speech classes (speech gate score).
+	SpeechMean float64
+	// VocalClass is the name of the vocal class that produced VocalPeak. Empty
+	// when no vocal class scored or when the sidecar returned no max map.
+	VocalClass string
+	// DetectorVersion is the app version string at detection time (internal/version.Version).
+	DetectorVersion string
+}
+
+// SetInstrumentalResult stamps the audio-detection outcome and telemetry onto a
+// work_queue row in a single UPDATE. result=1 means the audio detector confirmed
+// instrumental; result=0 means the detector ran but the track is not instrumental.
+// The five telemetry fields are written atomically with instrumental_result so
+// each persisted row records the scores that produced the decision. Call before
+// Complete while the row is still in 'processing' status (the UPDATE is a no-op
+// on any other status, which is benign).
+func (q *DBQueue) SetInstrumentalResult(ctx context.Context, id int64, result int, tel InstrumentalTelemetry) error {
 	_, err := q.db.ExecContext(ctx,
-		`UPDATE work_queue SET instrumental_result = ? WHERE id = ?`,
-		result, id,
+		`UPDATE work_queue
+         SET instrumental_result = ?,
+             music_sum = ?,
+             vocal_peak = ?,
+             speech_mean = ?,
+             vocal_class = ?,
+             detector_version = ?
+         WHERE id = ?`,
+		result,
+		tel.MusicSum,
+		tel.VocalPeak,
+		tel.SpeechMean,
+		tel.VocalClass,
+		tel.DetectorVersion,
+		id,
 	)
 	if err != nil {
 		return fmt.Errorf("queue: set instrumental result for id %d: %w", id, err)
@@ -1190,6 +1224,194 @@ func (q *DBQueue) CountInstrumental(ctx context.Context) (int64, error) {
 		`SELECT COUNT(*) FROM work_queue WHERE instrumental_result = 1`,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("queue: count instrumental: %w", err)
+	}
+	return n, nil
+}
+
+// Borderline bands for the reconcile telemetry prefilter. A row whose vocal_peak
+// sits just above the default vocal gate (detector defaultVocalMaxConfidence =
+// 0.03) or whose speech_mean sits just below the default speech gate
+// (defaultSpeechMaxConfidence = 0.20) is "borderline": small score drift could
+// flip the verdict, so it is worth re-inferring. Bounds are constants so they can
+// be tuned in one place; reconcile always re-infers the narrowed set to confirm a
+// disagreement before clearing anything.
+const (
+	reconcileVocalBorderlineLo  = 0.03
+	reconcileVocalBorderlineHi  = 0.05
+	reconcileSpeechBorderlineLo = 0.15
+	reconcileSpeechBorderlineHi = 0.20
+)
+
+// instrumentalNarrowedPredicate builds the telemetry-narrowed candidate filter
+// appended after "instrumental_result = 1". A flagged row is a reconcile candidate
+// when it is borderline (vocal_peak or speech_mean in band), cross-version
+// (detector_version differs from currentVersion), or un-scored (any telemetry
+// column NULL, e.g. a pre-#404 marker written before the telemetry columns
+// existed). currentVersion is the value #404 stamps into detector_version
+// (internal/version.Version). The returned clause uses only literal SQL and
+// placeholders, so it is safe to concatenate.
+func instrumentalNarrowedPredicate(currentVersion string) (clause string, args []any) {
+	clause = ` AND (
+            (vocal_peak BETWEEN ? AND ?)
+            OR (speech_mean BETWEEN ? AND ?)
+            OR detector_version IS NULL OR detector_version <> ?
+            OR music_sum IS NULL OR vocal_peak IS NULL OR speech_mean IS NULL OR vocal_class IS NULL
+        )`
+	args = []any{
+		reconcileVocalBorderlineLo, reconcileVocalBorderlineHi,
+		reconcileSpeechBorderlineLo, reconcileSpeechBorderlineHi,
+		currentVersion,
+	}
+	return clause, args
+}
+
+// ListInstrumentalOptions controls ListInstrumental and CountInstrumentalNarrowed.
+type ListInstrumentalOptions struct {
+	// LibraryID, when non-nil, scopes results to rows linked to that library via
+	// the work_queue_scan_results junction.
+	LibraryID *int64
+	// Limit caps the number of returned rows when > 0.
+	Limit int
+	// All returns the entire instrumental_result = 1 population, bypassing the
+	// telemetry-narrowed prefilter. CurrentVersion is then irrelevant.
+	All bool
+	// CurrentVersion is the detector version (internal/version.Version) the
+	// cross-version prefilter compares stored detector_version against. Required
+	// when All is false.
+	CurrentVersion string
+}
+
+// ListInstrumental returns work_queue rows flagged instrumental
+// (instrumental_result = 1), hydrated with full Inputs (SourcePath and
+// OutputPaths) so reconcile can locate audio sources and their sidecars. By
+// default only the telemetry-narrowed candidate set is returned (borderline /
+// cross-version / un-scored rows); set opts.All for the full flagged population.
+// Read-only.
+func (q *DBQueue) ListInstrumental(ctx context.Context, opts ListInstrumentalOptions) (items []WorkItem, retErr error) {
+	// status = 'done' restricts to COMPLETED instrumental rows: the worker stamps
+	// instrumental_result = 1 just before Complete, so a still-'processing' row could
+	// otherwise be picked up and cleared mid-write.
+	const baseQuery = `SELECT id, artist, title, album, album_artist, outdir, filename, source_path, status, priority, attempts,
+                       miss_count, providers_version, detect_instrumental, next_attempt_at, last_error, created_at, updated_at, completed_at, output_paths, scan_result_id
+                       FROM work_queue WHERE instrumental_result = 1 AND status = 'done'`
+	const orderClause = ` ORDER BY priority DESC, created_at ASC, id ASC`
+	query := baseQuery
+	var args []any
+	if !opts.All {
+		clause, predArgs := instrumentalNarrowedPredicate(opts.CurrentVersion)
+		query += clause
+		args = append(args, predArgs...)
+	}
+	libClause, libArgs := recheckLibraryClause(opts.LibraryID)
+	query += libClause
+	args = append(args, libArgs...)
+	query += orderClause
+	if opts.Limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, opts.Limit)
+	}
+
+	rows, err := q.db.QueryContext(ctx, query, args...) //nolint:gosec // G202: all concatenated fragments are package constants / recheckLibraryClause's fixed clause; never user-built SQL
+	if err != nil {
+		return nil, fmt.Errorf("queue: list instrumental: %w", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("queue: close list instrumental rows: %w", err)
+		}
+	}()
+	for rows.Next() {
+		item, err := scanWorkItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("queue: list instrumental scan: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue: list instrumental rows: %w", err)
+	}
+	return items, nil
+}
+
+// CountInstrumentalNarrowed returns how many instrumental_result = 1 rows the
+// telemetry-narrowed prefilter would select (the same predicate ListInstrumental
+// applies when opts.All is false), so reconcile can report prefiltered-vs-total
+// scope without materializing rows.
+func (q *DBQueue) CountInstrumentalNarrowed(ctx context.Context, currentVersion string, libraryID *int64) (int64, error) {
+	clause, args := instrumentalNarrowedPredicate(currentVersion)
+	libClause, libArgs := recheckLibraryClause(libraryID)
+	// status = 'done' matches ListInstrumental: count only completed instrumental rows.
+	query := `SELECT COUNT(*) FROM work_queue WHERE instrumental_result = 1 AND status = 'done'` + clause + libClause
+	allArgs := append(args, libArgs...)
+	var n int64
+	if err := q.db.QueryRowContext(ctx, query, allArgs...).Scan(&n); err != nil { //nolint:gosec // G202: fragments are package constants / fixed library clause, not user input
+		return 0, fmt.Errorf("queue: count instrumental narrowed: %w", err)
+	}
+	return n, nil
+}
+
+// ResetInstrumental clears an instrumental verdict and its telemetry and re-queues
+// the row so the running scheduler re-fetches it behind foreground work. Modeled on
+// RecheckRetired: in one transaction the row is set to status='deferred',
+// priority=-100 (dequeue-eligible but strictly behind priority>=0 foreground work -
+// the queue-level starvation guard), with instrumental_result, outcome_type,
+// completed_at and all five telemetry columns cleared to NULL, last_error cleared,
+// and next_attempt_at = now. Guarded by instrumental_result = 1 AND status = 'done'
+// (a still-'processing' row mid-write is left alone), so it is a no-op on any other
+// row. Linked scan_results rows are reset to 'pending'. Returns the
+// number of work_queue rows affected (0 or 1).
+func (q *DBQueue) ResetInstrumental(ctx context.Context, id int64) (int64, error) {
+	now := formatTime(q.now())
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("queue: begin reset instrumental tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE work_queue
+         SET status = 'deferred',
+             priority = -100,
+             instrumental_result = NULL,
+             outcome_type = NULL,
+             completed_at = NULL,
+             music_sum = NULL,
+             vocal_peak = NULL,
+             speech_mean = NULL,
+             vocal_class = NULL,
+             detector_version = NULL,
+             last_error = '',
+             next_attempt_at = ?
+         WHERE id = ? AND instrumental_result = 1 AND status = 'done'`,
+		now, id,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("queue: reset instrumental update: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("queue: reset instrumental rows affected: %w", err)
+	}
+	if n == 0 {
+		// No-op (row absent or not instrumental): nothing to write back.
+		if err := tx.Commit(); err != nil {
+			return 0, fmt.Errorf("queue: commit reset instrumental tx: %w", err)
+		}
+		return 0, nil
+	}
+	// Reset linked scan_results back to 'pending' so `scan results` reflects the
+	// re-queued state, mirroring Retry / RecheckRetired.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE scan_results
+             SET status = 'pending'
+             WHERE id IN (SELECT scan_result_id FROM work_queue_scan_results WHERE work_queue_id = ?)
+               AND status = 'done'`,
+		id,
+	); err != nil {
+		return 0, fmt.Errorf("queue: reset instrumental scan_results writeback: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("queue: commit reset instrumental tx: %w", err)
 	}
 	return n, nil
 }

@@ -3082,10 +3082,10 @@ func TestDBQueue_SetInstrumentalResultAndCount(t *testing.T) {
 	}
 
 	// Stamp item1 as instrumental (result=1), item2 as not (result=0).
-	if err := q.SetInstrumentalResult(ctx, item1.ID, 1); err != nil {
+	if err := q.SetInstrumentalResult(ctx, item1.ID, 1, InstrumentalTelemetry{MusicSum: 0.95, VocalPeak: 0.01, SpeechMean: 0.005, VocalClass: "Singing", DetectorVersion: "v1.0.0"}); err != nil {
 		t.Fatalf("SetInstrumentalResult item1: %v", err)
 	}
-	if err := q.SetInstrumentalResult(ctx, item2.ID, 0); err != nil {
+	if err := q.SetInstrumentalResult(ctx, item2.ID, 0, InstrumentalTelemetry{MusicSum: 0.92, VocalPeak: 0.08, SpeechMean: 0.003, VocalClass: "Singing", DetectorVersion: "v1.0.0"}); err != nil {
 		t.Fatalf("SetInstrumentalResult item2: %v", err)
 	}
 	// item3: leave NULL (detection not run).
@@ -3097,6 +3097,124 @@ func TestDBQueue_SetInstrumentalResultAndCount(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("count = %d; want 1 (only item1 is instrumental)", n)
+	}
+}
+
+// TestDBQueue_SetInstrumentalResultPersistsTelemetry verifies that all five
+// telemetry columns (music_sum, vocal_peak, speech_mean, vocal_class,
+// detector_version) are written atomically with instrumental_result in a single
+// UPDATE and are readable back from the DB.
+func TestDBQueue_SetInstrumentalResultPersistsTelemetry(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.SetRandomized(false)
+	q.now = func() time.Time { return time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC) }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Composer", TrackName: "Nocturne"}}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+
+	tel := InstrumentalTelemetry{
+		MusicSum:        0.947,
+		VocalPeak:       0.012,
+		SpeechMean:      0.003,
+		VocalClass:      "Singing",
+		DetectorVersion: "v2.5.0",
+	}
+	if err := q.SetInstrumentalResult(ctx, item.ID, 1, tel); err != nil {
+		t.Fatalf("SetInstrumentalResult: %v", err)
+	}
+
+	// Read back all six stamped columns directly from the DB.
+	var (
+		instrumentalResult                          int
+		musicSum, vocalPeak, speechMean             float64
+		vocalClass, detectorVersion                 sql.NullString
+		musicSumNull, vocalPeakNull, speechMeanNull sql.NullFloat64
+	)
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT instrumental_result, music_sum, vocal_peak, speech_mean, vocal_class, detector_version
+         FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&instrumentalResult, &musicSumNull, &vocalPeakNull, &speechMeanNull, &vocalClass, &detectorVersion); err != nil {
+		t.Fatalf("read telemetry: %v", err)
+	}
+	musicSum = musicSumNull.Float64
+	vocalPeak = vocalPeakNull.Float64
+	speechMean = speechMeanNull.Float64
+
+	if instrumentalResult != 1 {
+		t.Errorf("instrumental_result = %d; want 1", instrumentalResult)
+	}
+	if musicSum != tel.MusicSum {
+		t.Errorf("music_sum = %v; want %v", musicSum, tel.MusicSum)
+	}
+	if vocalPeak != tel.VocalPeak {
+		t.Errorf("vocal_peak = %v; want %v", vocalPeak, tel.VocalPeak)
+	}
+	if speechMean != tel.SpeechMean {
+		t.Errorf("speech_mean = %v; want %v", speechMean, tel.SpeechMean)
+	}
+	if !vocalClass.Valid || vocalClass.String != tel.VocalClass {
+		t.Errorf("vocal_class = %v; want %q", vocalClass, tel.VocalClass)
+	}
+	if !detectorVersion.Valid || detectorVersion.String != tel.DetectorVersion {
+		t.Errorf("detector_version = %v; want %q", detectorVersion, tel.DetectorVersion)
+	}
+}
+
+// TestDBQueue_SetInstrumentalResultNullTelemetryWhenNotRun verifies that when
+// SetInstrumentalResult is NOT called (detection did not run), all five telemetry
+// columns stay NULL - the NULL semantics documented in the migration.
+func TestDBQueue_SetInstrumentalResultNullTelemetryWhenNotRun(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.SetRandomized(false)
+	q.now = func() time.Time { return time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC) }
+
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "Composer", TrackName: "Opus"}}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	item, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue: %v", err)
+	}
+
+	// Intentionally do NOT call SetInstrumentalResult; columns must remain NULL.
+	var (
+		musicSum        sql.NullFloat64
+		vocalPeak       sql.NullFloat64
+		speechMean      sql.NullFloat64
+		vocalClass      sql.NullString
+		detectorVersion sql.NullString
+		instrumentalRes sql.NullInt64
+	)
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT instrumental_result, music_sum, vocal_peak, speech_mean, vocal_class, detector_version
+         FROM work_queue WHERE id = ?`, item.ID,
+	).Scan(&instrumentalRes, &musicSum, &vocalPeak, &speechMean, &vocalClass, &detectorVersion); err != nil {
+		t.Fatalf("read telemetry: %v", err)
+	}
+	if instrumentalRes.Valid {
+		t.Errorf("instrumental_result = %d; want NULL when detection not run", instrumentalRes.Int64)
+	}
+	if musicSum.Valid {
+		t.Errorf("music_sum = %v; want NULL", musicSum.Float64)
+	}
+	if vocalPeak.Valid {
+		t.Errorf("vocal_peak = %v; want NULL", vocalPeak.Float64)
+	}
+	if speechMean.Valid {
+		t.Errorf("speech_mean = %v; want NULL", speechMean.Float64)
+	}
+	if vocalClass.Valid {
+		t.Errorf("vocal_class = %q; want NULL", vocalClass.String)
+	}
+	if detectorVersion.Valid {
+		t.Errorf("detector_version = %q; want NULL", detectorVersion.String)
 	}
 }
 
@@ -3231,7 +3349,7 @@ func TestDBQueue_ProviderMethodsClosedDB(t *testing.T) {
 	if err := q.SetProviderLane(ctx, 1, "musixmatch"); err == nil {
 		t.Fatal("SetProviderLane on closed db: want error, got nil")
 	}
-	if err := q.SetInstrumentalResult(ctx, 1, 1); err == nil {
+	if err := q.SetInstrumentalResult(ctx, 1, 1, InstrumentalTelemetry{}); err == nil {
 		t.Fatal("SetInstrumentalResult on closed db: want error, got nil")
 	}
 	if _, err := q.ProviderHits(ctx); err == nil {
@@ -3242,5 +3360,207 @@ func TestDBQueue_ProviderMethodsClosedDB(t *testing.T) {
 	}
 	if _, err := q.CountInstrumental(ctx); err == nil {
 		t.Fatal("CountInstrumental on closed db: want error, got nil")
+	}
+	if _, err := q.ListInstrumental(ctx, ListInstrumentalOptions{CurrentVersion: "v"}); err == nil {
+		t.Fatal("ListInstrumental on closed db: want error, got nil")
+	}
+	if _, err := q.CountInstrumentalNarrowed(ctx, "v", nil); err == nil {
+		t.Fatal("CountInstrumentalNarrowed on closed db: want error, got nil")
+	}
+	if _, err := q.ResetInstrumental(ctx, 1); err == nil {
+		t.Fatal("ResetInstrumental on closed db: want error, got nil")
+	}
+}
+
+// TestDBQueue_ListInstrumentalNarrowedAndAll covers the reconcile candidate query
+// (#405): the telemetry-narrowed default selects only borderline / cross-version /
+// un-scored rows, opts.All returns the whole flagged population, both hydrate full
+// Inputs, and CountInstrumentalNarrowed matches the narrowed set.
+func TestDBQueue_ListInstrumentalNarrowedAndAll(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.SetRandomized(false)
+	q.now = func() time.Time { return time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC) }
+	const current = "v2.0.0"
+
+	mk := func(artist string, result int, tel InstrumentalTelemetry, stamp bool) int64 {
+		t.Helper()
+		if _, err := q.Enqueue(ctx, models.Inputs{
+			Track:      models.Track{ArtistName: artist, TrackName: "T"},
+			SourcePath: "/music/" + artist + ".flac",
+		}, PriorityScan); err != nil {
+			t.Fatalf("Enqueue %s: %v", artist, err)
+		}
+		it, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("Dequeue %s: %v", artist, err)
+		}
+		if stamp {
+			if err := q.SetInstrumentalResult(ctx, it.ID, result, tel); err != nil {
+				t.Fatalf("SetInstrumentalResult %s: %v", artist, err)
+			}
+		}
+		// ListInstrumental only returns completed rows; mark done after stamping.
+		if _, err := q.db.ExecContext(ctx, `UPDATE work_queue SET status = 'done', completed_at = ? WHERE id = ?`, "2026-06-25T00:00:00Z", it.ID); err != nil {
+			t.Fatalf("mark done %s: %v", artist, err)
+		}
+		return it.ID
+	}
+
+	// Confidently instrumental, in-version, non-NULL telemetry: NOT a candidate.
+	confident := mk("Confident", 1, InstrumentalTelemetry{MusicSum: 0.99, VocalPeak: 0.005, SpeechMean: 0.002, VocalClass: "Singing", DetectorVersion: current}, true)
+	// Borderline vocal_peak (0.04 in 0.03-0.05): candidate.
+	borderVocal := mk("BorderVocal", 1, InstrumentalTelemetry{MusicSum: 0.95, VocalPeak: 0.04, SpeechMean: 0.002, VocalClass: "Singing", DetectorVersion: current}, true)
+	// Borderline speech_mean (0.18 in 0.15-0.20): candidate.
+	borderSpeech := mk("BorderSpeech", 1, InstrumentalTelemetry{MusicSum: 0.95, VocalPeak: 0.005, SpeechMean: 0.18, VocalClass: "Singing", DetectorVersion: current}, true)
+	// Cross-version (stored != current) despite confident scores: candidate.
+	crossVer := mk("CrossVer", 1, InstrumentalTelemetry{MusicSum: 0.99, VocalPeak: 0.005, SpeechMean: 0.002, VocalClass: "Singing", DetectorVersion: "v1.0.0"}, true)
+	// Un-scored pre-#404 row (NULL telemetry): candidate. Stamp result=1 directly.
+	preTel := mk("PreTel", 0, InstrumentalTelemetry{}, false)
+	if _, err := q.db.ExecContext(ctx, `UPDATE work_queue SET instrumental_result = 1 WHERE id = ?`, preTel); err != nil {
+		t.Fatalf("set pre-telemetry instrumental: %v", err)
+	}
+	// Not instrumental (result=0): never a candidate.
+	_ = mk("NotInst", 0, InstrumentalTelemetry{MusicSum: 0.9, VocalPeak: 0.6, SpeechMean: 0.01, VocalClass: "Singing", DetectorVersion: current}, true)
+
+	// All mode: every instrumental_result = 1 row, with hydrated SourcePath.
+	all, err := q.ListInstrumental(ctx, ListInstrumentalOptions{All: true})
+	if err != nil {
+		t.Fatalf("ListInstrumental all: %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("All mode len = %d; want 5", len(all))
+	}
+	for _, it := range all {
+		if it.Inputs.SourcePath == "" {
+			t.Errorf("row %d missing hydrated SourcePath", it.ID)
+		}
+	}
+
+	// Narrowed mode: the four candidates, excluding the confident in-version row.
+	narrowed, err := q.ListInstrumental(ctx, ListInstrumentalOptions{CurrentVersion: current})
+	if err != nil {
+		t.Fatalf("ListInstrumental narrowed: %v", err)
+	}
+	got := map[int64]bool{}
+	for _, it := range narrowed {
+		got[it.ID] = true
+	}
+	for _, id := range []int64{borderVocal, borderSpeech, crossVer, preTel} {
+		if !got[id] {
+			t.Errorf("narrowed set missing candidate id %d", id)
+		}
+	}
+	if got[confident] {
+		t.Errorf("narrowed set must exclude the confident in-version row %d", confident)
+	}
+	if len(narrowed) != 4 {
+		t.Errorf("narrowed len = %d; want 4", len(narrowed))
+	}
+
+	cn, err := q.CountInstrumentalNarrowed(ctx, current, nil)
+	if err != nil {
+		t.Fatalf("CountInstrumentalNarrowed: %v", err)
+	}
+	if cn != 4 {
+		t.Errorf("CountInstrumentalNarrowed = %d; want 4", cn)
+	}
+	ct, err := q.CountInstrumental(ctx)
+	if err != nil {
+		t.Fatalf("CountInstrumental: %v", err)
+	}
+	if ct != 5 {
+		t.Errorf("CountInstrumental = %d; want 5", ct)
+	}
+}
+
+// TestDBQueue_ResetInstrumental covers the reconcile reset (#405): a flagged row is
+// re-queued as deferred/-100 with verdict + all five telemetry columns nulled and
+// last_error cleared; it is a no-op on a non-instrumental row.
+func TestDBQueue_ResetInstrumental(t *testing.T) {
+	ctx := context.Background()
+	q := NewDBQueue(openQueueTestDB(t))
+	q.SetRandomized(false)
+	q.now = func() time.Time { return time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC) }
+
+	// A confirmed-instrumental, completed row.
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "A", TrackName: "Inst"}, SourcePath: "/m/a.flac"}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue inst: %v", err)
+	}
+	inst, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue inst: %v", err)
+	}
+	if err := q.SetInstrumentalResult(ctx, inst.ID, 1, InstrumentalTelemetry{MusicSum: 0.95, VocalPeak: 0.02, SpeechMean: 0.004, VocalClass: "Singing", DetectorVersion: "v1"}); err != nil {
+		t.Fatalf("SetInstrumentalResult inst: %v", err)
+	}
+	if _, err := q.db.ExecContext(ctx, `UPDATE work_queue SET status = 'done', completed_at = ? WHERE id = ?`, "2026-06-25T00:00:00Z", inst.ID); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	// A ran-but-not-instrumental row (result=0): reset must be a no-op.
+	if _, err := q.Enqueue(ctx, models.Inputs{Track: models.Track{ArtistName: "B", TrackName: "NotInst"}, SourcePath: "/m/b.flac"}, PriorityScan); err != nil {
+		t.Fatalf("Enqueue noti: %v", err)
+	}
+	noti, err := q.Dequeue(ctx)
+	if err != nil {
+		t.Fatalf("Dequeue noti: %v", err)
+	}
+	if err := q.SetInstrumentalResult(ctx, noti.ID, 0, InstrumentalTelemetry{MusicSum: 0.9, VocalPeak: 0.6, SpeechMean: 0.01, VocalClass: "Singing", DetectorVersion: "v1"}); err != nil {
+		t.Fatalf("SetInstrumentalResult noti: %v", err)
+	}
+
+	n, err := q.ResetInstrumental(ctx, inst.ID)
+	if err != nil {
+		t.Fatalf("ResetInstrumental: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("rows affected = %d; want 1", n)
+	}
+
+	var (
+		status, lastErr           string
+		priority                  int
+		instResult                sql.NullInt64
+		outcome, vocalClass, dVer sql.NullString
+		completedAt               sql.NullString
+		musicSum, vocalPeak, sm   sql.NullFloat64
+	)
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT status, priority, instrumental_result, outcome_type, completed_at,
+                music_sum, vocal_peak, speech_mean, vocal_class, detector_version, last_error
+         FROM work_queue WHERE id = ?`, inst.ID,
+	).Scan(&status, &priority, &instResult, &outcome, &completedAt, &musicSum, &vocalPeak, &sm, &vocalClass, &dVer, &lastErr); err != nil {
+		t.Fatalf("read reset row: %v", err)
+	}
+	if status != "deferred" {
+		t.Errorf("status = %q; want deferred", status)
+	}
+	if priority != -100 {
+		t.Errorf("priority = %d; want -100", priority)
+	}
+	if instResult.Valid {
+		t.Errorf("instrumental_result not NULL after reset: %v", instResult)
+	}
+	if outcome.Valid {
+		t.Errorf("outcome_type not NULL after reset")
+	}
+	if completedAt.Valid {
+		t.Errorf("completed_at not NULL after reset")
+	}
+	if musicSum.Valid || vocalPeak.Valid || sm.Valid || vocalClass.Valid || dVer.Valid {
+		t.Errorf("telemetry not all NULL after reset: ms=%v vp=%v sm=%v vc=%v dv=%v", musicSum, vocalPeak, sm, vocalClass, dVer)
+	}
+	if lastErr != "" {
+		t.Errorf("last_error = %q; want empty", lastErr)
+	}
+
+	// No-op on the result=0 row.
+	n0, err := q.ResetInstrumental(ctx, noti.ID)
+	if err != nil {
+		t.Fatalf("ResetInstrumental noti: %v", err)
+	}
+	if n0 != 0 {
+		t.Errorf("reset of result=0 row affected %d; want 0", n0)
 	}
 }

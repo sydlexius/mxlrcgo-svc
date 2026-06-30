@@ -53,6 +53,10 @@ type HTTPDetector struct {
 	// per-decision gate enforces presence of THESE classes. Guarded by mu (written
 	// under the Detect lock).
 	vocalBaseline []string
+	// version is the app version string passed in via Config.Version at
+	// construction time. It is stamped onto every returned Result so each
+	// persisted telemetry row records which build produced the decision.
+	version string
 }
 
 // NewHTTPDetector creates a Detector that posts audio samples to the classifier
@@ -182,6 +186,7 @@ func NewHTTPDetector(cfg Config) (*HTTPDetector, error) {
 		nicePath:            nicePath,
 		httpClient:          &http.Client{Timeout: 3 * time.Minute},
 		cooldown:            time.Duration(cooldownSeconds) * time.Second,
+		version:             cfg.Version,
 	}, nil
 }
 
@@ -235,10 +240,14 @@ func (d *HTTPDetector) Detect(ctx context.Context, audioPath string) (Result, er
 	// Vocal gate: the loudest single vocal-class peak (max-over-frames) anywhere
 	// in the spread sample. A nil Max map (legacy sidecar) means the vocal gate
 	// cannot run, so the decision degrades safely to not-instrumental.
+	// winningVocalClass records the name of the class that produced vocalPeak so
+	// it can be persisted as telemetry alongside the score.
 	vocalPeak := 0.0
+	var winningVocalClass string
 	for _, name := range d.vocalClasses {
 		if v, ok := resp.Max[name]; ok && v > vocalPeak {
 			vocalPeak = v
+			winningVocalClass = name
 		}
 	}
 	// Speech gate: summed frame MEAN of the speech classes (sustained presence),
@@ -293,18 +302,23 @@ func (d *HTTPDetector) Detect(ctx context.Context, audioPath string) (Result, er
 
 	// Surface the decision inputs: the worker only reads res.Instrumental, so
 	// without this line a misclassification leaves no trace of the music_sum /
-	// vocal_peak / speech_mean that produced it.
+	// vocal_peak / speech_mean that produced it. vocal_class and detector_version
+	// are added here (issue #404); music_sum/vocal_peak/speech_mean were added
+	// earlier (#403) and must not be duplicated.
 	slog.Info("detector: instrumental decision",
 		"path", audioPath, "music_sum", music, "vocal_peak", vocalPeak, "speech_mean", speechMean,
+		"vocal_class", winningVocalClass, "detector_version", d.version,
 		"instrumental", instrumental, "min_confidence", d.minConfidence,
 		"vocal_max_confidence", d.vocalMaxConfidence, "speech_max_confidence", d.speechMaxConfidence)
 
 	return Result{
-		Instrumental:     instrumental,
-		Confidence:       music,
-		VocalConfidence:  vocalPeak,
-		SpeechConfidence: speechMean,
-		Classes:          resp.Mean,
+		Instrumental:      instrumental,
+		Confidence:        music,
+		VocalConfidence:   vocalPeak,
+		SpeechConfidence:  speechMean,
+		WinningVocalClass: winningVocalClass,
+		Version:           d.version,
+		Classes:           resp.Mean,
 	}, nil
 }
 

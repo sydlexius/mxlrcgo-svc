@@ -174,7 +174,7 @@ func (q *fakeQueue) RetireMiss(_ context.Context, id int64) (queue.WorkItem, err
 	return queue.WorkItem{ID: id, Status: queue.StatusDone}, nil
 }
 
-func (q *fakeQueue) SetInstrumentalResult(_ context.Context, _ int64, _ int) error {
+func (q *fakeQueue) SetInstrumentalResult(_ context.Context, _ int64, _ int, _ queue.InstrumentalTelemetry) error {
 	return nil
 }
 

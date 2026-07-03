@@ -397,6 +397,10 @@ jobs:
     steps:
       - name: Check matrix results
         run: |
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "Detect Changes did not succeed: ${{ needs.changes.result }}"
+            exit 1
+          fi
           if [ "${{ needs.changes.outputs.code }}" != "true" ]; then
             echo "No code changes detected, skipping build"
             exit 0
@@ -424,6 +428,10 @@ jobs:
     steps:
       - name: Gate on lint result
         run: |
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "Detect Changes did not succeed: ${{ needs.changes.result }}"
+            exit 1
+          fi
           if [ "${{ needs.changes.outputs.code }}" != "true" ]; then
             echo "No code changes detected; lint not required."
             exit 0
@@ -442,6 +450,10 @@ jobs:
     steps:
       - name: Gate on test result
         run: |
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "Detect Changes did not succeed: ${{ needs.changes.result }}"
+            exit 1
+          fi
           if [ "${{ needs.changes.outputs.code }}" != "true" ]; then
             echo "No code changes detected; test not required."
             exit 0
